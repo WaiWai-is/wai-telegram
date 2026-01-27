@@ -1,0 +1,35 @@
+[Unit]
+Description=WAI Telegram Celery Worker
+After=network.target docker.service wai-backend.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/wai-telegram/packages/backend
+Environment="PATH=/root/.local/bin:/usr/local/bin:/usr/bin"
+EnvironmentFile=/opt/wai-telegram/.env.production
+
+ExecStart=/root/.local/bin/uv run celery -A app.tasks worker --loglevel=info --concurrency=2
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStop=/bin/kill -TERM $MAINPID
+
+Restart=always
+RestartSec=10
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wai-celery
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/wai-telegram /tmp
+
+[Install]
+WantedBy=multi-user.target

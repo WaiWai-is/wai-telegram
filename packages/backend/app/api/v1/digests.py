@@ -1,0 +1,51 @@
+from datetime import date
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.auth import CurrentUser
+from app.core.database import get_db
+from app.schemas.digest import DigestGenerateRequest, DigestResponse
+from app.services.digest_service import generate_digest, get_digest, get_digests
+
+router = APIRouter()
+
+
+@router.get("", response_model=list[DigestResponse])
+async def list_digests(
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: int = Query(default=30, le=100),
+) -> list[DigestResponse]:
+    """List user's daily digests."""
+    digests = await get_digests(db, user.id, limit)
+    return [DigestResponse.model_validate(d) for d in digests]
+
+
+@router.get("/{digest_date}", response_model=DigestResponse)
+async def get_digest_by_date(
+    digest_date: date,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> DigestResponse:
+    """Get digest for a specific date."""
+    digest = await get_digest(db, user.id, digest_date)
+    if not digest:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Digest not found for this date",
+        )
+    return DigestResponse.model_validate(digest)
+
+
+@router.post("/generate", response_model=DigestResponse)
+async def generate_daily_digest(
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: DigestGenerateRequest | None = None,
+) -> DigestResponse:
+    """Generate digest for a specific date (defaults to yesterday)."""
+    digest_date = request.date if request else None
+    digest = await generate_digest(db, user.id, digest_date)
+    return DigestResponse.model_validate(digest)

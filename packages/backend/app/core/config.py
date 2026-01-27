@@ -1,0 +1,62 @@
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field, computed_field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # App
+    app_name: str = "Telegram AI Message Manager"
+    debug: bool = False
+    environment: Literal["development", "staging", "production"] = "development"
+
+    # Database
+    database_url: str = Field(
+        default="postgresql+asyncpg://telegram:telegram_dev@localhost:5432/telegram_ai"
+    )
+
+    # Redis
+    redis_url: str = Field(default="redis://localhost:6379")
+
+    # Security
+    secret_key: str = Field(default="dev-secret-key-change-in-production")
+    encryption_key: str = Field(default="")  # Fernet key for session encryption
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 7
+    algorithm: str = "HS256"
+
+    # Telegram
+    telegram_api_id: int = Field(default=0)
+    telegram_api_hash: str = Field(default="")
+
+    # OpenAI (embeddings)
+    openai_api_key: str = Field(default="")
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 1536
+    embedding_batch_size: int = 100
+
+    # Anthropic (digests)
+    anthropic_api_key: str = Field(default="")
+    digest_model: str = "claude-sonnet-4-20250514"
+
+    # Sync settings
+    sync_batch_size: int = 100
+    sync_delay_seconds: float = 1.0
+    flood_wait_multiplier: float = 1.2
+
+    @computed_field
+    @property
+    def async_database_url(self) -> str:
+        return self.database_url
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

@@ -1,0 +1,35 @@
+[Unit]
+Description=WAI Telegram Backend (FastAPI)
+After=network.target docker.service
+Requires=docker.service
+Wants=wai-celery.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/wai-telegram/packages/backend
+Environment="PATH=/root/.local/bin:/usr/local/bin:/usr/bin"
+EnvironmentFile=/opt/wai-telegram/.env.production
+
+ExecStart=/root/.local/bin/uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=always
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wai-backend
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/wai-telegram /tmp
+
+[Install]
+WantedBy=multi-user.target
