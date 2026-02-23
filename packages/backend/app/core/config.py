@@ -52,7 +52,21 @@ class Settings(BaseSettings):
     # Sync settings
     sync_batch_size: int = 100
     sync_delay_seconds: float = 1.0
+    sync_delay_jitter: float = 0.5
+    sync_progressive_delay_interval: int = 5  # Increase delay every N batches
+    sync_progressive_delay_step: float = 0.5  # Add this much per interval
+    sync_dialog_limit: int = 100
     flood_wait_multiplier: float = 1.2
+
+    # Telegram client settings (anti-ban)
+    telegram_device_model: str = "MacBook Pro"
+    telegram_system_version: str = "macOS 14.5"
+    telegram_app_version: str = "10.8.1"
+    telegram_flood_sleep_threshold: int = 120
+
+    # Rate budget tracking
+    rate_budget_hourly: int = 200
+    rate_budget_daily: int = 2000
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":

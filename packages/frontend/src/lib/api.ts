@@ -81,7 +81,7 @@ class ApiClient {
 
   // Telegram
   async requestCode(phone_number: string) {
-    return this.request<{ phone_code_hash: string }>(
+    return this.request<{ phone_code_hash: string; code_type: string }>(
       'POST',
       '/api/v1/telegram/request-code',
       { body: { phone_number } }

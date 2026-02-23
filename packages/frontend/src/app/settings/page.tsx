@@ -18,6 +18,7 @@ export default function SettingsPage() {
   const [code, setCode] = useState('')
   const [password, setPassword] = useState('')
   const [phoneCodeHash, setPhoneCodeHash] = useState('')
+  const [codeType, setCodeType] = useState('')
   const [authStep, setAuthStep] = useState<'phone' | 'code' | 'password'>('phone')
   const [authError, setAuthError] = useState('')
 
@@ -40,6 +41,7 @@ export default function SettingsPage() {
     mutationFn: () => api.requestCode(phone),
     onSuccess: (data) => {
       setPhoneCodeHash(data.phone_code_hash)
+      setCodeType(data.code_type || '')
       setAuthStep('code')
       setAuthError('')
     },
@@ -160,6 +162,18 @@ export default function SettingsPage() {
                   <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                     Verification Code
                   </label>
+                  {codeType && (
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                      {codeType === 'app' && 'Code sent to your Telegram app'}
+                      {codeType === 'sms' && 'Code sent via SMS'}
+                      {codeType === 'call' && 'You will receive a phone call with the code'}
+                      {codeType === 'flash_call' && 'Code is the last digits of the calling number'}
+                      {codeType === 'missed_call' && 'Code is the last digits of the calling number'}
+                      {codeType === 'email' && 'Code sent to your email'}
+                      {codeType === 'fragment_sms' && 'Code sent via Fragment SMS'}
+                      {!['app', 'sms', 'call', 'flash_call', 'missed_call', 'email', 'fragment_sms'].includes(codeType) && 'Check your Telegram app or SMS for the code'}
+                    </p>
+                  )}
                   <input
                     type="text"
                     value={code}

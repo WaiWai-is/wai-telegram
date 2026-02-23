@@ -9,6 +9,7 @@ from celery import shared_task
 from app.core.config import get_settings
 from app.core.database import get_db_context
 from app.models.sync_job import SyncStatus
+from app.services.rate_limiter import check_budget
 from app.services.sync_service import sync_messages, create_sync_job
 
 logger = logging.getLogger(__name__)
@@ -85,10 +86,20 @@ def refresh_lock(user_id: UUID, ttl: int = LOCK_TTL) -> None:
 
 
 @shared_task(bind=True, max_retries=3)
-def sync_chat_task(self, user_id: str, chat_id: str, limit: int | None = None):
+def sync_chat_task(
+    self, user_id: str, chat_id: str, job_id: str | None = None, limit: int | None = None
+):
     """Celery task to sync messages for a chat."""
+    from telethon.errors import FloodWaitError
+
     user_uuid = UUID(user_id)
     chat_uuid = UUID(chat_id)
+    job_uuid = UUID(job_id) if job_id else None
+
+    # Check rate budget before proceeding
+    if not check_budget():
+        logger.warning(f"Rate budget exhausted, deferring sync for chat {chat_id}")
+        raise self.retry(exc=Exception("Rate budget exhausted"), countdown=300)
 
     # Acquire lock atomically at task start with heartbeat
     lock = DistributedLock(user_uuid)
@@ -102,23 +113,41 @@ def sync_chat_task(self, user_id: str, chat_id: str, limit: int | None = None):
         asyncio.set_event_loop(loop)
         try:
             result = loop.run_until_complete(
-                _run_sync(user_uuid, chat_uuid, limit)
+                _run_sync(user_uuid, chat_uuid, limit, job_uuid)
             )
             return result
         finally:
             loop.close()
+    except FloodWaitError as e:
+        # Use Telegram's actual wait time + buffer for retry
+        countdown = int(e.seconds * settings.flood_wait_multiplier)
+        logger.warning(f"FloodWait for chat {chat_id}: retrying in {countdown}s")
+        raise self.retry(exc=e, countdown=countdown)
     except Exception as e:
-        logger.error(f"Sync failed for chat {chat_id}: {e}")
-        raise self.retry(exc=e, countdown=60)
+        # Exponential backoff: 60s, 180s, 540s
+        backoff = 60 * (3 ** self.request.retries)
+        logger.error(f"Sync failed for chat {chat_id}: {e}, retrying in {backoff}s")
+        raise self.retry(exc=e, countdown=backoff)
     finally:
         lock.release()
 
 
-async def _run_sync(user_id: UUID, chat_id: UUID, limit: int | None) -> dict:
+async def _run_sync(
+    user_id: UUID, chat_id: UUID, limit: int | None, job_id: UUID | None = None
+) -> dict:
     """Run the actual sync operation."""
     async with get_db_context() as db:
-        # Create sync job
-        job = await create_sync_job(db, user_id, chat_id)
+        # Use existing job or create new one
+        if job_id:
+            from sqlalchemy import select
+            from app.models.sync_job import SyncJob
+
+            result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
+            job = result.scalar_one_or_none()
+            if not job:
+                raise ValueError(f"Sync job {job_id} not found")
+        else:
+            job = await create_sync_job(db, user_id, chat_id)
         job.status = SyncStatus.IN_PROGRESS
         await db.commit()
 

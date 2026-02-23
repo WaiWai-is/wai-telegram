@@ -52,6 +52,11 @@ async def get_client(user_id: UUID, db: AsyncSession) -> TelegramClient:
             StringSession(session_string),
             settings.telegram_api_id,
             settings.telegram_api_hash,
+            device_model=settings.telegram_device_model,
+            system_version=settings.telegram_system_version,
+            app_version=settings.telegram_app_version,
+            flood_sleep_threshold=settings.telegram_flood_sleep_threshold,
+            receive_updates=False,
         )
         await client.connect()
 
@@ -65,17 +70,46 @@ async def create_auth_client() -> TelegramClient:
         StringSession(),
         settings.telegram_api_id,
         settings.telegram_api_hash,
+        device_model=settings.telegram_device_model,
+        system_version=settings.telegram_system_version,
+        app_version=settings.telegram_app_version,
+        flood_sleep_threshold=settings.telegram_flood_sleep_threshold,
+        receive_updates=False,
     )
     await client.connect()
     return client
 
 
-async def request_code(phone_number: str) -> tuple[TelegramClient, str]:
-    """Request verification code for phone number."""
+def _get_code_type_name(sent_code) -> str:
+    """Extract human-readable code delivery type from SentCode result."""
+    code_type = sent_code.type
+    type_name = type(code_type).__name__
+    type_map = {
+        "SentCodeTypeApp": "app",
+        "SentCodeTypeSms": "sms",
+        "SentCodeTypeCall": "call",
+        "SentCodeTypeFlashCall": "flash_call",
+        "SentCodeTypeMissedCall": "missed_call",
+        "SentCodeTypeEmailCode": "email",
+        "SentCodeTypeFragmentSms": "fragment_sms",
+    }
+    return type_map.get(type_name, "unknown")
+
+
+async def request_code(phone_number: str) -> tuple[TelegramClient, str, str]:
+    """Request verification code for phone number.
+
+    Returns (client, phone_code_hash, code_type).
+    """
     client = await create_auth_client()
     try:
         result = await client.send_code_request(phone_number)
-        return client, result.phone_code_hash
+        code_type = _get_code_type_name(result)
+        logger.info(
+            f"Code requested for {phone_number}: type={code_type}, "
+            f"timeout={getattr(result, 'timeout', None)}s"
+        )
+        return client, result.phone_code_hash, code_type
     except FloodWaitError as e:
         wait_time = int(e.seconds * settings.flood_wait_multiplier)
         logger.warning(f"FloodWait: need to wait {wait_time}s for {phone_number}")

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from app.core.database import get_db_context
 from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
 from app.models.sync_job import SyncJob, SyncStatus
+from app.services.rate_limiter import record_request
 from app.services.telegram_client import get_client
 
 logger = logging.getLogger(__name__)
@@ -86,12 +88,19 @@ def _get_media_type(message: Message) -> str | None:
     return "other"
 
 
+async def _jittered_sleep(base: float, jitter: float) -> None:
+    """Sleep for base +/- jitter seconds."""
+    delay = base + random.uniform(-jitter, jitter)
+    await asyncio.sleep(max(0.1, delay))
+
+
 async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
     """Sync user's chat list from Telegram."""
     client = await get_client(user_id, db)
     chats = []
+    record_request()  # Track iter_dialogs API call
 
-    async for dialog in client.iter_dialogs():
+    async for dialog in client.iter_dialogs(limit=settings.sync_dialog_limit):
         # Check if chat exists
         result = await db.execute(
             select(TelegramChat).where(
@@ -149,6 +158,7 @@ async def sync_messages(
     client = await get_client(user_id, db)
     messages_synced = 0
     batch = []
+    batch_count = 0
     last_id = chat.last_message_id
 
     try:
@@ -160,6 +170,7 @@ async def sync_messages(
             chat.telegram_chat_id,
             offset_id=offset,
             limit=limit,
+            wait_time=0.5,
         ):
             if not message.text and not message.media:
                 continue
@@ -204,18 +215,25 @@ async def sync_messages(
                             messages_synced -= 1  # Don't count duplicates
                             logger.debug(f"Skipping duplicate message {msg.telegram_message_id}")
                 batch = []
+                batch_count += 1
+                record_request()  # Track batch API call
 
                 # Update job progress
                 job.messages_processed = messages_synced
                 job.last_processed_id = last_id
                 await db.flush()
 
-                # Rate limit
-                await asyncio.sleep(settings.sync_delay_seconds)
+                # Progressive jittered delay — increases every N batches
+                progressive_extra = (
+                    (batch_count // settings.sync_progressive_delay_interval)
+                    * settings.sync_progressive_delay_step
+                )
+                base_delay = settings.sync_delay_seconds + progressive_extra
+                await _jittered_sleep(base_delay, settings.sync_delay_jitter)
 
     except FloodWaitError as e:
         wait_time = int(e.seconds * settings.flood_wait_multiplier)
-        logger.warning(f"FloodWait during sync: {wait_time}s")
+        logger.warning(f"FloodWait during sync: {wait_time}s (raw: {e.seconds}s)")
         job.status = SyncStatus.FAILED
         job.error_message = f"Rate limited. Retry after {wait_time} seconds."
         await db.flush()

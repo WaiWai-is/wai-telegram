@@ -10,6 +10,7 @@ class RequestCodeRequest(BaseModel):
 
 class RequestCodeResponse(BaseModel):
     phone_code_hash: str
+    code_type: str = "unknown"  # app, sms, call, flash_call, missed_call, email, fragment_sms
     message: str = "Verification code sent"
 
 

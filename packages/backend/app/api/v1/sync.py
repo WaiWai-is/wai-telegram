@@ -10,7 +10,8 @@ from app.core.database import get_db
 from app.models.chat import TelegramChat
 from app.models.sync_job import SyncJob, SyncStatus
 from app.schemas.sync import SyncJobResponse, SyncProgressResponse
-from app.services.sync_service import create_sync_job, sync_messages
+from app.services.sync_service import create_sync_job
+from app.tasks.sync_tasks import sync_chat_task
 
 router = APIRouter()
 
@@ -48,22 +49,12 @@ async def sync_chat(
             detail="Sync already in progress for this chat",
         )
 
-    # Create sync job
+    # Create sync job and commit so Celery worker can find it
     job = await create_sync_job(db, user.id, chat_id)
-    job.status = SyncStatus.IN_PROGRESS
-    await db.flush()
+    await db.commit()
 
-    try:
-        # Run sync (in production, this would be a Celery task)
-        await sync_messages(db, user.id, chat_id, job.id, limit)
-    except Exception as e:
-        job.status = SyncStatus.FAILED
-        job.error_message = str(e)
-        await db.flush()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        )
+    # Dispatch to Celery worker with existing job ID
+    sync_chat_task.delay(str(user.id), str(chat_id), str(job.id), limit)
 
     return SyncJobResponse.model_validate(job)
 

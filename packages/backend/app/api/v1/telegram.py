@@ -1,3 +1,5 @@
+import logging
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,10 +19,28 @@ from app.schemas.telegram import (
 )
 from app.services import telegram_client
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Temporary storage for auth clients (in production, use Redis)
-_auth_clients: dict[str, TelegramClient] = {}
+# Auth clients with TTL tracking: key -> (client, created_timestamp)
+_auth_clients: dict[str, tuple[TelegramClient, float]] = {}
+_AUTH_CLIENT_TTL = 300  # 5 minutes
+
+
+def _cleanup_expired_auth_clients() -> None:
+    """Remove auth clients older than TTL."""
+    now = time.time()
+    expired = [k for k, (_, ts) in _auth_clients.items() if now - ts > _AUTH_CLIENT_TTL]
+    for key in expired:
+        client, _ = _auth_clients.pop(key)
+        logger.info(f"Cleaned up expired auth client: {key}")
+        # Disconnect in background — best effort
+        try:
+            import asyncio
+
+            asyncio.get_running_loop().create_task(client.disconnect())
+        except Exception:
+            pass
 
 
 @router.post("/request-code", response_model=RequestCodeResponse)
@@ -29,11 +49,16 @@ async def request_code(
     user: CurrentUser,
 ) -> RequestCodeResponse:
     """Request verification code for Telegram authentication."""
+    _cleanup_expired_auth_clients()
     try:
-        client, phone_code_hash = await telegram_client.request_code(request.phone_number)
-        # Store client temporarily
-        _auth_clients[f"{user.id}:{request.phone_number}"] = client
-        return RequestCodeResponse(phone_code_hash=phone_code_hash)
+        client, phone_code_hash, code_type = await telegram_client.request_code(
+            request.phone_number
+        )
+        _auth_clients[f"{user.id}:{request.phone_number}"] = (client, time.time())
+        return RequestCodeResponse(
+            phone_code_hash=phone_code_hash,
+            code_type=code_type,
+        )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
     except Exception as e:
@@ -47,14 +72,16 @@ async def verify_code(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> VerifyCodeResponse:
     """Verify code and complete Telegram authentication."""
+    _cleanup_expired_auth_clients()
     client_key = f"{user.id}:{request.phone_number}"
-    client = _auth_clients.get(client_key)
+    entry = _auth_clients.get(client_key)
 
-    if not client:
+    if not entry:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No pending authentication. Request a code first.",
         )
+    client, _ = entry
 
     try:
         session_string, telegram_user_id = await telegram_client.verify_code(
