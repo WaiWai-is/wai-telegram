@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     algorithm: str = "HS256"
 
+    # Rate limiting
+    rate_limit_per_minute: int = 60
+
     # Telegram
     telegram_api_id: int = Field(default=0)
     telegram_api_hash: str = Field(default="")
@@ -50,6 +53,18 @@ class Settings(BaseSettings):
     sync_batch_size: int = 100
     sync_delay_seconds: float = 1.0
     flood_wait_multiplier: float = 1.2
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        """Ensure critical secrets are set in production."""
+        if self.environment == "production":
+            if self.secret_key == "dev-secret-key-change-in-production":
+                raise ValueError("SECRET_KEY must be set in production")
+            if not self.encryption_key:
+                raise ValueError("ENCRYPTION_KEY must be set in production")
+            if not self.telegram_api_id or not self.telegram_api_hash:
+                raise ValueError("TELEGRAM_API_ID and TELEGRAM_API_HASH must be set")
+        return self
 
     @computed_field
     @property

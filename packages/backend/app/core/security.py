@@ -1,8 +1,9 @@
 import secrets
 from datetime import UTC, datetime, timedelta
 
+import jwt
 from cryptography.fernet import Fernet
-from jose import JWTError, jwt
+from jwt.exceptions import PyJWTError
 from passlib.context import CryptContext
 
 from app.core.config import get_settings
@@ -66,7 +67,12 @@ def create_refresh_token(data: dict) -> str:
 
 def decode_token(token: str) -> dict | None:
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        payload = jwt.decode(
+            token,
+            settings.secret_key,
+            algorithms=[settings.algorithm],
+            options={"require": ["exp", "type"]},
+        )
         return payload
-    except JWTError:
+    except PyJWTError:
         return None

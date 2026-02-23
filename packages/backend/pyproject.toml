@@ -11,10 +11,10 @@ dependencies = [
     "alembic>=1.14.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
-    "python-jose[cryptography]>=3.3.0",
+    "PyJWT>=2.8.0",  # Replaced python-jose (CVE-2024-33663, CVE-2025-61152)
     "passlib[bcrypt]>=1.7.4",
     "bcrypt>=4.0.0,<4.1.0",  # Pin bcrypt for passlib compatibility
-    "cryptography>=44.0.0",
+    "cryptography>=46.0.0",  # Updated from 44.0.0 for security fixes
     "telethon>=1.38.0",
     "celery[redis]>=5.4.0",
     "redis>=5.2.0",
@@ -24,6 +24,7 @@ dependencies = [
     "python-multipart>=0.0.18",
     "httpx>=0.28.0",
     "email-validator>=2.2.0",
+    "slowapi>=0.1.9",  # Rate limiting
 ]
 
 [project.optional-dependencies]
