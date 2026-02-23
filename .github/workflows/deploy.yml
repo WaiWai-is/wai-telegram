@@ -89,7 +89,14 @@ jobs:
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
-          sleep 10
-          curl -sf https://telegram.waiwai.is/health || curl -sf http://${HOST}:8000/health
-          echo ""
-          echo "Deployment successful!"
+          for i in 1 2 3 4 5 6; do
+            sleep 10
+            if curl -sf --max-time 10 https://telegram.waiwai.is/health; then
+              echo ""
+              echo "Deployment successful!"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying..."
+          done
+          echo "Health check failed after 6 attempts"
+          exit 1
