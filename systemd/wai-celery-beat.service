@@ -11,7 +11,7 @@ WorkingDirectory=/opt/wai-telegram/packages/backend
 Environment="PATH=/root/.local/bin:/usr/local/bin:/usr/bin"
 EnvironmentFile=/opt/wai-telegram/.env.production
 
-ExecStart=/root/.local/bin/uv run celery -A app.tasks beat --loglevel=info
+ExecStart=/root/.local/bin/uv run celery -A app.tasks.celery_app:celery_app beat --loglevel=info
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStop=/bin/kill -TERM $MAINPID
 
@@ -28,7 +28,7 @@ SyslogIdentifier=wai-celery-beat
 # Security
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=false
 ReadWritePaths=/opt/wai-telegram /tmp
 
 [Install]

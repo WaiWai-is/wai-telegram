@@ -12,7 +12,7 @@ WorkingDirectory=/opt/wai-telegram/packages/backend
 Environment="PATH=/root/.local/bin:/usr/local/bin:/usr/bin"
 EnvironmentFile=/opt/wai-telegram/.env.production
 
-ExecStart=/root/.local/bin/uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+ExecStart=/root/.local/bin/uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
 ExecReload=/bin/kill -HUP $MAINPID
 
 Restart=always
@@ -28,7 +28,7 @@ SyslogIdentifier=wai-backend
 # Security
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=false
 ReadWritePaths=/opt/wai-telegram /tmp
 
 [Install]

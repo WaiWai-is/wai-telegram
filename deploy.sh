@@ -1,6 +1,6 @@
 #!/bin/bash
 # WAI Telegram AI - Deployment Script
-# Target: root@164.92.123.157
+# Target: root@178.62.255.184
 # Domain: telegram.waiwai.is
 
 set -e
@@ -16,7 +16,7 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # Configuration
-SERVER="root@164.92.123.157"
+SERVER="root@178.62.255.184"
 DEPLOY_DIR="/opt/wai-telegram"
 DOMAIN="telegram.waiwai.is"
 
@@ -35,6 +35,8 @@ rsync -avz --exclude '.git' \
     --exclude '__pycache__' \
     --exclude '.next' \
     --exclude '*.pyc' \
+    --exclude 'code/' \
+    --exclude '.DS_Store' \
     ./ "${SERVER}:${DEPLOY_DIR}/"
 
 # Step 2: Run remote setup commands
@@ -43,6 +45,7 @@ ssh "${SERVER}" << 'REMOTE_SCRIPT'
 set -e
 
 cd /opt/wai-telegram
+export PATH="$HOME/.local/bin:$PATH"
 
 # Install system dependencies if not present
 if ! command -v docker &> /dev/null; then
@@ -54,7 +57,6 @@ fi
 if ! command -v uv &> /dev/null; then
     echo "Installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.local/bin:$PATH"
 fi
 
 if ! command -v node &> /dev/null; then
@@ -70,7 +72,8 @@ fi
 
 # Start PostgreSQL and Redis
 echo "Starting database services..."
-docker compose -f docker-compose.prod.yml up -d
+set -a && source .env.production && set +a
+docker-compose -f docker-compose.prod.yml up -d
 
 # Wait for PostgreSQL to be ready
 echo "Waiting for PostgreSQL..."
@@ -79,8 +82,6 @@ sleep 10
 # Run database migrations
 echo "Running database migrations..."
 cd packages/backend
-export PATH="$HOME/.local/bin:$PATH"
-source /opt/wai-telegram/.env.production 2>/dev/null || true
 uv sync
 uv run alembic upgrade head
 cd ../..
@@ -113,7 +114,6 @@ echo "Configuring Nginx..."
 cp nginx/telegram-ai.conf /etc/nginx/sites-available/
 ln -sf /etc/nginx/sites-available/telegram-ai.conf /etc/nginx/sites-enabled/
 
-# Test nginx config (will fail on first run without SSL)
 if nginx -t 2>/dev/null; then
     systemctl reload nginx
 else
@@ -123,16 +123,8 @@ fi
 echo "Deployment complete!"
 REMOTE_SCRIPT
 
-log "Deployment finished. Next steps:"
+log "Deployment finished!"
 echo ""
-echo "1. SSH to the server and set up SSL:"
-echo "   ssh ${SERVER}"
-echo "   certbot --nginx -d ${DOMAIN}"
-echo ""
-echo "2. Verify services are running:"
-echo "   curl https://${DOMAIN}/health"
-echo ""
-echo "3. Check logs if needed:"
-echo "   journalctl -u wai-backend -f"
-echo "   journalctl -u wai-celery -f"
+echo "Verify: curl https://${DOMAIN}/health"
+echo "Logs:   ssh ${SERVER} journalctl -u wai-backend -f"
 echo ""

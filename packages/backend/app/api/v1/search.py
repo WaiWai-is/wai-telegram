@@ -17,7 +17,7 @@ limiter = Limiter(key_func=get_remote_address)
 @router.post("", response_model=SearchResponse)
 @limiter.limit("30/minute")
 async def search_messages(
-    request_obj: Request,
+    request: Request,
     search_request: SearchRequest,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],

@@ -35,13 +35,13 @@ limiter = Limiter(key_func=get_remote_address)
 @router.post("/register", response_model=TokenResponse)
 @limiter.limit("5/minute")
 async def register(
-    request_obj: Request,
-    request: RegisterRequest,
+    request: Request,
+    register_data: RegisterRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TokenResponse:
     """Register a new user."""
     # Check if email exists
-    result = await db.execute(select(User).where(User.email == request.email))
+    result = await db.execute(select(User).where(User.email == register_data.email))
     if result.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -50,8 +50,8 @@ async def register(
 
     # Create user
     user = User(
-        email=request.email,
-        password_hash=hash_password(request.password),
+        email=register_data.email,
+        password_hash=hash_password(register_data.password),
     )
     db.add(user)
     await db.flush()
