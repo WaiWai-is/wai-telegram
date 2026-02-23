@@ -1,0 +1,95 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes ${USER}@${HOST}"
+
+          # Sync code (exclude secrets, dev files, old code)
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude '.venv' \
+            --exclude '__pycache__' \
+            --exclude '.next' \
+            --exclude '*.pyc' \
+            --exclude 'code/' \
+            --exclude '.DS_Store' \
+            --exclude '.env.production' \
+            --exclude '.env' \
+            ./ ${USER}@${HOST}:/opt/wai-telegram/
+
+          # Run deploy commands on server
+          $SSH_CMD << 'EOF'
+          set -e
+          export PATH="/root/.local/bin:$PATH"
+          cd /opt/wai-telegram
+
+          # Load env vars for docker-compose
+          set -a && source .env.production && set +a
+
+          # Ensure database services are running
+          docker-compose -f docker-compose.prod.yml up -d
+
+          # Wait for PostgreSQL
+          sleep 5
+
+          # Backend: install deps + run migrations
+          cd packages/backend
+          uv sync
+          uv run alembic upgrade head
+          cd ../..
+
+          # Frontend: install deps + build
+          cd packages/frontend
+          npm ci
+          npm run build
+          cd ../..
+
+          # Install systemd services and restart
+          cp systemd/wai-backend.service /etc/systemd/system/
+          cp systemd/wai-celery.service /etc/systemd/system/
+          cp systemd/wai-celery-beat.service /etc/systemd/system/
+          cp systemd/wai-frontend.service /etc/systemd/system/
+          systemctl daemon-reload
+
+          systemctl restart wai-backend
+          sleep 5
+          systemctl restart wai-celery wai-celery-beat wai-frontend
+
+          # Reload nginx
+          cp nginx/telegram-ai.conf /etc/nginx/sites-available/
+          ln -sf /etc/nginx/sites-available/telegram-ai.conf /etc/nginx/sites-enabled/
+          nginx -t && systemctl reload nginx
+
+          echo "Deploy complete!"
+          EOF
+
+      - name: Health check
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          sleep 10
+          curl -sf https://telegram.waiwai.is/health || curl -sf http://${HOST}:8000/health
+          echo ""
+          echo "Deployment successful!"
