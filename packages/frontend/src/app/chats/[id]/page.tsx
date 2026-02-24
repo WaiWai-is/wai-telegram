@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { use } from 'react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { MessageList } from '@/components/MessageList'
@@ -111,7 +112,8 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
               </p>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
             <button
               onClick={() => syncMutation.mutate(500)}
               disabled={isSyncRunning}

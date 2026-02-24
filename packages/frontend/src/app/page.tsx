@@ -1,6 +1,7 @@
 'use client'
 
 import { useAuth } from '@/lib/auth'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import Link from 'next/link'
 
 export default function Home() {
@@ -52,6 +53,7 @@ export default function Home() {
           <span className="text-sm text-secondary">
             {user.email}
           </span>
+          <ThemeToggle />
           <button
             onClick={() => useAuth.getState().logout()}
             className="text-sm text-tertiary hover:text-primary transition-colors"

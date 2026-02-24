@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { format } from 'date-fns'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 
@@ -55,13 +56,16 @@ export default function DigestsPage() {
               Daily Digests
             </h1>
           </div>
-          <button
-            onClick={() => generateMutation.mutate()}
-            disabled={generateMutation.isPending}
-            className="px-4 py-2 bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity"
-          >
-            {generateMutation.isPending ? 'Generating...' : 'Generate Yesterday\'s Digest'}
-          </button>
+          <div className="flex items-center gap-4">
+            <ThemeToggle />
+            <button
+              onClick={() => generateMutation.mutate()}
+              disabled={generateMutation.isPending}
+              className="px-4 py-2 bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity"
+            >
+              {generateMutation.isPending ? 'Generating...' : 'Generate Yesterday\'s Digest'}
+            </button>
+          </div>
         </div>
 
         {generateMutation.isError && (
@@ -92,10 +96,10 @@ export default function DigestsPage() {
                 <button
                   key={digest.id}
                   onClick={() => setSelectedDigest(digest.id)}
-                  className={`w-full text-left p-3 rounded-lg transition-colors ${
+                  className={`w-full text-left p-3 rounded-lg border transition-colors ${
                     selected?.id === digest.id
-                      ? 'bg-primary text-surface'
-                      : 'border hover:bg-surface-hover text-primary'
+                      ? 'bg-primary text-surface border-transparent'
+                      : 'hover:bg-surface-hover text-primary'
                   }`}
                 >
                   <div className="font-medium">
@@ -116,7 +120,7 @@ export default function DigestsPage() {
                   <h2 className="text-xl font-light tracking-tight mb-4 text-primary">
                     {format(new Date(selected.digest_date), 'EEEE, MMMM d, yyyy')}
                   </h2>
-                  <div className="prose dark:prose-invert max-w-none">
+                  <div className="max-w-none">
                     <div className="whitespace-pre-wrap text-secondary">
                       {selected.content}
                     </div>

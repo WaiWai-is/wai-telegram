@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { format } from 'date-fns'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 
@@ -43,12 +44,17 @@ export default function SearchPage() {
   return (
     <main className="min-h-screen p-8">
       <div className="max-w-4xl mx-auto">
-        <Link href="/" className="text-sm text-tertiary hover:text-primary transition-colors mb-2 block">
-          &larr; Back to Dashboard
-        </Link>
-        <h1 className="text-3xl font-light tracking-tight mb-6 text-primary">
-          Search Messages
-        </h1>
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <Link href="/" className="text-sm text-tertiary hover:text-primary transition-colors mb-2 block">
+              &larr; Back to Dashboard
+            </Link>
+            <h1 className="text-3xl font-light tracking-tight text-primary">
+              Search Messages
+            </h1>
+          </div>
+          <ThemeToggle />
+        </div>
 
         <form onSubmit={handleSearch} className="mb-8">
           <div className="flex gap-4">

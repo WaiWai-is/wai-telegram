@@ -11,15 +11,13 @@
   --color-surface-hover: rgba(0, 0, 0, 0.03);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #fafafa;
-    --color-secondary: rgba(255, 255, 255, 0.65);
-    --color-tertiary: rgba(255, 255, 255, 0.4);
-    --color-border: rgba(255, 255, 255, 0.1);
-    --color-surface-hover: rgba(255, 255, 255, 0.05);
-  }
+.dark {
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --color-secondary: rgba(255, 255, 255, 0.65);
+  --color-tertiary: rgba(255, 255, 255, 0.4);
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-surface-hover: rgba(255, 255, 255, 0.05);
 }
 
 @layer base {

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { format } from 'date-fns'
 import { api, Chat } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import type { SyncJob } from '@/lib/api'
@@ -119,13 +120,16 @@ export default function ChatsPage() {
               Your Chats
             </h1>
           </div>
-          <button
-            onClick={handleRefresh}
-            disabled={isBusy}
-            className="px-4 py-2 bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity"
-          >
-            {isRefreshing ? 'Refreshing...' : isBulkActive ? 'Syncing...' : 'Refresh from Telegram'}
-          </button>
+          <div className="flex items-center gap-4">
+            <ThemeToggle />
+            <button
+              onClick={handleRefresh}
+              disabled={isBusy}
+              className="px-4 py-2 bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity"
+            >
+              {isRefreshing ? 'Refreshing...' : isBulkActive ? 'Syncing...' : 'Refresh from Telegram'}
+            </button>
+          </div>
         </div>
 
         {refreshError && (

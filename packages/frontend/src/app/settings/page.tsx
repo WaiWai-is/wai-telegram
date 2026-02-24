@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { ThemeToggle } from '@/components/ThemeToggle'
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 
@@ -92,12 +93,17 @@ export default function SettingsPage() {
   return (
     <main className="min-h-screen p-8">
       <div className="max-w-2xl mx-auto">
-        <Link href="/" className="text-sm text-tertiary hover:text-primary transition-colors mb-2 block">
-          &larr; Back to Dashboard
-        </Link>
-        <h1 className="text-3xl font-light tracking-tight mb-8 text-primary">
-          Settings
-        </h1>
+        <div className="flex justify-between items-center mb-8">
+          <div>
+            <Link href="/" className="text-sm text-tertiary hover:text-primary transition-colors mb-2 block">
+              &larr; Back to Dashboard
+            </Link>
+            <h1 className="text-3xl font-light tracking-tight text-primary">
+              Settings
+            </h1>
+          </div>
+          <ThemeToggle />
+        </div>
 
         {/* Telegram Connection */}
         <section className="border rounded-xl p-6 mb-6">
