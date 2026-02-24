@@ -13,7 +13,7 @@ from app.models.sync_job import SyncJob, SyncStatus
 from app.schemas.sync import SyncJobResponse, SyncProgressResponse
 from app.core.limiter import limiter
 from app.services.sync_service import create_sync_job
-from app.tasks.sync_tasks import sync_chat_task
+from app.tasks.sync_tasks import sync_chat_task, sync_all_chats_task, redis_client
 
 router = APIRouter()
 _RETRY_SECONDS_RE = re.compile(r"retry_after_seconds=(\d+)")
@@ -26,6 +26,34 @@ def _parse_retry_after_seconds(error_message: str | None) -> int | None:
     if not match:
         return None
     return int(match.group(1))
+
+
+@router.post("/all", response_model=SyncJobResponse)
+@limiter.limit("3/minute")
+async def sync_all_chats(
+    request: Request,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit_per_chat: int = Query(default=500, ge=0, le=10000),
+) -> SyncJobResponse:
+    """Start bulk sync of all chats. limit_per_chat=0 means unlimited."""
+    # Check if bulk sync already in progress
+    result = await db.execute(
+        select(SyncJob).where(
+            SyncJob.user_id == user.id,
+            SyncJob.chat_id.is_(None),
+            SyncJob.status == SyncStatus.IN_PROGRESS,
+        )
+    )
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Bulk sync already in progress")
+
+    job = await create_sync_job(db, user.id, chat_id=None)
+    await db.commit()
+
+    sync_all_chats_task.delay(str(user.id), str(job.id), limit_per_chat)
+
+    return SyncJobResponse.model_validate(job)
 
 
 @router.post("/chats/{chat_id}", response_model=SyncJobResponse)
@@ -98,14 +126,34 @@ async def get_sync_progress(
         if chat:
             chat_title = chat.title
 
+    # Calculate progress for bulk sync jobs (chat_id is None)
+    progress_percent = None
+    chats_completed = None
+    total_chats = None
+    current_chat_title = chat_title
+
+    if job.chat_id is None:
+        total_raw = redis_client.get(f"bulk:{job_id}:total")
+        completed_raw = redis_client.get(f"bulk:{job_id}:completed")
+        current_raw = redis_client.get(f"bulk:{job_id}:current_chat")
+
+        if total_raw:
+            total_chats = int(total_raw)
+            chats_completed = int(completed_raw or 0)
+            current_chat_title = current_raw.decode() if current_raw else None
+            if total_chats > 0:
+                progress_percent = round(chats_completed / total_chats * 100, 1)
+
     return SyncProgressResponse(
         job_id=job.id,
         status=job.status,
         messages_processed=job.messages_processed,
-        current_chat=chat_title,
-        progress_percent=None,  # Would need total count for percentage
+        current_chat=current_chat_title,
+        progress_percent=progress_percent,
         error_message=job.error_message,
         retry_after_seconds=_parse_retry_after_seconds(job.error_message),
+        chats_completed=chats_completed,
+        total_chats=total_chats,
     )
 
 

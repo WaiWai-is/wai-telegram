@@ -207,12 +207,26 @@ class ApiClient {
   }
 
   // Sync
-  async syncChat(chatId: string) {
-    return this.request<SyncJob>('POST', `/api/v1/sync/chats/${chatId}`)
+  async syncChat(chatId: string, limit?: number) {
+    const params: Record<string, string> = {}
+    if (limit !== undefined) params.limit = String(limit)
+    return this.request<SyncJob>('POST', `/api/v1/sync/chats/${chatId}`, { params })
+  }
+
+  async syncAll(limitPerChat = 500) {
+    return this.request<SyncJob>('POST', '/api/v1/sync/all', {
+      params: { limit_per_chat: String(limitPerChat) },
+    })
   }
 
   async getSyncJob(jobId: string) {
     return this.request<SyncJobProgress>('GET', `/api/v1/sync/jobs/${jobId}`)
+  }
+
+  async getSyncJobs(limit = 20) {
+    return this.request<SyncJob[]>('GET', '/api/v1/sync/jobs', {
+      params: { limit: String(limit) },
+    })
   }
 
   // Search
@@ -290,6 +304,8 @@ export interface SyncJobProgress {
   progress_percent: number | null
   error_message: string | null
   retry_after_seconds: number | null
+  chats_completed: number | null
+  total_chats: number | null
 }
 
 export interface Digest {

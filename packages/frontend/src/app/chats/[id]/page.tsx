@@ -45,7 +45,7 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
   })
 
   const syncMutation = useMutation({
-    mutationFn: () => api.syncChat(id),
+    mutationFn: (limit?: number) => api.syncChat(id, limit),
     onMutate: () => {
       setLastSyncResult(null)
     },
@@ -111,13 +111,24 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
               </p>
             )}
           </div>
-          <button
-            onClick={() => syncMutation.mutate()}
-            disabled={isSyncRunning}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition"
-          >
-            {isSyncRunning ? 'Syncing...' : 'Sync Messages'}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => syncMutation.mutate(500)}
+              disabled={isSyncRunning}
+              className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 transition"
+            >
+              {isSyncRunning ? 'Syncing...' : 'Sync Latest (500)'}
+            </button>
+            {!isSyncRunning && (
+              <button
+                onClick={() => syncMutation.mutate(undefined)}
+                title="Sync complete message history"
+                className="px-3 py-2 bg-gray-600 text-white rounded-lg text-sm hover:bg-gray-700 transition"
+              >
+                Sync All
+              </button>
+            )}
+          </div>
         </div>
 
         {syncMutation.isError && (

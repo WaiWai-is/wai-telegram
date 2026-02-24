@@ -27,3 +27,5 @@ class SyncProgressResponse(BaseModel):
     progress_percent: float | None
     error_message: str | None
     retry_after_seconds: int | None = None
+    chats_completed: int | None = None
+    total_chats: int | None = None

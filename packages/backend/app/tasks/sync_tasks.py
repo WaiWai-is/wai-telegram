@@ -229,6 +229,103 @@ async def _run_sync(
         }
 
 
+BULK_SYNC_TTL = 86400  # 24h Redis key TTL
+
+
+@shared_task(bind=True, max_retries=0)
+def sync_all_chats_task(self, user_id: str, job_id: str, limit_per_chat: int = 500):
+    """Bulk sync: sequentially sync messages for all user chats."""
+    user_uuid = UUID(user_id)
+    job_uuid = UUID(job_id)
+
+    lock = DistributedLock(user_uuid, ttl=3600)  # 1h TTL for bulk sync
+    if not lock.acquire():
+        logger.info(f"Bulk sync skipped — another sync in progress for user {user_id}")
+        asyncio.run(_mark_job_state(job_uuid, SyncStatus.FAILED, "Another sync is already in progress"))
+        return {"status": "skipped", "reason": "sync_in_progress"}
+
+    try:
+        asyncio.run(_run_bulk_sync(user_uuid, job_uuid, limit_per_chat))
+        return {"status": "completed", "job_id": job_id}
+    except Exception as e:
+        asyncio.run(_mark_job_state(job_uuid, SyncStatus.FAILED, str(e)))
+        logger.error(f"Bulk sync failed for user {user_id}: {e}")
+        raise
+    finally:
+        lock.release()
+        redis_client.delete(f"bulk:{job_id}:total")
+        redis_client.delete(f"bulk:{job_id}:completed")
+        redis_client.delete(f"bulk:{job_id}:current_chat")
+
+
+async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> None:
+    """Run bulk sync for all user chats sequentially."""
+    from app.models.chat import TelegramChat
+
+    async with get_db_context() as db:
+        # Set job IN_PROGRESS
+        result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
+        job = result.scalar_one()
+        job.status = SyncStatus.IN_PROGRESS
+        await db.commit()
+
+        # Get all chats for user — unsynced first
+        result = await db.execute(
+            select(TelegramChat)
+            .where(TelegramChat.user_id == user_id)
+            .order_by(TelegramChat.last_sync_at.asc().nulls_first())
+        )
+        chats = result.scalars().all()
+        total = len(chats)
+
+        # Store progress counters in Redis
+        redis_client.setex(f"bulk:{job_id}:total", BULK_SYNC_TTL, total)
+        redis_client.setex(f"bulk:{job_id}:completed", BULK_SYNC_TTL, 0)
+
+        effective_limit = limit_per_chat if limit_per_chat > 0 else None
+        total_messages = 0
+
+        for i, chat in enumerate(chats):
+            redis_client.setex(f"bulk:{job_id}:current_chat", BULK_SYNC_TTL, chat.title[:80])
+
+            try:
+                sub_job = await create_sync_job(db, user_id, chat.id)
+                sub_job.status = SyncStatus.IN_PROGRESS
+                await db.commit()
+
+                count = await sync_messages(db, user_id, chat.id, sub_job.id, effective_limit)
+
+                sub_job.status = SyncStatus.COMPLETED
+                sub_job.completed_at = datetime.now(UTC)
+                sub_job.messages_processed = count
+                await db.commit()
+
+                total_messages += count
+                logger.info(f"Bulk sync: chat {i+1}/{total} '{chat.title[:40]}': {count} messages")
+
+            except Exception as e:
+                logger.error(f"Bulk sync: failed chat {chat.id} ({chat.title[:40]}): {e}")
+                try:
+                    sub_job.status = SyncStatus.FAILED
+                    sub_job.error_message = str(e)[:500]
+                    await db.commit()
+                except Exception:
+                    pass
+
+            finally:
+                redis_client.setex(f"bulk:{job_id}:completed", BULK_SYNC_TTL, i + 1)
+
+            # Update parent job message count
+            job.messages_processed = total_messages
+            await db.commit()
+
+        # Complete parent job
+        job.status = SyncStatus.COMPLETED
+        job.completed_at = datetime.now(UTC)
+        job.messages_processed = total_messages
+        await db.commit()
+
+
 async def _mark_job_state(
     job_id: UUID | None,
     status: SyncStatus,
