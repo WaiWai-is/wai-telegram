@@ -216,6 +216,8 @@ jobs:
         run: |
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
+          # Wait for services to fully initialize (celery takes ~20s)
+          sleep 20
           systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-db$'
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-redis$'
