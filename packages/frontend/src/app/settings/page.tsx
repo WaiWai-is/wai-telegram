@@ -60,7 +60,7 @@ export default function SettingsPage() {
       setAuthError('')
     },
     onError: (err: Error) => {
-      if (err.message.includes('password')) {
+      if (err.message.toLowerCase().includes('password')) {
         setAuthStep('password')
       }
       setAuthError(err.message)

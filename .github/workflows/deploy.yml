@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+env:
+  SSH_OPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes
+  DEPLOY_DIR: /opt/wai-telegram
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -17,16 +21,13 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
 
-      - name: Deploy to server
+      - name: Sync code to server
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
         run: |
-          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes ${USER}@${HOST}"
-
-          # Sync code (exclude secrets, dev files, old code)
           rsync -avz --delete \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            -e "ssh $SSH_OPTS" \
             --exclude '.git' \
             --exclude 'node_modules' \
             --exclude '.venv' \
@@ -37,57 +38,110 @@ jobs:
             --exclude '.DS_Store' \
             --exclude '.env.production' \
             --exclude '.env' \
-            ./ ${USER}@${HOST}:/opt/wai-telegram/
+            ./ ${USER}@${HOST}:${DEPLOY_DIR}/
 
-          # Run deploy commands on server
-          $SSH_CMD << 'EOF'
+      - name: Start Docker services
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          cd /opt/wai-telegram
+          set -a && source .env.production && set +a
+          docker-compose -f docker-compose.prod.yml up -d
+          EOF
+
+      - name: Wait for PostgreSQL
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          for i in $(seq 1 30); do
+            if docker exec wai-telegram-db pg_isready -U telegram -d telegram_ai > /dev/null 2>&1; then
+              echo "PostgreSQL is ready"
+              exit 0
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
+            sleep 2
+          done
+          echo "PostgreSQL failed to start"
+          exit 1
+          EOF
+
+      - name: Install backend dependencies
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
           export PATH="/root/.local/bin:$PATH"
-          cd /opt/wai-telegram
-
-          # Load env vars for docker-compose
-          set -a && source .env.production && set +a
-
-          # Ensure database services are running
-          docker-compose -f docker-compose.prod.yml up -d
-
-          # Wait for PostgreSQL
-          sleep 5
-
-          # Backend: install deps + run migrations
-          cd packages/backend
+          cd /opt/wai-telegram/packages/backend
           uv sync
-          uv run alembic upgrade head
-          cd ../..
+          EOF
 
-          # Frontend: install deps + build
-          cd packages/frontend
+      - name: Run database migrations
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          export PATH="/root/.local/bin:$PATH"
+          cd /opt/wai-telegram/packages/backend
+          set -a && source /opt/wai-telegram/.env.production && set +a
+          uv run alembic upgrade head
+          EOF
+
+      - name: Build frontend
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          cd /opt/wai-telegram/packages/frontend
           npm ci
           npm run build
-          cd ../..
+          EOF
 
-          # Install systemd services and restart
+      - name: Deploy systemd services
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          cd /opt/wai-telegram
           cp systemd/wai-backend.service /etc/systemd/system/
           cp systemd/wai-celery.service /etc/systemd/system/
           cp systemd/wai-celery-beat.service /etc/systemd/system/
           cp systemd/wai-frontend.service /etc/systemd/system/
           systemctl daemon-reload
+          EOF
 
+      - name: Restart services
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
           systemctl restart wai-backend
-          sleep 5
           systemctl restart wai-celery wai-celery-beat wai-frontend
 
-          # Reload nginx
+          # Reload nginx config
+          cd /opt/wai-telegram
           cp nginx/telegram-ai.conf /etc/nginx/sites-available/
           ln -sf /etc/nginx/sites-available/telegram-ai.conf /etc/nginx/sites-enabled/
           nginx -t && systemctl reload nginx
-
-          echo "Deploy complete!"
+          echo "All services restarted"
           EOF
 
       - name: Health check
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
           for i in 1 2 3 4 5 6; do
             sleep 10
@@ -96,7 +150,7 @@ jobs:
               echo "Deployment successful!"
               exit 0
             fi
-            echo "Attempt $i failed, retrying..."
+            echo "Attempt $i/6 failed, retrying..."
           done
           echo "Health check failed after 6 attempts"
           exit 1
