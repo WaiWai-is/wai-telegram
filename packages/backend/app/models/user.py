@@ -32,10 +32,14 @@ class User(Base):
     digests: Mapped[list["DailyDigest"]] = relationship(
         "DailyDigest", back_populates="user", cascade="all, delete-orphan"
     )
+    settings: Mapped["UserSettings | None"] = relationship(
+        "UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
 
 
 # Import for type hints
 from app.models.chat import TelegramChat  # noqa: E402
 from app.models.digest import DailyDigest  # noqa: E402
 from app.models.session import TelegramSession  # noqa: E402
+from app.models.settings import UserSettings  # noqa: E402
 from app.models.sync_job import SyncJob  # noqa: E402

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import redis
@@ -336,6 +336,56 @@ async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> No
         job.completed_at = datetime.now(UTC)
         job.messages_processed = total_messages
         await db.commit()
+
+
+@shared_task
+def auto_sync_users():
+    """Dispatch sync for users whose auto-sync interval has elapsed."""
+    return asyncio.run(_auto_sync_users())
+
+
+async def _auto_sync_users() -> dict:
+    """Check users with auto_sync_enabled and dispatch syncs if interval elapsed."""
+    from app.models.chat import TelegramChat
+    from app.models.settings import UserSettings
+
+    dispatched = 0
+    skipped = 0
+
+    async with get_db_context() as db:
+        result = await db.execute(
+            select(UserSettings).where(UserSettings.auto_sync_enabled == True)
+        )
+        all_settings = result.scalars().all()
+
+        for user_settings in all_settings:
+            user_id = user_settings.user_id
+
+            # Skip if listener is active (it handles sync)
+            if redis_client.get(f"listener:active:{user_id}"):
+                skipped += 1
+                continue
+
+            # Check most recent last_sync_at across their chats
+            result = await db.execute(
+                select(TelegramChat.last_sync_at)
+                .where(TelegramChat.user_id == user_id)
+                .order_by(TelegramChat.last_sync_at.desc().nulls_last())
+                .limit(1)
+            )
+            last_sync = result.scalar_one_or_none()
+
+            interval = timedelta(minutes=user_settings.auto_sync_interval_minutes)
+
+            if last_sync is None or (datetime.now(UTC) - last_sync) >= interval:
+                # Create a sync job and dispatch
+                job = await create_sync_job(db, user_id, chat_id=None)
+                await db.commit()
+                sync_all_chats_task.delay(str(user_id), str(job.id), 500)
+                dispatched += 1
+                logger.info(f"Auto-sync dispatched for user {user_id}")
+
+    return {"dispatched": dispatched, "skipped_listener_active": skipped}
 
 
 async def _mark_job_state(

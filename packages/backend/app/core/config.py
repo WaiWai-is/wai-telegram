@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     # Telegram
     telegram_api_id: int = Field(default=0)
     telegram_api_hash: str = Field(default="")
+    telegram_bot_token: str = Field(default="")
 
     # OpenAI (embeddings)
     openai_api_key: str = Field(default="")

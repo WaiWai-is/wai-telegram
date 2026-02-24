@@ -23,10 +23,14 @@ celery_app.conf.update(
     task_acks_late=True,
 )
 
-# Beat schedule for daily digests
+# Beat schedule
 celery_app.conf.beat_schedule = {
     "generate-daily-digests": {
         "task": "app.tasks.digest_tasks.generate_all_digests",
-        "schedule": 28800,  # Every 8 hours
+        "schedule": 3600,  # Every hour — per-user hour matching inside task
+    },
+    "auto-sync-users": {
+        "task": "app.tasks.sync_tasks.auto_sync_users",
+        "schedule": 300,  # Every 5 minutes
     },
 }

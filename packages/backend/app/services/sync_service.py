@@ -133,8 +133,15 @@ async def sync_messages(
     job_id: UUID,
     limit: int | None = None,
     on_progress: Callable[[int], None] | None = None,
+    client: "TelegramClient | None" = None,
 ) -> int:
-    """Sync messages for a specific chat. Returns count of messages synced."""
+    """Sync messages for a specific chat. Returns count of messages synced.
+
+    If client is provided (e.g. from the listener service), it is used directly
+    instead of calling get_client().
+    """
+    from telethon import TelegramClient
+
     # Get chat
     result = await db.execute(
         select(TelegramChat).where(
@@ -151,7 +158,8 @@ async def sync_messages(
     if not job:
         raise ValueError("Sync job not found")
 
-    client = await get_client(user_id, db)
+    if client is None:
+        client = await get_client(user_id, db)
     messages_synced = 0
     batch_values = []
     batch_count = 0

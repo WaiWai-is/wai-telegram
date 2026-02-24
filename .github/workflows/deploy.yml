@@ -188,6 +188,7 @@ jobs:
           cp systemd/wai-celery.service /etc/systemd/system/
           cp systemd/wai-celery-beat.service /etc/systemd/system/
           cp systemd/wai-frontend.service /etc/systemd/system/
+          cp systemd/wai-listener.service /etc/systemd/system/
           systemctl daemon-reload
           EOF
 
@@ -199,7 +200,7 @@ jobs:
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
           systemctl restart wai-backend
-          systemctl restart wai-celery wai-celery-beat wai-frontend
+          systemctl restart wai-celery wai-celery-beat wai-frontend wai-listener
 
           # Reload nginx config
           cd /opt/wai-telegram
@@ -218,7 +219,7 @@ jobs:
           set -e
           # Wait for services to fully initialize (celery takes ~20s)
           sleep 20
-          systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend
+          systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend wai-listener
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-db$'
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-redis$'
           cd /opt/wai-telegram/packages/backend

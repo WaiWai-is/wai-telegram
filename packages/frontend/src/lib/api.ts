@@ -250,6 +250,24 @@ class ApiClient {
       body: date ? { date } : {},
     })
   }
+
+  // Settings
+  async getSettings() {
+    return this.request<UserSettings>('GET', '/api/v1/settings')
+  }
+
+  async updateSettings(settings: Partial<UserSettingsUpdate>) {
+    return this.request<UserSettings>('PUT', '/api/v1/settings', {
+      body: settings,
+    })
+  }
+
+  async testBot() {
+    return this.request<{ success: boolean; message: string }>(
+      'POST',
+      '/api/v1/settings/test-bot'
+    )
+  }
 }
 
 export const api = new ApiClient()
@@ -314,4 +332,23 @@ export interface Digest {
   digest_date: string
   content: string
   summary_stats: Record<string, unknown>
+}
+
+export interface UserSettings {
+  digest_enabled: boolean
+  digest_hour_utc: number
+  digest_telegram_enabled: boolean
+  auto_sync_enabled: boolean
+  auto_sync_interval_minutes: number
+  realtime_sync_enabled: boolean
+  listener_active: boolean
+}
+
+export interface UserSettingsUpdate {
+  digest_enabled?: boolean
+  digest_hour_utc?: number
+  digest_telegram_enabled?: boolean
+  auto_sync_enabled?: boolean
+  auto_sync_interval_minutes?: number
+  realtime_sync_enabled?: boolean
 }

@@ -3,11 +3,58 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
-import { api } from '@/lib/api'
+import { api, UserSettings, UserSettingsUpdate } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
+
+const DIGEST_HOURS = [
+  { value: 0, label: 'Midnight (00:00 UTC)' },
+  { value: 6, label: 'Morning (06:00 UTC)' },
+  { value: 9, label: 'Morning (09:00 UTC)' },
+  { value: 12, label: 'Noon (12:00 UTC)' },
+  { value: 15, label: 'Afternoon (15:00 UTC)' },
+  { value: 18, label: 'Evening (18:00 UTC)' },
+  { value: 21, label: 'Night (21:00 UTC)' },
+]
+
+const SYNC_INTERVALS = [
+  { value: 15, label: 'Every 15 minutes' },
+  { value: 60, label: 'Every hour' },
+  { value: 360, label: 'Every 6 hours' },
+  { value: 720, label: 'Every 12 hours' },
+  { value: 1440, label: 'Every 24 hours' },
+]
+
+function Toggle({
+  checked,
+  onChange,
+  disabled,
+}: {
+  checked: boolean
+  onChange: (value: boolean) => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+        checked ? 'bg-primary' : 'bg-surface-hover'
+      }`}
+    >
+      <span
+        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-surface shadow ring-0 transition duration-200 ease-in-out ${
+          checked ? 'translate-x-5' : 'translate-x-0'
+        }`}
+      />
+    </button>
+  )
+}
 
 export default function SettingsPage() {
   const router = useRouter()
@@ -26,6 +73,9 @@ export default function SettingsPage() {
   // API key state
   const [apiKey, setApiKey] = useState('')
 
+  // Bot test state
+  const [testBotStatus, setTestBotStatus] = useState<{ success?: boolean; message?: string } | null>(null)
+
   useEffect(() => {
     if (!authLoading && !user) {
       router.push('/login')
@@ -36,6 +86,25 @@ export default function SettingsPage() {
     queryKey: ['telegram-session'],
     queryFn: () => api.getTelegramSession(),
     enabled: !!user,
+  })
+
+  const { data: settings, isLoading: settingsLoading } = useQuery({
+    queryKey: ['user-settings'],
+    queryFn: () => api.getSettings(),
+    enabled: !!user,
+  })
+
+  const updateSettingsMutation = useMutation({
+    mutationFn: (update: Partial<UserSettingsUpdate>) => api.updateSettings(update),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['user-settings'], data)
+    },
+  })
+
+  const testBotMutation = useMutation({
+    mutationFn: () => api.testBot(),
+    onSuccess: (data) => setTestBotStatus(data),
+    onError: (err: Error) => setTestBotStatus({ success: false, message: err.message }),
   })
 
   const requestCodeMutation = useMutation({
@@ -88,6 +157,10 @@ export default function SettingsPage() {
         <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
       </div>
     )
+  }
+
+  const updateSetting = (key: keyof UserSettingsUpdate, value: unknown) => {
+    updateSettingsMutation.mutate({ [key]: value } as Partial<UserSettingsUpdate>)
   }
 
   return (
@@ -221,6 +294,164 @@ export default function SettingsPage() {
               </button>
             </form>
           )}
+        </section>
+
+        {/* Digest Settings */}
+        <section className="border rounded-xl p-6 mb-6">
+          <h2 className="text-lg font-medium mb-4 text-primary">
+            Digest Settings
+          </h2>
+
+          {settingsLoading ? (
+            <div className="animate-pulse h-32 bg-surface-hover rounded" />
+          ) : settings ? (
+            <div className="space-y-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-primary">Auto-generate daily digests</p>
+                  <p className="text-sm text-tertiary">AI summary of your messages from the previous day</p>
+                </div>
+                <Toggle
+                  checked={settings.digest_enabled}
+                  onChange={(v) => updateSetting('digest_enabled', v)}
+                  disabled={updateSettingsMutation.isPending}
+                />
+              </div>
+
+              {settings.digest_enabled && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium mb-1.5 text-secondary">
+                      Digest time
+                    </label>
+                    <select
+                      value={settings.digest_hour_utc}
+                      onChange={(e) => updateSetting('digest_hour_utc', Number(e.target.value))}
+                      disabled={updateSettingsMutation.isPending}
+                      className="w-full px-3 py-2.5 border rounded-lg bg-transparent text-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      {DIGEST_HOURS.map((h) => (
+                        <option key={h.value} value={h.value}>{h.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-primary">Send digest via Telegram</p>
+                      <p className="text-sm text-tertiary">Receive your daily digest as a Telegram message</p>
+                    </div>
+                    <Toggle
+                      checked={settings.digest_telegram_enabled}
+                      onChange={(v) => updateSetting('digest_telegram_enabled', v)}
+                      disabled={updateSettingsMutation.isPending}
+                    />
+                  </div>
+
+                  {settings.digest_telegram_enabled && (
+                    <div className="ml-0 p-4 border rounded-lg space-y-3">
+                      <p className="text-sm text-secondary">
+                        The bot will send digests to your Telegram account directly.
+                        Make sure you&apos;ve started a conversation with the bot first.
+                      </p>
+                      <button
+                        onClick={() => {
+                          setTestBotStatus(null)
+                          testBotMutation.mutate()
+                        }}
+                        disabled={testBotMutation.isPending}
+                        className="px-4 py-2 border text-primary rounded-lg hover:bg-surface-hover transition-colors disabled:opacity-50"
+                      >
+                        {testBotMutation.isPending ? 'Sending...' : 'Send Test Message'}
+                      </button>
+                      {testBotStatus && (
+                        <p className={`text-sm ${testBotStatus.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                          {testBotStatus.message}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          ) : null}
+        </section>
+
+        {/* Auto-sync Settings */}
+        <section className="border rounded-xl p-6 mb-6">
+          <h2 className="text-lg font-medium mb-4 text-primary">
+            Auto-sync
+          </h2>
+
+          {settingsLoading ? (
+            <div className="animate-pulse h-24 bg-surface-hover rounded" />
+          ) : settings ? (
+            <div className="space-y-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-primary">Auto-sync messages</p>
+                  <p className="text-sm text-tertiary">Automatically sync new messages at a regular interval</p>
+                </div>
+                <Toggle
+                  checked={settings.auto_sync_enabled}
+                  onChange={(v) => updateSetting('auto_sync_enabled', v)}
+                  disabled={updateSettingsMutation.isPending}
+                />
+              </div>
+
+              {settings.auto_sync_enabled && (
+                <div>
+                  <label className="block text-sm font-medium mb-1.5 text-secondary">
+                    Sync interval
+                  </label>
+                  <select
+                    value={settings.auto_sync_interval_minutes}
+                    onChange={(e) => updateSetting('auto_sync_interval_minutes', Number(e.target.value))}
+                    disabled={updateSettingsMutation.isPending}
+                    className="w-full px-3 py-2.5 border rounded-lg bg-transparent text-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {SYNC_INTERVALS.map((i) => (
+                      <option key={i.value} value={i.value}>{i.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </section>
+
+        {/* Real-time Sync */}
+        <section className="border rounded-xl p-6 mb-6">
+          <h2 className="text-lg font-medium mb-4 text-primary">
+            Real-time Sync
+          </h2>
+
+          {settingsLoading ? (
+            <div className="animate-pulse h-24 bg-surface-hover rounded" />
+          ) : settings ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-primary">Real-time message sync</p>
+                  <p className="text-sm text-tertiary">New messages appear automatically as they arrive</p>
+                </div>
+                <Toggle
+                  checked={settings.realtime_sync_enabled}
+                  onChange={(v) => updateSetting('realtime_sync_enabled', v)}
+                  disabled={updateSettingsMutation.isPending}
+                />
+              </div>
+
+              {settings.realtime_sync_enabled && (
+                <div className="flex items-center gap-2">
+                  <span className={`w-2.5 h-2.5 rounded-full ${settings.listener_active ? 'bg-green-500' : 'bg-yellow-500'}`} />
+                  <span className="text-sm text-secondary">
+                    {settings.listener_active ? 'Listener active' : 'Listener connecting...'}
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : null}
         </section>
 
         {/* API Key */}

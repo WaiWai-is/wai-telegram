@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
@@ -121,12 +122,24 @@ async def sync_chat(
             detail="Sync already in progress for this chat",
         )
 
-    # Create sync job and commit so Celery worker can find it
+    # Create sync job and commit so worker can find it
     job = await create_sync_job(db, user.id, chat_id)
     await db.commit()
 
-    # Dispatch to Celery worker with existing job ID
-    sync_chat_task.delay(str(user.id), str(chat_id), str(job.id), limit)
+    # Route to listener if active, otherwise to Celery
+    if redis_client.get(f"listener:active:{user.id}"):
+        redis_client.publish(
+            f"listener:cmd:{user.id}",
+            json.dumps({
+                "command": "sync_chat",
+                "user_id": str(user.id),
+                "chat_id": str(chat_id),
+                "job_id": str(job.id),
+                "limit": limit,
+            }),
+        )
+    else:
+        sync_chat_task.delay(str(user.id), str(chat_id), str(job.id), limit)
 
     return SyncJobResponse.model_validate(job)
 
