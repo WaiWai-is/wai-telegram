@@ -14,8 +14,8 @@ WorkingDirectory=/opt/wai-telegram/packages/backend
 Environment="PATH=/home/wai/.local/bin:/usr/local/bin:/usr/bin"
 EnvironmentFile=/opt/wai-telegram/.env.production
 
-ExecStartPre=/bin/sh -c 'until docker exec wai-telegram-db pg_isready -U telegram -d telegram_ai >/dev/null 2>&1; do sleep 2; done'
-ExecStartPre=/bin/sh -c 'until docker exec wai-telegram-redis redis-cli ping >/dev/null 2>&1; do sleep 2; done'
+ExecStartPre=+/bin/sh -c 'n=0; until docker exec wai-telegram-db pg_isready -U telegram -d telegram_ai >/dev/null 2>&1; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 2; done'
+ExecStartPre=+/bin/sh -c 'n=0; until docker exec wai-telegram-redis redis-cli ping >/dev/null 2>&1; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 2; done'
 ExecStart=/opt/wai-telegram/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 
 Restart=always

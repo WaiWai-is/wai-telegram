@@ -21,6 +21,31 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
 
+      - name: Validate server environment
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          echo "Validating .env.production..."
+          if [ ! -f /opt/wai-telegram/.env.production ]; then
+            echo "FATAL: /opt/wai-telegram/.env.production not found"
+            exit 1
+          fi
+          set -a && source /opt/wai-telegram/.env.production && set +a
+          MISSING=""
+          [ -z "${DATABASE_URL:-}" ] && MISSING="$MISSING DATABASE_URL"
+          [ -z "${REDIS_URL:-}" ] && MISSING="$MISSING REDIS_URL"
+          [ -z "${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}" ] && MISSING="$MISSING NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"
+          [ -z "${SECRET_KEY:-}" ] && MISSING="$MISSING SECRET_KEY"
+          if [ -n "$MISSING" ]; then
+            echo "FATAL: Missing required env vars:$MISSING"
+            exit 1
+          fi
+          echo "All required env vars present"
+          EOF
+
       - name: Create service user and backup
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
@@ -146,10 +171,6 @@ jobs:
           set -e
           cd /opt/wai-telegram/packages/frontend
           set -a && source /opt/wai-telegram/.env.production && set +a
-          if [ -z "${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}" ]; then
-            echo "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is required for production builds"
-            exit 1
-          fi
           npm ci
           npm run build
           chown -R wai:wai /opt/wai-telegram/packages/frontend
