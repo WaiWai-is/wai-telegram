@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from sqlalchemy import select, update
+from sqlalchemy import text, update
 
 from app.api.v1 import api_router
 from app.core.config import get_settings
@@ -96,7 +96,7 @@ async def health_check():
 
     # Check database
     async with engine.connect() as conn:
-        await conn.execute(select(1))
+        await conn.execute(text("SELECT 1"))
 
     # Check Redis
     r = redis_lib.from_url(settings.redis_url)

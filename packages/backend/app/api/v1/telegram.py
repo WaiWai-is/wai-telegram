@@ -56,7 +56,7 @@ async def _cleanup_expired_auth_clients() -> None:
 @router.post("/request-code", response_model=RequestCodeResponse)
 @limiter.limit("3/minute")
 async def request_code(
-    http_request: Request,
+    request: Request,
     body: RequestCodeRequest,
     user: CurrentUser,
 ) -> RequestCodeResponse:
