@@ -288,6 +288,7 @@ async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> No
         for i, chat in enumerate(chats):
             redis_client.setex(f"bulk:{job_id}:current_chat", BULK_SYNC_TTL, chat.title[:80])
 
+            sub_job = None
             try:
                 sub_job = await create_sync_job(db, user_id, chat.id)
                 sub_job.status = SyncStatus.IN_PROGRESS
@@ -305,12 +306,13 @@ async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> No
 
             except Exception as e:
                 logger.error(f"Bulk sync: failed chat {chat.id} ({chat.title[:40]}): {e}")
-                try:
-                    sub_job.status = SyncStatus.FAILED
-                    sub_job.error_message = str(e)[:500]
-                    await db.commit()
-                except Exception:
-                    pass
+                if sub_job is not None:
+                    try:
+                        sub_job.status = SyncStatus.FAILED
+                        sub_job.error_message = str(e)[:500]
+                        await db.commit()
+                    except Exception as commit_err:
+                        logger.error(f"Bulk sync: failed to mark sub-job for chat {chat.id}: {commit_err}")
 
             finally:
                 redis_client.setex(f"bulk:{job_id}:completed", BULK_SYNC_TTL, i + 1)

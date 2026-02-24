@@ -19,7 +19,7 @@ from telethon.tl.types import (
 from app.core.config import get_settings
 from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
-from app.models.sync_job import SyncJob
+from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
 from app.services.rate_limiter import record_request
 from app.services.telegram_client import get_client

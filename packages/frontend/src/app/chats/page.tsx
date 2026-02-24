@@ -6,7 +6,8 @@ import { format } from 'date-fns'
 import { api, Chat } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { SyncJob } from '@/lib/api'
 
 export default function ChatsPage() {
   const router = useRouter()
@@ -14,6 +15,7 @@ export default function ChatsPage() {
   const queryClient = useQueryClient()
   const [bulkJobId, setBulkJobId] = useState<string | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -54,14 +56,17 @@ export default function ChatsPage() {
   })
 
   // Map chat_id -> active sync job
-  const syncStatusByChat = new Map(
+  const syncStatusByChat = useMemo(() => new Map(
     recentJobs
-      ?.filter(j => j.chat_id && (j.status === 'in_progress' || j.status === 'pending'))
-      .map(j => [j.chat_id, j]) ?? []
-  )
+      ?.filter((j): j is SyncJob & { chat_id: string } =>
+        j.chat_id != null && (j.status === 'in_progress' || j.status === 'pending')
+      )
+      .map(j => [j.chat_id, j] as const) ?? []
+  ), [recentJobs])
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
+    setRefreshError(null)
     try {
       // Step 1: Discover chats from Telegram
       await api.refreshChats()
@@ -70,6 +75,8 @@ export default function ChatsPage() {
       // Step 2: Start bulk message sync (500 per chat)
       const job = await api.syncAll(500)
       setBulkJobId(job.id)
+    } catch (err) {
+      setRefreshError(err instanceof Error ? err.message : 'Failed to start sync')
     } finally {
       setIsRefreshing(false)
     }
@@ -120,6 +127,14 @@ export default function ChatsPage() {
             {isRefreshing ? 'Refreshing...' : isBulkActive ? 'Syncing...' : 'Refresh from Telegram'}
           </button>
         </div>
+
+        {refreshError && (
+          <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
+            <span className="text-sm text-red-700 dark:text-red-300">
+              {refreshError}
+            </span>
+          </div>
+        )}
 
         {/* Bulk sync progress banner */}
         {isBulkActive && (

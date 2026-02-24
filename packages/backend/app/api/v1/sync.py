@@ -138,8 +138,8 @@ async def get_sync_progress(
         current_raw = redis_client.get(f"bulk:{job_id}:current_chat")
 
         if total_raw:
-            total_chats = int(total_raw)
-            chats_completed = int(completed_raw or 0)
+            total_chats = int(total_raw.decode())
+            chats_completed = int(completed_raw.decode()) if completed_raw else 0
             current_chat_title = current_raw.decode() if current_raw else None
             if total_chats > 0:
                 progress_percent = round(chats_completed / total_chats * 100, 1)
