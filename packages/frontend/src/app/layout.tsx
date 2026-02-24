@@ -1,6 +1,12 @@
 import type { Metadata } from 'next'
+import { Inter } from 'next/font/google'
 import './globals.css'
 import { Providers } from '@/components/Providers'
+
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+})
 
 export const metadata: Metadata = {
   title: 'Telegram AI Message Manager',
@@ -13,8 +19,8 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <html lang="en" className={inter.variable}>
+      <body className="min-h-screen antialiased">
         <Providers>{children}</Providers>
       </body>
     </html>

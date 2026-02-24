@@ -33,14 +33,14 @@ export function MessageList({ messages, isLoading }: MessageListProps) {
   if (isLoading) {
     return (
       <div className="flex justify-center py-8">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
       </div>
     )
   }
 
   if (!messages.length) {
     return (
-      <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+      <div className="text-center py-8 text-tertiary">
         No messages found
       </div>
     )
@@ -75,12 +75,12 @@ export function MessageList({ messages, isLoading }: MessageListProps) {
                 className={clsx(
                   'max-w-[80%] rounded-lg p-3',
                   message.is_outgoing
-                    ? 'ml-auto bg-blue-600 text-white'
-                    : 'mr-auto bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white'
+                    ? 'ml-auto bg-primary text-surface'
+                    : 'mr-auto border text-primary'
                 )}
               >
                 {!message.is_outgoing && message.sender_name && (
-                  <div className="text-xs font-semibold mb-1 text-blue-600 dark:text-blue-400">
+                  <div className="text-xs font-medium mb-1 text-secondary">
                     {message.sender_name}
                   </div>
                 )}
@@ -90,7 +90,7 @@ export function MessageList({ messages, isLoading }: MessageListProps) {
                 <div
                   className={clsx(
                     'text-xs mt-1',
-                    message.is_outgoing ? 'text-blue-200' : 'text-gray-500 dark:text-gray-400'
+                    message.is_outgoing ? 'opacity-60' : 'text-tertiary'
                   )}
                 >
                   {format(new Date(message.sent_at), 'MMM d, h:mm a')}

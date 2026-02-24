@@ -89,7 +89,7 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
   if (authLoading || !user) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
       </div>
     )
   }
@@ -99,14 +99,14 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
       <div className="max-w-4xl mx-auto">
         <div className="flex justify-between items-center mb-6">
           <div>
-            <Link href="/chats" className="text-sm text-blue-600 hover:underline mb-2 block">
-              ← Back to Chats
+            <Link href="/chats" className="text-sm text-tertiary hover:text-primary transition-colors mb-2 block">
+              &larr; Back to Chats
             </Link>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            <h1 className="text-3xl font-light tracking-tight text-primary">
               {chat?.title || 'Chat'}
             </h1>
             {chat && (
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-sm text-tertiary">
                 {chat.total_messages_synced} messages synced
               </p>
             )}
@@ -115,7 +115,7 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
             <button
               onClick={() => syncMutation.mutate(500)}
               disabled={isSyncRunning}
-              className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 transition"
+              className="px-3 py-2 bg-primary text-surface rounded-lg text-sm hover:opacity-80 disabled:opacity-50 transition-opacity"
             >
               {isSyncRunning ? 'Syncing...' : 'Sync Latest (500)'}
             </button>
@@ -123,7 +123,7 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
               <button
                 onClick={() => syncMutation.mutate(undefined)}
                 title="Sync complete message history"
-                className="px-3 py-2 bg-gray-600 text-white rounded-lg text-sm hover:bg-gray-700 transition"
+                className="px-3 py-2 border text-primary rounded-lg text-sm hover:bg-surface-hover transition-colors"
               >
                 Sync All
               </button>
@@ -132,42 +132,42 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
         </div>
 
         {syncMutation.isError && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg">
+          <div className="mb-4 p-3 border rounded-lg text-primary">
             Sync failed: {(syncMutation.error as Error).message}
           </div>
         )}
 
         {lastSyncResult?.status === 'failed' && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg">
+          <div className="mb-4 p-3 border rounded-lg text-primary">
             Sync failed: {lastSyncResult.error_message || 'Unknown sync failure'}
           </div>
         )}
 
         {lastSyncResult?.status === 'completed' && (
-          <div className="mb-4 p-3 bg-green-100 text-green-700 rounded-lg">
+          <div className="mb-4 p-3 border rounded-lg text-primary">
             Synced {lastSyncResult.messages_processed} messages
           </div>
         )}
 
         {syncProgress?.status === 'pending' && syncProgress.retry_after_seconds && (
-          <div className="mb-4 p-3 bg-yellow-100 text-yellow-800 rounded-lg">
+          <div className="mb-4 p-3 border rounded-lg text-primary">
             Sync rate-limited. Next retry in about {syncProgress.retry_after_seconds} seconds.
           </div>
         )}
 
         {isMessagesError && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg flex items-center justify-between gap-4">
-            <span>Failed to load messages: {(messagesError as Error).message}</span>
+          <div className="mb-4 p-3 border rounded-lg flex items-center justify-between gap-4">
+            <span className="text-primary">Failed to load messages: {(messagesError as Error).message}</span>
             <button
               onClick={() => refetchMessages()}
-              className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 transition"
+              className="px-3 py-1 bg-primary text-surface rounded hover:opacity-80 transition-opacity"
             >
               Retry
             </button>
           </div>
         )}
 
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm">
+        <div className="border rounded-xl p-4">
           <MessageList
             messages={messagesData?.messages || []}
             isLoading={isLoading}

@@ -3,19 +3,34 @@
 @tailwind utilities;
 
 :root {
-  --foreground: #171717;
   --background: #ffffff;
+  --foreground: #000000;
+  --color-secondary: rgba(0, 0, 0, 0.6);
+  --color-tertiary: rgba(0, 0, 0, 0.4);
+  --color-border: rgba(0, 0, 0, 0.08);
+  --color-surface-hover: rgba(0, 0, 0, 0.03);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --foreground: #ededed;
     --background: #0a0a0a;
+    --foreground: #fafafa;
+    --color-secondary: rgba(255, 255, 255, 0.65);
+    --color-tertiary: rgba(255, 255, 255, 0.4);
+    --color-border: rgba(255, 255, 255, 0.1);
+    --color-surface-hover: rgba(255, 255, 255, 0.05);
+  }
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: var(--color-border);
   }
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: system-ui, -apple-system, sans-serif;
 }
