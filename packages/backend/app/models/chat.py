@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -18,6 +18,9 @@ class ChatType(str, enum.Enum):
 
 class TelegramChat(Base):
     __tablename__ = "telegram_chats"
+    __table_args__ = (
+        UniqueConstraint("user_id", "telegram_chat_id", name="uq_telegram_chats_user_chat"),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)

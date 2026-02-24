@@ -2,9 +2,56 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 class ApiClient {
   private accessToken: string | null = null
+  private refreshToken: string | null = null
+  private onTokenRefresh: ((accessToken: string, refreshToken: string) => void) | null = null
+  private onAuthFailure: (() => void) | null = null
+  private refreshPromise: Promise<boolean> | null = null
 
   setAccessToken(token: string | null) {
     this.accessToken = token
+  }
+
+  setRefreshToken(token: string | null) {
+    this.refreshToken = token
+  }
+
+  setTokenRefreshCallback(cb: (accessToken: string, refreshToken: string) => void) {
+    this.onTokenRefresh = cb
+  }
+
+  setAuthFailureCallback(cb: () => void) {
+    this.onAuthFailure = cb
+  }
+
+  private async attemptTokenRefresh(): Promise<boolean> {
+    if (!this.refreshToken) return false
+
+    // Deduplicate concurrent refresh attempts
+    if (this.refreshPromise) return this.refreshPromise
+
+    this.refreshPromise = (async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: this.refreshToken }),
+        })
+
+        if (!response.ok) return false
+
+        const tokens = await response.json()
+        this.accessToken = tokens.access_token
+        this.refreshToken = tokens.refresh_token
+        this.onTokenRefresh?.(tokens.access_token, tokens.refresh_token)
+        return true
+      } catch {
+        return false
+      } finally {
+        this.refreshPromise = null
+      }
+    })()
+
+    return this.refreshPromise
   }
 
   private async request<T>(
@@ -26,11 +73,26 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${this.accessToken}`
     }
 
-    const response = await fetch(url.toString(), {
+    let response = await fetch(url.toString(), {
       method,
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
     })
+
+    // 401 interceptor: try token refresh once, then retry
+    if (response.status === 401 && this.refreshToken) {
+      const refreshed = await this.attemptTokenRefresh()
+      if (refreshed) {
+        headers['Authorization'] = `Bearer ${this.accessToken}`
+        response = await fetch(url.toString(), {
+          method,
+          headers,
+          body: options.body ? JSON.stringify(options.body) : undefined,
+        })
+      } else {
+        this.onAuthFailure?.()
+      }
+    }
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: 'Request failed' }))
@@ -131,7 +193,7 @@ class ApiClient {
   }
 
   async getChatMessages(chatId: string, limit = 50, offset = 0) {
-    return this.request<{ messages: Message[]; total: number; has_more: boolean }>(
+    return this.request<{ messages: Message[]; total: number | null; has_more: boolean }>(
       'GET',
       `/api/v1/chats/${chatId}/messages`,
       { params: { limit: String(limit), offset: String(offset) } }

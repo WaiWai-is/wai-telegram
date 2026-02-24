@@ -1,24 +1,59 @@
+import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy import select, update
 
 from app.api.v1 import api_router
 from app.core.config import get_settings
+from app.core.database import async_session_factory, engine
 from app.core.limiter import limiter
+from app.models.sync_job import SyncJob, SyncStatus
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup: mark orphaned IN_PROGRESS jobs as FAILED
+    try:
+        async with async_session_factory() as db:
+            cutoff = datetime.now(UTC) - timedelta(hours=2)
+            result = await db.execute(
+                update(SyncJob)
+                .where(
+                    SyncJob.status == SyncStatus.IN_PROGRESS,
+                    SyncJob.updated_at < cutoff,
+                )
+                .values(
+                    status=SyncStatus.FAILED,
+                    error_message="Marked as failed: job was orphaned (worker crash or timeout)",
+                )
+            )
+            if result.rowcount > 0:
+                logger.warning(f"Marked {result.rowcount} orphaned sync jobs as FAILED")
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to clean up orphaned jobs on startup: {e}")
+
     yield
-    # Shutdown
-    pass
+
+    # Shutdown: disconnect temporary auth clients
+    try:
+        from app.api.v1.telegram import _auth_clients
+        for key, (client, _) in list(_auth_clients.items()):
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+        _auth_clients.clear()
+    except Exception:
+        pass
 
 
 app = FastAPI(
@@ -31,16 +66,20 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+# CORS — restrict origins based on environment
+if settings.environment == "production":
+    cors_origins = ["https://telegram.waiwai.is"]
+else:
+    cors_origins = [
         "http://localhost:3000",
         "http://localhost:3010",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3010",
-        "https://telegram.waiwai.is",
-    ],
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,4 +91,16 @@ app.include_router(api_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health_check():
+    """Health check that verifies database and Redis connectivity."""
+    import redis as redis_lib
+
+    # Check database
+    async with engine.connect() as conn:
+        await conn.execute(select(1))
+
+    # Check Redis
+    r = redis_lib.from_url(settings.redis_url)
+    r.ping()
+    r.close()
+
     return {"status": "healthy"}

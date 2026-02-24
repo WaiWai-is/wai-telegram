@@ -2,7 +2,7 @@ import logging
 import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
@@ -17,44 +17,56 @@ from app.schemas.telegram import (
     VerifyCodeRequest,
     VerifyCodeResponse,
 )
+from app.core.limiter import limiter
 from app.services import telegram_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Auth clients with TTL tracking: key -> (client, created_timestamp)
+MAX_AUTH_CLIENTS = 50
 _auth_clients: dict[str, tuple[TelegramClient, float]] = {}
 _AUTH_CLIENT_TTL = 300  # 5 minutes
 
 
-def _cleanup_expired_auth_clients() -> None:
-    """Remove auth clients older than TTL."""
+async def _cleanup_expired_auth_clients() -> None:
+    """Remove auth clients older than TTL, with proper async disconnect."""
     now = time.time()
     expired = [k for k, (_, ts) in _auth_clients.items() if now - ts > _AUTH_CLIENT_TTL]
     for key in expired:
         client, _ = _auth_clients.pop(key)
         logger.info(f"Cleaned up expired auth client: {key}")
-        # Disconnect in background — best effort
         try:
-            import asyncio
-
-            asyncio.get_running_loop().create_task(client.disconnect())
+            await client.disconnect()
         except Exception:
             pass
 
+    # Enforce max limit — evict oldest if over cap
+    if len(_auth_clients) > MAX_AUTH_CLIENTS:
+        sorted_keys = sorted(_auth_clients, key=lambda k: _auth_clients[k][1])
+        for key in sorted_keys[:len(_auth_clients) - MAX_AUTH_CLIENTS]:
+            client, _ = _auth_clients.pop(key)
+            logger.info(f"Evicted auth client (over limit): {key}")
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
 
 @router.post("/request-code", response_model=RequestCodeResponse)
+@limiter.limit("3/minute")
 async def request_code(
-    request: RequestCodeRequest,
+    http_request: Request,
+    body: RequestCodeRequest,
     user: CurrentUser,
 ) -> RequestCodeResponse:
     """Request verification code for Telegram authentication."""
-    _cleanup_expired_auth_clients()
+    await _cleanup_expired_auth_clients()
     try:
         client, phone_code_hash, code_type = await telegram_client.request_code(
-            request.phone_number
+            body.phone_number
         )
-        _auth_clients[f"{user.id}:{request.phone_number}"] = (client, time.time())
+        _auth_clients[f"{user.id}:{body.phone_number}"] = (client, time.time())
         return RequestCodeResponse(
             phone_code_hash=phone_code_hash,
             code_type=code_type,
@@ -72,7 +84,7 @@ async def verify_code(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> VerifyCodeResponse:
     """Verify code and complete Telegram authentication."""
-    _cleanup_expired_auth_clients()
+    await _cleanup_expired_auth_clients()
     client_key = f"{user.id}:{request.phone_number}"
     entry = _auth_clients.get(client_key)
 

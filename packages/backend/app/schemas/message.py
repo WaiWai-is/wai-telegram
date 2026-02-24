@@ -22,5 +22,5 @@ class MessageResponse(BaseModel):
 
 class MessageListResponse(BaseModel):
     messages: list[MessageResponse]
-    total: int
+    total: int | None = None
     has_more: bool

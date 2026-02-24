@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import decode_token, verify_api_key
+from app.core.security import compute_api_key_prefix, decode_token, verify_api_key
 from app.models.user import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
@@ -38,12 +38,14 @@ async def get_current_user(
 
     # Try API key
     if api_key and api_key.credentials.startswith("wai_"):
-        # Find user by checking API key hash
-        result = await db.execute(select(User).where(User.api_key_hash.isnot(None)))
-        users = result.scalars().all()
-        for user in users:
-            if user.api_key_hash and verify_api_key(api_key.credentials, user.api_key_hash):
-                return user
+        # O(1) lookup via indexed prefix, then single bcrypt verify
+        prefix = compute_api_key_prefix(api_key.credentials)
+        result = await db.execute(
+            select(User).where(User.api_key_prefix == prefix)
+        )
+        user = result.scalar_one_or_none()
+        if user and user.api_key_hash and verify_api_key(api_key.credentials, user.api_key_hash):
+            return user
 
     raise credentials_exception
 

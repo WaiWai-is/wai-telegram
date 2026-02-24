@@ -108,16 +108,10 @@ def sync_chat_task(
         return {"status": "skipped", "reason": "sync_in_progress"}
 
     try:
-        # Run async sync in event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                _run_sync(user_uuid, chat_uuid, limit, job_uuid)
-            )
-            return result
-        finally:
-            loop.close()
+        result = asyncio.run(
+            _run_sync(user_uuid, chat_uuid, limit, job_uuid)
+        )
+        return result
     except FloodWaitError as e:
         # Use Telegram's actual wait time + buffer for retry
         countdown = int(e.seconds * settings.flood_wait_multiplier)

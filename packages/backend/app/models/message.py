@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -38,6 +38,7 @@ class TelegramMessage(Base):
     chat: Mapped["TelegramChat"] = relationship("TelegramChat", back_populates="messages")
 
     __table_args__ = (
+        UniqueConstraint("chat_id", "telegram_message_id", name="uq_telegram_messages_chat_msg"),
         Index("ix_telegram_messages_chat_sent", "chat_id", "sent_at"),
         Index(
             "ix_telegram_messages_embedding_hnsw",

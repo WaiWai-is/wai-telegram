@@ -1,12 +1,13 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
 from app.schemas.chat import ChatListResponse, ChatResponse
@@ -50,7 +51,9 @@ async def list_chats(
 
 
 @router.post("/refresh", response_model=ChatListResponse)
+@limiter.limit("10/minute")
 async def refresh_chats(
+    request: Request,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ChatListResponse:
@@ -116,13 +119,6 @@ async def get_chat_messages(
     if has_more:
         messages = messages[:limit]
 
-    # Get total count
-    total = (
-        await db.execute(
-            select(func.count()).where(TelegramMessage.chat_id == chat_id)
-        )
-    ).scalar()
-
     return MessageListResponse(
         messages=[
             MessageResponse(
@@ -139,6 +135,6 @@ async def get_chat_messages(
             )
             for msg in messages
         ],
-        total=total,
+        total=None,
         has_more=has_more,
     )

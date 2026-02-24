@@ -3,7 +3,7 @@ import logging
 from datetime import date, timedelta
 from uuid import UUID
 
-from celery import shared_task
+from celery import group, shared_task
 from sqlalchemy import select
 
 from app.core.database import get_db_context
@@ -15,55 +15,39 @@ logger = logging.getLogger(__name__)
 
 @shared_task
 def generate_all_digests():
-    """Generate daily digests for all users."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        result = loop.run_until_complete(_generate_all_digests())
-        return result
-    finally:
-        loop.close()
+    """Dispatch per-user digest tasks in parallel using Celery group."""
+    result = asyncio.run(_get_user_ids())
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
 
+    if not result:
+        return {"date": yesterday, "users_processed": 0, "dispatched": 0}
 
-async def _generate_all_digests() -> dict:
-    """Generate digests for all users."""
-    yesterday = date.today() - timedelta(days=1)
-    generated = 0
-    errors = 0
-
-    async with get_db_context() as db:
-        result = await db.execute(select(User))
-        users = result.scalars().all()
-
-        for user in users:
-            try:
-                await generate_digest(db, user.id, yesterday)
-                generated += 1
-                logger.info(f"Generated digest for user {user.id}")
-            except Exception as e:
-                errors += 1
-                logger.error(f"Failed to generate digest for user {user.id}: {e}")
+    # Dispatch all user digests in parallel
+    job = group(
+        generate_user_digest.s(str(uid), yesterday) for uid in result
+    )
+    job.apply_async()
 
     return {
-        "date": yesterday.isoformat(),
-        "users_processed": len(users),
-        "generated": generated,
-        "errors": errors,
+        "date": yesterday,
+        "users_processed": len(result),
+        "dispatched": len(result),
     }
+
+
+async def _get_user_ids() -> list[UUID]:
+    """Get all user IDs for digest generation."""
+    async with get_db_context() as db:
+        result = await db.execute(select(User.id))
+        return list(result.scalars().all())
 
 
 @shared_task
 def generate_user_digest(user_id: str, digest_date: str | None = None):
     """Generate digest for a specific user."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        result = loop.run_until_complete(
-            _generate_user_digest(UUID(user_id), digest_date)
-        )
-        return result
-    finally:
-        loop.close()
+    return asyncio.run(
+        _generate_user_digest(UUID(user_id), digest_date)
+    )
 
 
 async def _generate_user_digest(user_id: UUID, digest_date: str | None) -> dict:

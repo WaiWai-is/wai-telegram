@@ -70,6 +70,23 @@ if ! command -v nginx &> /dev/null; then
     apt install -y nginx certbot python3-certbot-nginx
 fi
 
+# Create wai service user if not present
+if ! id wai &>/dev/null; then
+    echo "Creating wai service user..."
+    useradd --system --home-dir /home/wai --create-home --shell /bin/bash wai
+    su - wai -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+fi
+
+# Backup current deployment
+if [ -d /opt/wai-telegram/packages ]; then
+    rm -rf /opt/wai-telegram-backup
+    cp -a /opt/wai-telegram /opt/wai-telegram-backup
+    echo "Backup created at /opt/wai-telegram-backup"
+fi
+
+# Fix ownership
+chown -R wai:wai /opt/wai-telegram
+
 # Start PostgreSQL and Redis
 echo "Starting database services..."
 set -a && source .env.production && set +a
@@ -82,8 +99,8 @@ sleep 10
 # Run database migrations
 echo "Running database migrations..."
 cd packages/backend
-uv sync
-uv run alembic upgrade head
+su - wai -c 'cd /opt/wai-telegram/packages/backend && /home/wai/.local/bin/uv sync'
+su - wai -c 'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /home/wai/.local/bin/uv run alembic upgrade head'
 cd ../..
 
 # Build frontend
@@ -91,6 +108,7 @@ echo "Building frontend..."
 cd packages/frontend
 npm ci
 npm run build
+chown -R wai:wai /opt/wai-telegram/packages/frontend
 cd ../..
 
 # Install systemd services

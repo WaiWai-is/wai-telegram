@@ -14,6 +14,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     api_key_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    api_key_prefix: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

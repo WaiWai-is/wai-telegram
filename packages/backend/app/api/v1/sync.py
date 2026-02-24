@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.models.chat import TelegramChat
 from app.models.sync_job import SyncJob, SyncStatus
 from app.schemas.sync import SyncJobResponse, SyncProgressResponse
+from app.core.limiter import limiter
 from app.services.sync_service import create_sync_job
 from app.tasks.sync_tasks import sync_chat_task
 
@@ -17,7 +18,9 @@ router = APIRouter()
 
 
 @router.post("/chats/{chat_id}", response_model=SyncJobResponse)
+@limiter.limit("10/minute")
 async def sync_chat(
+    request: Request,
     chat_id: UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],

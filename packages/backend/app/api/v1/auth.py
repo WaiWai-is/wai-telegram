@@ -9,6 +9,7 @@ from app.core.auth import CurrentUser
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.security import (
+    compute_api_key_prefix,
     create_access_token,
     create_refresh_token,
     decode_token,
@@ -132,6 +133,7 @@ async def generate_user_api_key(
     """Generate a new API key for MCP authentication."""
     api_key = generate_api_key()
     user.api_key_hash = hash_api_key(api_key)
+    user.api_key_prefix = compute_api_key_prefix(api_key)
     await db.flush()
 
     return ApiKeyResponse(api_key=api_key)

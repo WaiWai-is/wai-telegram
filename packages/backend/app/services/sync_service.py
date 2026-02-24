@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon.errors import FloodWaitError
 from telethon.tl.types import (
@@ -95,36 +95,26 @@ async def _jittered_sleep(base: float, jitter: float) -> None:
 
 
 async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
-    """Sync user's chat list from Telegram."""
+    """Sync user's chat list from Telegram using upsert for atomicity."""
     client = await get_client(user_id, db)
     chats = []
     record_request()  # Track iter_dialogs API call
 
     async for dialog in client.iter_dialogs(limit=settings.sync_dialog_limit):
-        # Check if chat exists
-        result = await db.execute(
-            select(TelegramChat).where(
-                TelegramChat.user_id == user_id,
-                TelegramChat.telegram_chat_id == dialog.entity.id,
-            )
-        )
-        chat = result.scalar_one_or_none()
-
-        if chat:
-            # Update existing
-            chat.title = _get_chat_title(dialog)
-            chat.username = getattr(dialog.entity, "username", None)
-        else:
-            # Create new
-            chat = TelegramChat(
-                user_id=user_id,
-                telegram_chat_id=dialog.entity.id,
-                chat_type=_get_chat_type(dialog),
-                title=_get_chat_title(dialog),
-                username=getattr(dialog.entity, "username", None),
-            )
-            db.add(chat)
-
+        values = {
+            "user_id": user_id,
+            "telegram_chat_id": dialog.entity.id,
+            "chat_type": _get_chat_type(dialog),
+            "title": _get_chat_title(dialog),
+            "username": getattr(dialog.entity, "username", None),
+        }
+        stmt = pg_insert(TelegramChat).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_telegram_chats_user_chat",
+            set_={"title": stmt.excluded.title, "username": stmt.excluded.username},
+        ).returning(TelegramChat)
+        result = await db.execute(stmt)
+        chat = result.scalar_one()
         chats.append(chat)
 
     await db.flush()
@@ -157,14 +147,14 @@ async def sync_messages(
 
     client = await get_client(user_id, db)
     messages_synced = 0
-    batch = []
+    batch_values = []
     batch_count = 0
     last_id = chat.last_message_id
 
     try:
-        # Use offset_id for inclusive range (min_id is exclusive and can skip messages)
-        # offset_id=X returns messages with id < X, so we subtract 1 to include last_id
-        offset = (last_id - 1) if last_id else 0
+        # offset_id=X returns messages with id < X
+        # Use last_id directly (not last_id - 1) since we want id > last_id
+        offset = last_id if last_id else 0
 
         async for message in client.iter_messages(
             chat.telegram_chat_id,
@@ -179,42 +169,35 @@ async def sync_messages(
             if last_id and message.id <= last_id:
                 continue
 
-            msg = TelegramMessage(
-                chat_id=chat_id,
-                telegram_message_id=message.id,
-                text=message.text,
-                has_media=bool(message.media),
-                media_type=_get_media_type(message),
-                sender_id=message.sender_id,
-                sender_name=_get_sender_name(message),
-                is_outgoing=message.out,
-                sent_at=message.date,
-            )
-            batch.append(msg)
+            batch_values.append({
+                "chat_id": chat_id,
+                "telegram_message_id": message.id,
+                "text": message.text,
+                "has_media": bool(message.media),
+                "media_type": _get_media_type(message),
+                "sender_id": message.sender_id,
+                "sender_name": _get_sender_name(message),
+                "is_outgoing": message.out,
+                "sent_at": message.date,
+            })
             messages_synced += 1
 
             # Update last_id
             if not last_id or message.id > last_id:
                 last_id = message.id
 
-            # Batch insert with IntegrityError handling for race conditions
-            if len(batch) >= settings.sync_batch_size:
-                try:
-                    db.add_all(batch)
-                    await db.flush()
-                except IntegrityError as e:
-                    # Handle race condition: message was inserted by another process
-                    await db.rollback()
-                    logger.warning(f"IntegrityError during batch insert, inserting one by one: {e}")
-                    for msg in batch:
-                        try:
-                            db.add(msg)
-                            await db.flush()
-                        except IntegrityError:
-                            await db.rollback()
-                            messages_synced -= 1  # Don't count duplicates
-                            logger.debug(f"Skipping duplicate message {msg.telegram_message_id}")
-                batch = []
+            # Batch upsert using on_conflict_do_nothing for idempotency
+            if len(batch_values) >= settings.sync_batch_size:
+                stmt = pg_insert(TelegramMessage).values(batch_values)
+                stmt = stmt.on_conflict_do_nothing(
+                    constraint="uq_telegram_messages_chat_msg"
+                )
+                result = await db.execute(stmt)
+                # Adjust count: only count rows actually inserted
+                skipped = len(batch_values) - result.rowcount
+                messages_synced -= skipped
+
+                batch_values = []
                 batch_count += 1
                 record_request()  # Track batch API call
 
@@ -234,26 +217,21 @@ async def sync_messages(
     except FloodWaitError as e:
         wait_time = int(e.seconds * settings.flood_wait_multiplier)
         logger.warning(f"FloodWait during sync: {wait_time}s (raw: {e.seconds}s)")
-        job.status = SyncStatus.FAILED
+        # Mark as PENDING for retry instead of FAILED
+        job.status = SyncStatus.PENDING
         job.error_message = f"Rate limited. Retry after {wait_time} seconds."
         await db.flush()
         raise
 
-    # Insert remaining batch with IntegrityError handling
-    if batch:
-        try:
-            db.add_all(batch)
-            await db.flush()
-        except IntegrityError as e:
-            await db.rollback()
-            logger.warning(f"IntegrityError in final batch, inserting one by one: {e}")
-            for msg in batch:
-                try:
-                    db.add(msg)
-                    await db.flush()
-                except IntegrityError:
-                    await db.rollback()
-                    messages_synced -= 1
+    # Insert remaining batch
+    if batch_values:
+        stmt = pg_insert(TelegramMessage).values(batch_values)
+        stmt = stmt.on_conflict_do_nothing(
+            constraint="uq_telegram_messages_chat_msg"
+        )
+        result = await db.execute(stmt)
+        skipped = len(batch_values) - result.rowcount
+        messages_synced -= skipped
 
     # Update chat and job
     chat.last_message_id = last_id

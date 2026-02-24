@@ -21,64 +21,87 @@ interface AuthState {
 
 export const useAuth = create<AuthState>()(
   persist(
-    (set, get) => ({
-      user: null,
-      accessToken: null,
-      refreshToken: null,
-      isLoading: true,
+    (set, get) => {
+      // Wire up token refresh callback so API client can update store
+      api.setTokenRefreshCallback((accessToken, refreshToken) => {
+        set({ accessToken, refreshToken })
+      })
 
-      login: async (email: string, password: string) => {
-        const tokens = await api.login(email, password)
-        api.setAccessToken(tokens.access_token)
-        const user = await api.getMe()
-        set({
-          user,
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-        })
-      },
-
-      register: async (email: string, password: string) => {
-        const tokens = await api.register(email, password)
-        api.setAccessToken(tokens.access_token)
-        const user = await api.getMe()
-        set({
-          user,
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-        })
-      },
-
-      logout: () => {
+      // Wire up auth failure callback to force logout
+      api.setAuthFailureCallback(() => {
         api.setAccessToken(null)
+        api.setRefreshToken(null)
         set({
           user: null,
           accessToken: null,
           refreshToken: null,
         })
-      },
+      })
 
-      checkAuth: async () => {
-        const { accessToken } = get()
-        if (!accessToken) {
-          set({ isLoading: false })
-          return
-        }
+      return {
+        user: null,
+        accessToken: null,
+        refreshToken: null,
+        isLoading: true,
 
-        try {
-          api.setAccessToken(accessToken)
+        login: async (email: string, password: string) => {
+          const tokens = await api.login(email, password)
+          api.setAccessToken(tokens.access_token)
+          api.setRefreshToken(tokens.refresh_token)
           const user = await api.getMe()
-          set({ user, isLoading: false })
-        } catch {
+          set({
+            user,
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+          })
+        },
+
+        register: async (email: string, password: string) => {
+          const tokens = await api.register(email, password)
+          api.setAccessToken(tokens.access_token)
+          api.setRefreshToken(tokens.refresh_token)
+          const user = await api.getMe()
+          set({
+            user,
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+          })
+        },
+
+        logout: () => {
+          api.setAccessToken(null)
+          api.setRefreshToken(null)
           set({
             user: null,
             accessToken: null,
             refreshToken: null,
-            isLoading: false,
           })
-        }
-      },
-    }),
+        },
+
+        checkAuth: async () => {
+          const { accessToken, refreshToken } = get()
+          if (!accessToken) {
+            set({ isLoading: false })
+            return
+          }
+
+          api.setAccessToken(accessToken)
+          api.setRefreshToken(refreshToken)
+
+          try {
+            const user = await api.getMe()
+            set({ user, isLoading: false })
+          } catch {
+            set({
+              user: null,
+              accessToken: null,
+              refreshToken: null,
+              isLoading: false,
+            })
+          }
+        },
+      }
+    },
     {
       name: 'auth-storage',
       partialize: (state) => ({

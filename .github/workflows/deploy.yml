@@ -21,6 +21,28 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
 
+      - name: Create service user and backup
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          # Create wai user if it doesn't exist
+          if ! id wai &>/dev/null; then
+            useradd --system --home-dir /home/wai --create-home --shell /bin/bash wai
+            # Install uv for wai user
+            su - wai -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+          fi
+
+          # Backup current deployment for rollback
+          if [ -d /opt/wai-telegram/packages ]; then
+            rm -rf /opt/wai-telegram-backup
+            cp -a /opt/wai-telegram /opt/wai-telegram-backup
+            echo "Backup created at /opt/wai-telegram-backup"
+          fi
+          EOF
+
       - name: Sync code to server
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
@@ -39,6 +61,21 @@ jobs:
             --exclude '.env.production' \
             --exclude '.env' \
             ./ ${USER}@${HOST}:${DEPLOY_DIR}/
+
+      - name: Fix ownership
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          chown -R wai:wai /opt/wai-telegram
+          # Ensure .env.production is readable by wai user (file is excluded from rsync)
+          if [ -f /opt/wai-telegram/.env.production ]; then
+            chown root:wai /opt/wai-telegram/.env.production
+            chmod 640 /opt/wai-telegram/.env.production
+          fi
+          EOF
 
       - name: Start Docker services
         env:
@@ -78,9 +115,9 @@ jobs:
         run: |
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
-          export PATH="/root/.local/bin:$PATH"
+          export PATH="/home/wai/.local/bin:$PATH"
           cd /opt/wai-telegram/packages/backend
-          uv sync
+          su - wai -c 'cd /opt/wai-telegram/packages/backend && /home/wai/.local/bin/uv sync'
           EOF
 
       - name: Run database migrations
@@ -90,10 +127,9 @@ jobs:
         run: |
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
-          export PATH="/root/.local/bin:$PATH"
           cd /opt/wai-telegram/packages/backend
           set -a && source /opt/wai-telegram/.env.production && set +a
-          uv run alembic upgrade head
+          su - wai -c 'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /home/wai/.local/bin/uv run alembic upgrade head'
           EOF
 
       - name: Build frontend
@@ -106,6 +142,7 @@ jobs:
           cd /opt/wai-telegram/packages/frontend
           npm ci
           npm run build
+          chown -R wai:wai /opt/wai-telegram/packages/frontend
           EOF
 
       - name: Deploy systemd services

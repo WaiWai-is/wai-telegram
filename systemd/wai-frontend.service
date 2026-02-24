@@ -4,8 +4,8 @@ After=network.target wai-backend.service
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=wai
+Group=wai
 WorkingDirectory=/opt/wai-telegram/packages/frontend
 Environment="PATH=/usr/local/bin:/usr/bin"
 Environment="NODE_ENV=production"
@@ -27,8 +27,11 @@ SyslogIdentifier=wai-frontend
 # Security
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=false
 ReadWritePaths=/opt/wai-telegram /tmp
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
 
 [Install]
 WantedBy=multi-user.target

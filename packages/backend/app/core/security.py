@@ -1,3 +1,4 @@
+import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -43,6 +44,11 @@ def hash_api_key(api_key: str) -> str:
 
 def verify_api_key(api_key: str, hashed_key: str) -> bool:
     return pwd_context.verify(api_key, hashed_key)
+
+
+def compute_api_key_prefix(api_key: str) -> str:
+    """Compute a SHA256 prefix for O(1) API key lookup."""
+    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
 
 
 def generate_api_key() -> str:

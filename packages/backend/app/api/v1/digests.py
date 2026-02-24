@@ -1,11 +1,12 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.schemas.digest import DigestGenerateRequest, DigestResponse
 from app.services.digest_service import generate_digest, get_digest, get_digests
 
@@ -40,12 +41,14 @@ async def get_digest_by_date(
 
 
 @router.post("/generate", response_model=DigestResponse)
+@limiter.limit("5/hour")
 async def generate_daily_digest(
+    request: Request,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    request: DigestGenerateRequest | None = None,
+    body: DigestGenerateRequest | None = None,
 ) -> DigestResponse:
     """Generate digest for a specific date (defaults to yesterday)."""
-    digest_date = request.date if request else None
+    digest_date = body.date if body else None
     digest = await generate_digest(db, user.id, digest_date)
     return DigestResponse.model_validate(digest)

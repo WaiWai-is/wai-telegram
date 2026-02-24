@@ -43,6 +43,14 @@ async def list_tools() -> list[Tool]:
                         "description": "Maximum results to return (default: 20)",
                         "default": 20,
                     },
+                    "date_from": {
+                        "type": "string",
+                        "description": "Optional: Only return messages sent after this date (ISO 8601, e.g. 2025-01-15)",
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "Optional: Only return messages sent before this date (ISO 8601, e.g. 2025-02-15)",
+                    },
                 },
                 "required": ["query"],
             },
@@ -121,10 +129,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     try:
         if name == "search_messages":
+            date_from = datetime.fromisoformat(arguments["date_from"]) if arguments.get("date_from") else None
+            date_to = datetime.fromisoformat(arguments["date_to"]) if arguments.get("date_to") else None
             result = await api.search_messages(
                 query=arguments["query"],
                 chat_ids=[arguments["chat_id"]] if arguments.get("chat_id") else None,
                 limit=arguments.get("limit", 20),
+                date_from=date_from,
+                date_to=date_to,
             )
             return format_search_results(result)
 
