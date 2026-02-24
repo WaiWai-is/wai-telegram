@@ -152,21 +152,13 @@ async def sync_messages(
     last_id = chat.last_message_id
 
     try:
-        # offset_id=X returns messages with id < X
-        # Use last_id directly (not last_id - 1) since we want id > last_id
-        offset = last_id if last_id else 0
-
         async for message in client.iter_messages(
             chat.telegram_chat_id,
-            offset_id=offset,
+            min_id=last_id or 0,
             limit=limit,
             wait_time=0.5,
         ):
             if not message.text and not message.media:
-                continue
-
-            # Skip if message already synced (using last_message_id as optimization)
-            if last_id and message.id <= last_id:
                 continue
 
             batch_values.append({
