@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 import re
@@ -28,6 +29,29 @@ def _parse_retry_after_seconds(error_message: str | None) -> int | None:
     return int(match.group(1))
 
 
+_STALE_JOB_THRESHOLD = timedelta(minutes=15)
+
+
+async def _expire_stale_jobs(db: AsyncSession, user_id: UUID, chat_id: UUID | None) -> None:
+    """Mark IN_PROGRESS jobs as FAILED if no progress for 15 minutes."""
+    cutoff = datetime.now(UTC) - _STALE_JOB_THRESHOLD
+    query = select(SyncJob).where(
+        SyncJob.user_id == user_id,
+        SyncJob.status == SyncStatus.IN_PROGRESS,
+        SyncJob.updated_at < cutoff,
+    )
+    if chat_id is not None:
+        query = query.where(SyncJob.chat_id == chat_id)
+    else:
+        query = query.where(SyncJob.chat_id.is_(None))
+    stale_jobs = (await db.execute(query)).scalars().all()
+    for job in stale_jobs:
+        job.status = SyncStatus.FAILED
+        job.error_message = "Automatically expired: no progress for 15 minutes"
+    if stale_jobs:
+        await db.flush()
+
+
 @router.post("/all", response_model=SyncJobResponse)
 @limiter.limit("3/minute")
 async def sync_all_chats(
@@ -37,6 +61,9 @@ async def sync_all_chats(
     limit_per_chat: int = Query(default=500, ge=0, le=10000),
 ) -> SyncJobResponse:
     """Start bulk sync of all chats. limit_per_chat=0 means unlimited."""
+    # Expire stale jobs before checking for conflicts
+    await _expire_stale_jobs(db, user.id, chat_id=None)
+
     # Check if bulk sync already in progress
     result = await db.execute(
         select(SyncJob).where(
@@ -76,6 +103,9 @@ async def sync_chat(
     chat = result.scalar_one_or_none()
     if not chat:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+
+    # Expire stale jobs before checking for conflicts
+    await _expire_stale_jobs(db, user.id, chat_id)
 
     # Check for existing in-progress sync
     result = await db.execute(

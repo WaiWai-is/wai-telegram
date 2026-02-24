@@ -160,10 +160,11 @@ async def sync_messages(
 
     messages_seen = 0
 
-    # First sync: newest-first (default Telethon order) to get recent messages.
-    # Incremental sync: oldest-first from last known ID to catch up chronologically.
-    if last_id:
-        iter_kwargs = {"min_id": last_id, "reverse": True, "limit": limit, "wait_time": 0.5}
+    # When limit is set ("Sync Latest N"): always fetch newest-first regardless
+    # of last_message_id — handles stale IDs from old syncs, dedup via DB constraint.
+    # When limit is None ("Sync All") and last_id exists: incremental catch-up.
+    if last_id and limit is None:
+        iter_kwargs = {"min_id": last_id, "reverse": True, "wait_time": 0.5}
     else:
         iter_kwargs = {"limit": limit, "wait_time": 0.5}
 
