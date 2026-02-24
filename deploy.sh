@@ -106,6 +106,7 @@ cd ../..
 # Build frontend
 echo "Building frontend..."
 cd packages/frontend
+set -a && source /opt/wai-telegram/.env.production && set +a
 npm ci
 npm run build
 chown -R wai:wai /opt/wai-telegram/packages/frontend
