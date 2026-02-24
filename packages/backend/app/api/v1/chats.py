@@ -22,7 +22,7 @@ async def list_chats(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     chat_type: ChatType | None = None,
-    limit: int = Query(default=100, le=500),
+    limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> ChatListResponse:
     """List user's synced chats."""
@@ -89,7 +89,7 @@ async def get_chat_messages(
     chat_id: UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    limit: int = Query(default=50, le=200),
+    limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> MessageListResponse:
     """Get messages for a chat."""

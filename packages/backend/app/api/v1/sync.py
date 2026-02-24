@@ -1,7 +1,8 @@
 from typing import Annotated
 from uuid import UUID
+import re
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,16 @@ from app.services.sync_service import create_sync_job
 from app.tasks.sync_tasks import sync_chat_task
 
 router = APIRouter()
+_RETRY_SECONDS_RE = re.compile(r"retry_after_seconds=(\d+)")
+
+
+def _parse_retry_after_seconds(error_message: str | None) -> int | None:
+    if not error_message:
+        return None
+    match = _RETRY_SECONDS_RE.search(error_message)
+    if not match:
+        return None
+    return int(match.group(1))
 
 
 @router.post("/chats/{chat_id}", response_model=SyncJobResponse)
@@ -93,6 +104,8 @@ async def get_sync_progress(
         messages_processed=job.messages_processed,
         current_chat=chat_title,
         progress_percent=None,  # Would need total count for percentage
+        error_message=job.error_message,
+        retry_after_seconds=_parse_retry_after_seconds(job.error_message),
     )
 
 
@@ -100,7 +113,7 @@ async def get_sync_progress(
 async def list_sync_jobs(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=100),
 ) -> list[SyncJobResponse]:
     """List recent sync jobs."""
     result = await db.execute(

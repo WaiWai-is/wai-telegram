@@ -9,7 +9,7 @@ class SearchRequest(BaseModel):
     chat_ids: list[UUID] | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
-    limit: int = Field(default=20, le=100)
+    limit: int = Field(default=20, ge=1, le=100)
 
 
 class SearchResultItem(BaseModel):

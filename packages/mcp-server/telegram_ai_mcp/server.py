@@ -11,6 +11,9 @@ from telegram_ai_mcp.client import TelegramAIClient
 # Initialize MCP server
 server = Server("telegram-ai-mcp")
 client: TelegramAIClient | None = None
+MAX_LIMIT = 100
+MAX_LOOKBACK_HOURS = 24 * 30
+MAX_LOOKBACK_DAYS = 180
 
 
 def get_client() -> TelegramAIClient:
@@ -18,6 +21,66 @@ def get_client() -> TelegramAIClient:
     if client is None:
         client = TelegramAIClient()
     return client
+
+
+def _error(message: str) -> list[TextContent]:
+    return [TextContent(type="text", text=f"Error: {message}")]
+
+
+def _as_dict(arguments: dict[str, Any] | None) -> dict[str, Any]:
+    return arguments or {}
+
+
+def _require_str(arguments: dict[str, Any], key: str) -> str:
+    value = arguments.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f'"{key}" must be a non-empty string')
+    return value.strip()
+
+
+def _optional_int(
+    arguments: dict[str, Any],
+    key: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = arguments.get(key, default)
+    if not isinstance(raw, int):
+        raise ValueError(f'"{key}" must be an integer')
+    return max(minimum, min(maximum, raw))
+
+
+def _optional_iso_datetime(arguments: dict[str, Any], key: str) -> datetime | None:
+    value = arguments.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f'"{key}" must be an ISO 8601 datetime string')
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError as e:
+        raise ValueError(f'"{key}" must be an ISO 8601 datetime string') from e
+
+
+def _optional_iso_date(arguments: dict[str, Any], key: str) -> date | None:
+    value = arguments.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f'"{key}" must be a YYYY-MM-DD date string')
+    try:
+        return date.fromisoformat(value)
+    except ValueError as e:
+        raise ValueError(f'"{key}" must be a YYYY-MM-DD date string') from e
+
+
+def _format_date(value: Any) -> str:
+    if isinstance(value, str):
+        return value[:10]
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    return "unknown"
 
 
 @server.list_tools()
@@ -126,52 +189,79 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle tool calls."""
     api = get_client()
+    args = _as_dict(arguments)
 
     try:
         if name == "search_messages":
-            date_from = datetime.fromisoformat(arguments["date_from"]) if arguments.get("date_from") else None
-            date_to = datetime.fromisoformat(arguments["date_to"]) if arguments.get("date_to") else None
+            query = _require_str(args, "query")
+            limit = _optional_int(args, "limit", default=20, minimum=1, maximum=MAX_LIMIT)
+            date_from = _optional_iso_datetime(args, "date_from")
+            date_to = _optional_iso_datetime(args, "date_to")
+            chat_id = args.get("chat_id")
+            if chat_id is not None and not isinstance(chat_id, str):
+                raise ValueError('"chat_id" must be a string UUID')
             result = await api.search_messages(
-                query=arguments["query"],
-                chat_ids=[arguments["chat_id"]] if arguments.get("chat_id") else None,
-                limit=arguments.get("limit", 20),
+                query=query,
+                chat_ids=[chat_id] if chat_id else None,
+                limit=limit,
                 date_from=date_from,
                 date_to=date_to,
             )
             return format_search_results(result)
 
         elif name == "list_chats":
+            chat_type = args.get("chat_type")
+            if chat_type is not None and not isinstance(chat_type, str):
+                raise ValueError('"chat_type" must be a string')
             result = await api.list_chats(
-                chat_type=arguments.get("chat_type"),
+                chat_type=chat_type,
             )
             return format_chat_list(result)
 
         elif name == "get_recent_messages":
+            chat_id = args.get("chat_id")
+            if chat_id is not None and not isinstance(chat_id, str):
+                raise ValueError('"chat_id" must be a string UUID')
+            hours = _optional_int(
+                args,
+                "hours",
+                default=24,
+                minimum=1,
+                maximum=MAX_LOOKBACK_HOURS,
+            )
             result = await api.get_recent_messages(
-                chat_id=arguments.get("chat_id"),
-                hours=arguments.get("hours", 24),
+                chat_id=chat_id,
+                hours=hours,
             )
             return format_messages(result)
 
         elif name == "get_daily_digest":
-            digest_date = None
-            if arguments.get("date"):
-                digest_date = date.fromisoformat(arguments["date"])
+            digest_date = _optional_iso_date(args, "date")
             result = await api.get_daily_digest(digest_date)
             return format_digest(result)
 
         elif name == "get_chat_summary":
+            chat_id = _require_str(args, "chat_id")
+            days = _optional_int(
+                args,
+                "days",
+                default=7,
+                minimum=1,
+                maximum=MAX_LOOKBACK_DAYS,
+            )
             result = await api.get_chat_summary(
-                chat_id=arguments["chat_id"],
-                days=arguments.get("days", 7),
+                chat_id=chat_id,
+                days=days,
             )
             return format_chat_summary(result)
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
+    except ValueError as e:
+        return _error(str(e))
     except Exception as e:
-        return [TextContent(type="text", text=f"Error: {str(e)}")]
+        return _error(str(e))
 
 
 def format_search_results(result: dict) -> list[TextContent]:
@@ -179,14 +269,18 @@ def format_search_results(result: dict) -> list[TextContent]:
     if not result.get("results"):
         return [TextContent(type="text", text="No messages found matching your query.")]
 
-    lines = [f"Found {result['total']} messages for query: \"{result['query']}\"\n"]
-    for r in result["results"]:
-        sender = r.get("sender_name", "You" if r["is_outgoing"] else "Unknown")
+    total = result.get("total", 0)
+    query = result.get("query", "")
+    lines = [f"Found {total} messages for query: \"{query}\"\n"]
+    for r in result.get("results", []):
+        sender = r.get("sender_name") or ("You" if r.get("is_outgoing") else "Unknown")
         text = (r.get("text") or "")[:200]
         similarity = r.get("similarity", 0) * 100
+        sent_at = _format_date(r.get("sent_at"))
+        chat_title = r.get("chat_title") or "Unknown"
         lines.append(
-            f"[{r['chat_title']}] {sender}: {text}\n"
-            f"  - Sent: {r['sent_at'][:10]} | Relevance: {similarity:.0f}%\n"
+            f"[{chat_title}] {sender}: {text}\n"
+            f"  - Sent: {sent_at} | Relevance: {similarity:.0f}%\n"
         )
     return [TextContent(type="text", text="\n".join(lines))]
 
@@ -196,12 +290,15 @@ def format_chat_list(result: dict) -> list[TextContent]:
     if not result.get("chats"):
         return [TextContent(type="text", text="No chats synced yet.")]
 
-    lines = [f"Your Telegram Chats ({result['total']} total):\n"]
-    for chat in result["chats"]:
+    lines = [f"Your Telegram Chats ({result.get('total', 0)} total):\n"]
+    for chat in result.get("chats", []):
         synced = chat.get("total_messages_synced", 0)
+        title = chat.get("title", "Unknown")
+        chat_type = chat.get("chat_type", "unknown")
+        chat_id = chat.get("id", "unknown")
         lines.append(
-            f"• {chat['title']} ({chat['chat_type']})\n"
-            f"  ID: {chat['id']} | Messages: {synced}\n"
+            f"• {title} ({chat_type})\n"
+            f"  ID: {chat_id} | Messages: {synced}\n"
         )
     return [TextContent(type="text", text="\n".join(lines))]
 
@@ -222,9 +319,9 @@ def format_messages(messages: list) -> list[TextContent]:
 def format_digest(result: dict) -> list[TextContent]:
     """Format digest for display."""
     lines = [
-        f"Daily Digest for {result['digest_date']}\n",
+        f"Daily Digest for {result.get('digest_date', 'unknown')}\n",
         "=" * 40 + "\n",
-        result["content"],
+        result.get("content", "No digest content available."),
         "\n" + "=" * 40,
         f"\nStats: {result.get('summary_stats', {})}",
     ]
@@ -236,8 +333,8 @@ def format_chat_summary(result: dict) -> list[TextContent]:
     chat = result.get("chat", {})
     lines = [
         f"Chat Summary: {chat.get('title', 'Unknown')}\n",
-        f"Period: Last {result['period_days']} days\n",
-        f"Messages: {result['message_count']}\n",
+        f"Period: Last {result.get('period_days', 'unknown')} days\n",
+        f"Messages: {result.get('message_count', 0)}\n",
         "\nRecent messages:\n",
     ]
     for msg in result.get("messages", [])[:10]:

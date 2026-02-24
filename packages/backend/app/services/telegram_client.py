@@ -113,7 +113,11 @@ async def request_code(phone_number: str) -> tuple[TelegramClient, str, str]:
     except FloodWaitError as e:
         wait_time = int(e.seconds * settings.flood_wait_multiplier)
         logger.warning(f"FloodWait: need to wait {wait_time}s for {phone_number}")
+        await client.disconnect()
         raise ValueError(f"Too many attempts. Please wait {wait_time} seconds.")
+    except Exception:
+        await client.disconnect()
+        raise
 
 
 async def verify_code(
@@ -148,6 +152,9 @@ async def save_session(
     telegram_user_id: int,
 ) -> TelegramSession:
     """Save encrypted Telegram session to database."""
+    # Ensure stale in-memory client for this user is not reused.
+    await disconnect_client(user_id)
+
     # Deactivate any existing sessions for this user
     result = await db.execute(
         select(TelegramSession).where(

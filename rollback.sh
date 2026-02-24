@@ -16,6 +16,7 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 SERVER="root@178.62.255.184"
 DEPLOY_DIR="/opt/wai-telegram"
 BACKUP_DIR="/opt/wai-telegram-backup"
+BACKUP_ROOT="/opt/wai-telegram-backups"
 DOMAIN="telegram.waiwai.is"
 
 log "Starting rollback on ${SERVER}..."
@@ -25,16 +26,25 @@ set -e
 
 DEPLOY_DIR="/opt/wai-telegram"
 BACKUP_DIR="/opt/wai-telegram-backup"
+BACKUP_ROOT="/opt/wai-telegram-backups"
+
+if [ -L "$BACKUP_DIR" ]; then
+    BACKUP_DIR=$(readlink -f "$BACKUP_DIR")
+fi
 
 if [ ! -d "$BACKUP_DIR" ]; then
-    echo "ERROR: No backup found at $BACKUP_DIR"
+    BACKUP_DIR=$(ls -1dt "${BACKUP_ROOT}"/* 2>/dev/null | head -n 1 || true)
+fi
+
+if [ -z "$BACKUP_DIR" ] || [ ! -d "$BACKUP_DIR" ]; then
+    echo "ERROR: No backup found (checked /opt/wai-telegram-backup and ${BACKUP_ROOT})"
     exit 1
 fi
 
 echo "Stopping services..."
 systemctl stop wai-backend wai-celery wai-celery-beat wai-frontend || true
 
-echo "Restoring from backup..."
+echo "Restoring from backup: $BACKUP_DIR"
 # Preserve .env.production (not in backup)
 rm -rf "${DEPLOY_DIR}.failed"
 mv "$DEPLOY_DIR" "${DEPLOY_DIR}.failed"

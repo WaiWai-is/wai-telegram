@@ -29,6 +29,27 @@ _auth_clients: dict[str, tuple[TelegramClient, float]] = {}
 _AUTH_CLIENT_TTL = 300  # 5 minutes
 
 
+async def _disconnect_auth_client(client: TelegramClient) -> None:
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
+
+
+async def _replace_auth_client(client_key: str, client: TelegramClient) -> None:
+    existing = _auth_clients.get(client_key)
+    if existing:
+        await _disconnect_auth_client(existing[0])
+    _auth_clients[client_key] = (client, time.time())
+
+
+async def _pop_and_disconnect_auth_client(client_key: str) -> None:
+    entry = _auth_clients.pop(client_key, None)
+    if not entry:
+        return
+    await _disconnect_auth_client(entry[0])
+
+
 async def _cleanup_expired_auth_clients() -> None:
     """Remove auth clients older than TTL, with proper async disconnect."""
     now = time.time()
@@ -36,10 +57,7 @@ async def _cleanup_expired_auth_clients() -> None:
     for key in expired:
         client, _ = _auth_clients.pop(key)
         logger.info(f"Cleaned up expired auth client: {key}")
-        try:
-            await client.disconnect()
-        except Exception:
-            pass
+        await _disconnect_auth_client(client)
 
     # Enforce max limit — evict oldest if over cap
     if len(_auth_clients) > MAX_AUTH_CLIENTS:
@@ -47,10 +65,7 @@ async def _cleanup_expired_auth_clients() -> None:
         for key in sorted_keys[:len(_auth_clients) - MAX_AUTH_CLIENTS]:
             client, _ = _auth_clients.pop(key)
             logger.info(f"Evicted auth client (over limit): {key}")
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
+            await _disconnect_auth_client(client)
 
 
 @router.post("/request-code", response_model=RequestCodeResponse)
@@ -66,7 +81,7 @@ async def request_code(
         client, phone_code_hash, code_type = await telegram_client.request_code(
             body.phone_number
         )
-        _auth_clients[f"{user.id}:{body.phone_number}"] = (client, time.time())
+        await _replace_auth_client(f"{user.id}:{body.phone_number}", client)
         return RequestCodeResponse(
             phone_code_hash=phone_code_hash,
             code_type=code_type,
@@ -79,13 +94,13 @@ async def request_code(
 
 @router.post("/verify-code", response_model=VerifyCodeResponse)
 async def verify_code(
-    request: VerifyCodeRequest,
+    body: VerifyCodeRequest,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> VerifyCodeResponse:
     """Verify code and complete Telegram authentication."""
     await _cleanup_expired_auth_clients()
-    client_key = f"{user.id}:{request.phone_number}"
+    client_key = f"{user.id}:{body.phone_number}"
     entry = _auth_clients.get(client_key)
 
     if not entry:
@@ -98,23 +113,21 @@ async def verify_code(
     try:
         session_string, telegram_user_id = await telegram_client.verify_code(
             client,
-            request.phone_number,
-            request.phone_code_hash,
-            request.code,
-            request.password,
+            body.phone_number,
+            body.phone_code_hash,
+            body.code,
+            body.password,
         )
 
         # Save session
         await telegram_client.save_session(
             db,
             user.id,
-            request.phone_number,
+            body.phone_number,
             session_string,
             telegram_user_id,
         )
-
-        # Clean up temporary client
-        del _auth_clients[client_key]
+        await _pop_and_disconnect_auth_client(client_key)
 
         return VerifyCodeResponse(
             success=True,
@@ -123,6 +136,7 @@ async def verify_code(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
+        await _pop_and_disconnect_auth_client(client_key)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 

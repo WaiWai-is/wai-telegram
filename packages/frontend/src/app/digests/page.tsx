@@ -64,6 +64,12 @@ export default function DigestsPage() {
           </button>
         </div>
 
+        {generateMutation.isError && (
+          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg">
+            Failed to generate digest: {(generateMutation.error as Error).message}
+          </div>
+        )}
+
         {isLoading ? (
           <div className="flex justify-center py-8">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />

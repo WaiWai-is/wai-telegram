@@ -70,12 +70,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
-        """Ensure critical secrets are set in production."""
-        if self.environment == "production":
+        """Ensure critical secrets are set outside local development."""
+        if self.environment in {"staging", "production"}:
             if self.secret_key == "dev-secret-key-change-in-production":
-                raise ValueError("SECRET_KEY must be set in production")
+                raise ValueError("SECRET_KEY must be set in staging/production")
             if not self.encryption_key:
-                raise ValueError("ENCRYPTION_KEY must be set in production")
+                raise ValueError("ENCRYPTION_KEY must be set in staging/production")
             if not self.telegram_api_id or not self.telegram_api_hash:
                 raise ValueError("TELEGRAM_API_ID and TELEGRAM_API_HASH must be set")
         return self

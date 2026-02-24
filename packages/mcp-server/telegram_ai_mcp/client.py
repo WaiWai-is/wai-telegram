@@ -1,8 +1,15 @@
 import os
 from datetime import date, datetime
 from typing import Any
+import logging
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+MAX_LIMIT = 100
+MAX_LOOKBACK_HOURS = 24 * 30
+MAX_LOOKBACK_DAYS = 180
 
 
 class TelegramAIClient:
@@ -17,10 +24,13 @@ class TelegramAIClient:
             "TELEGRAM_AI_URL", "http://localhost:8000"
         )
         self.api_key = api_key or os.environ.get("TELEGRAM_AI_KEY", "")
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=60.0,
-            headers={"Authorization": f"Bearer {self.api_key}"},
+            headers=headers,
         )
 
     async def close(self):
@@ -32,9 +42,22 @@ class TelegramAIClient:
         path: str,
         **kwargs,
     ) -> dict[str, Any]:
-        response = await self._client.request(method, path, **kwargs)
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = await self._client.request(method, path, **kwargs)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            detail = e.response.text[:400] if e.response.text else "no response body"
+            raise RuntimeError(
+                f"Backend returned HTTP {e.response.status_code} for {method} {path}: {detail}"
+            ) from e
+        except httpx.RequestError as e:
+            logger.error("Backend request error on %s %s: %s", method, path, e)
+            raise RuntimeError(f"Backend request failed for {method} {path}: {e}") from e
+
+    @staticmethod
+    def _clamp(value: int, lower: int, upper: int) -> int:
+        return max(lower, min(upper, value))
 
     async def search_messages(
         self,
@@ -45,6 +68,7 @@ class TelegramAIClient:
         limit: int = 20,
     ) -> dict[str, Any]:
         """Semantic search across Telegram messages."""
+        limit = self._clamp(limit, 1, MAX_LIMIT)
         payload = {
             "query": query,
             "limit": limit,
@@ -93,6 +117,8 @@ class TelegramAIClient:
         # Use search with time filter
         from datetime import timedelta, UTC
 
+        hours = self._clamp(hours, 1, MAX_LOOKBACK_HOURS)
+        limit = self._clamp(limit, 1, MAX_LIMIT)
         date_from = datetime.now(UTC) - timedelta(hours=hours)
         result = await self.search_messages(
             query="*",  # Match all
@@ -112,8 +138,8 @@ class TelegramAIClient:
                 return await self._request(
                     "GET", f"/api/v1/digests/{digest_date.isoformat()}"
                 )
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404:
+            except RuntimeError as e:
+                if "HTTP 404" in str(e):
                     # Generate if not found
                     pass
                 else:
@@ -131,6 +157,7 @@ class TelegramAIClient:
         """Get summary of chat activity."""
         from datetime import timedelta, UTC
 
+        days = self._clamp(days, 1, MAX_LOOKBACK_DAYS)
         date_from = datetime.now(UTC) - timedelta(days=days)
 
         # Get messages for the period

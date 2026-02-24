@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat import TelegramChat
 from app.models.message import TelegramMessage
+from app.core.config import get_settings
 from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
 from app.services.embedding_service import generate_query_embedding
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 async def semantic_search(
@@ -24,9 +26,9 @@ async def semantic_search(
     if not query_embedding:
         return SearchResponse(results=[], query=request.query, total=0)
 
-    # Build the query with parameterized vector embedding
-    # Using $1::vector(1536) for proper pgvector type casting
-    sql = text("""
+    dimensions = settings.embedding_dimensions
+    # Build query with configured pgvector dimensions to avoid model-dimension drift.
+    sql = text(f"""
         SELECT
             m.id,
             m.chat_id,
@@ -36,7 +38,7 @@ async def semantic_search(
             m.sender_name,
             m.is_outgoing,
             m.sent_at,
-            1 - (m.embedding <=> cast(:embedding as vector(1536))) as similarity
+            1 - (m.embedding <=> cast(:embedding as vector({dimensions}))) as similarity
         FROM telegram_messages m
         JOIN telegram_chats c ON m.chat_id = c.id
         WHERE c.user_id = :user_id

@@ -19,6 +19,7 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 SERVER="root@178.62.255.184"
 DEPLOY_DIR="/opt/wai-telegram"
 DOMAIN="telegram.waiwai.is"
+BACKUP_ROOT="/opt/wai-telegram-backups"
 
 # Check if .env.production exists
 if [ ! -f ".env.production" ]; then
@@ -46,6 +47,7 @@ set -e
 
 cd /opt/wai-telegram
 export PATH="$HOME/.local/bin:$PATH"
+BACKUP_ROOT="/opt/wai-telegram-backups"
 
 # Install system dependencies if not present
 if ! command -v docker &> /dev/null; then
@@ -77,11 +79,16 @@ if ! id wai &>/dev/null; then
     su - wai -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
 fi
 
-# Backup current deployment
+# Backup current deployment (versioned and atomic)
 if [ -d /opt/wai-telegram/packages ]; then
-    rm -rf /opt/wai-telegram-backup
-    cp -a /opt/wai-telegram /opt/wai-telegram-backup
-    echo "Backup created at /opt/wai-telegram-backup"
+    mkdir -p "${BACKUP_ROOT}"
+    TS=$(date +%Y%m%d%H%M%S)
+    TMP_BACKUP="${BACKUP_ROOT}/${TS}.tmp"
+    FINAL_BACKUP="${BACKUP_ROOT}/${TS}"
+    cp -a /opt/wai-telegram "${TMP_BACKUP}"
+    mv "${TMP_BACKUP}" "${FINAL_BACKUP}"
+    ln -sfn "${FINAL_BACKUP}" /opt/wai-telegram-backup
+    echo "Backup created at ${FINAL_BACKUP}"
 fi
 
 # Fix ownership
@@ -107,6 +114,10 @@ cd ../..
 echo "Building frontend..."
 cd packages/frontend
 set -a && source /opt/wai-telegram/.env.production && set +a
+if [ -z "${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}" ]; then
+    echo "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is required for production builds"
+    exit 1
+fi
 npm ci
 npm run build
 chown -R wai:wai /opt/wai-telegram/packages/frontend
@@ -139,11 +150,18 @@ else
     echo "Nginx config test failed - SSL certificate may be needed"
 fi
 
+# Service and endpoint verification
+echo "Verifying service health..."
+systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend
+curl -sf --max-time 10 http://127.0.0.1:8000/health/live > /dev/null
+curl -sf --max-time 10 http://127.0.0.1:8000/health/ready > /dev/null
+curl -sf --max-time 10 https://telegram.waiwai.is/health/ready > /dev/null
+
 echo "Deployment complete!"
 REMOTE_SCRIPT
 
 log "Deployment finished!"
 echo ""
-echo "Verify: curl https://${DOMAIN}/health"
+echo "Verify: curl https://${DOMAIN}/health/ready"
 echo "Logs:   ssh ${SERVER} journalctl -u wai-backend -f"
 echo ""

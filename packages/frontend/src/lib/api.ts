@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? ''
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? '').trim()
 
 class ApiClient {
   private accessToken: string | null = null
@@ -23,6 +23,12 @@ class ApiClient {
     this.onAuthFailure = cb
   }
 
+  private getBaseUrl() {
+    if (API_URL) return API_URL
+    if (typeof window !== 'undefined') return window.location.origin
+    return 'http://localhost:3000'
+  }
+
   private async attemptTokenRefresh(): Promise<boolean> {
     if (!this.refreshToken) return false
 
@@ -31,7 +37,7 @@ class ApiClient {
 
     this.refreshPromise = (async () => {
       try {
-        const response = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+        const response = await fetch(new URL('/api/v1/auth/refresh', this.getBaseUrl()).toString(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refresh_token: this.refreshToken }),
@@ -59,7 +65,7 @@ class ApiClient {
     path: string,
     options: { body?: unknown; params?: Record<string, string> } = {}
   ): Promise<T> {
-    const url = new URL(`${API_URL}${path}`)
+    const url = new URL(path, this.getBaseUrl())
     if (options.params) {
       Object.entries(options.params).forEach(([key, value]) => {
         url.searchParams.append(key, value)
@@ -108,7 +114,7 @@ class ApiClient {
     formData.append('username', email)
     formData.append('password', password)
 
-    const response = await fetch(`${API_URL}/api/v1/auth/login`, {
+    const response = await fetch(new URL('/api/v1/auth/login', this.getBaseUrl()).toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: formData,
@@ -205,6 +211,10 @@ class ApiClient {
     return this.request<SyncJob>('POST', `/api/v1/sync/chats/${chatId}`)
   }
 
+  async getSyncJob(jobId: string) {
+    return this.request<SyncJobProgress>('GET', `/api/v1/sync/jobs/${jobId}`)
+  }
+
   // Search
   async search(query: string, chatIds?: string[], limit = 20) {
     return this.request<{ results: SearchResult[]; total: number }>(
@@ -267,8 +277,19 @@ export interface SearchResult {
 export interface SyncJob {
   id: string
   chat_id: string | null
-  status: 'pending' | 'in_progress' | 'completed' | 'failed'
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'
   messages_processed: number
+  error_message?: string | null
+}
+
+export interface SyncJobProgress {
+  job_id: string
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'
+  messages_processed: number
+  current_chat: string | null
+  progress_percent: number | null
+  error_message: string | null
+  retry_after_seconds: number | null
 }
 
 export interface Digest {

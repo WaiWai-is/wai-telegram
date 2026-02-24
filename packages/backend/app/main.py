@@ -89,18 +89,33 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 
 
-@app.get("/health")
-async def health_check():
-    """Health check that verifies database and Redis connectivity."""
+async def _check_dependencies() -> None:
+    """Validate dependencies required for handling requests."""
     import redis as redis_lib
 
-    # Check database
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
 
-    # Check Redis
     r = redis_lib.from_url(settings.redis_url)
     r.ping()
     r.close()
 
+
+@app.api_route("/health/live", methods=["GET", "HEAD"])
+async def liveness_check():
+    """Liveness probe: process is up."""
+    return {"status": "alive"}
+
+
+@app.api_route("/health/ready", methods=["GET", "HEAD"])
+async def readiness_check():
+    """Readiness probe: dependencies are reachable."""
+    await _check_dependencies()
+    return {"status": "ready"}
+
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health_check():
+    """Backward-compatible health endpoint."""
+    await _check_dependencies()
     return {"status": "healthy"}

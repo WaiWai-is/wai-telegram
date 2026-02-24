@@ -37,9 +37,14 @@ jobs:
 
           # Backup current deployment for rollback
           if [ -d /opt/wai-telegram/packages ]; then
-            rm -rf /opt/wai-telegram-backup
-            cp -a /opt/wai-telegram /opt/wai-telegram-backup
-            echo "Backup created at /opt/wai-telegram-backup"
+            mkdir -p /opt/wai-telegram-backups
+            TS=$(date +%Y%m%d%H%M%S)
+            TMP_BACKUP="/opt/wai-telegram-backups/${TS}.tmp"
+            FINAL_BACKUP="/opt/wai-telegram-backups/${TS}"
+            cp -a /opt/wai-telegram "${TMP_BACKUP}"
+            mv "${TMP_BACKUP}" "${FINAL_BACKUP}"
+            ln -sfn "${FINAL_BACKUP}" /opt/wai-telegram-backup
+            echo "Backup created at ${FINAL_BACKUP}"
           fi
           EOF
 
@@ -141,6 +146,10 @@ jobs:
           set -e
           cd /opt/wai-telegram/packages/frontend
           set -a && source /opt/wai-telegram/.env.production && set +a
+          if [ -z "${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}" ]; then
+            echo "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is required for production builds"
+            exit 1
+          fi
           npm ci
           npm run build
           chown -R wai:wai /opt/wai-telegram/packages/frontend
@@ -179,11 +188,27 @@ jobs:
           echo "All services restarted"
           EOF
 
+      - name: Verify service status
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend
+          docker ps --format '{{.Names}}' | grep -q '^wai-telegram-db$'
+          docker ps --format '{{.Names}}' | grep -q '^wai-telegram-redis$'
+          cd /opt/wai-telegram/packages/backend
+          /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app inspect ping --timeout=10 | grep -q pong
+          curl -sf --max-time 10 http://127.0.0.1:8000/health/live > /dev/null
+          curl -sf --max-time 10 http://127.0.0.1:8000/health/ready > /dev/null
+          EOF
+
       - name: Health check
         run: |
           for i in 1 2 3 4 5 6; do
             sleep 10
-            if curl -sf --max-time 10 https://telegram.waiwai.is/health; then
+            if curl -sf --max-time 10 https://telegram.waiwai.is/health/ready; then
               echo ""
               echo "Deployment successful!"
               exit 0

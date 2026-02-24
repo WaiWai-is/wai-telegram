@@ -7,7 +7,6 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from telethon.errors import FloodWaitError
 from telethon.tl.types import (
     Channel,
     Chat,
@@ -18,10 +17,10 @@ from telethon.tl.types import (
 )
 
 from app.core.config import get_settings
-from app.core.database import get_db_context
 from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
-from app.models.sync_job import SyncJob, SyncStatus
+from app.models.sync_job import SyncJob
+from app.services.embedding_service import embed_messages
 from app.services.rate_limiter import record_request
 from app.services.telegram_client import get_client
 
@@ -150,80 +149,83 @@ async def sync_messages(
     batch_values = []
     batch_count = 0
     last_id = chat.last_message_id
+    inserted_message_ids: list[UUID] = []
 
-    try:
-        async for message in client.iter_messages(
-            chat.telegram_chat_id,
-            min_id=last_id or 0,
-            limit=limit,
-            wait_time=0.5,
-        ):
-            if not message.text and not message.media:
-                continue
+    async for message in client.iter_messages(
+        chat.telegram_chat_id,
+        min_id=last_id or 0,
+        reverse=True,
+        limit=limit,
+        wait_time=0.5,
+    ):
+        if not message.text and not message.media:
+            continue
 
-            batch_values.append({
-                "chat_id": chat_id,
-                "telegram_message_id": message.id,
-                "text": message.text,
-                "has_media": bool(message.media),
-                "media_type": _get_media_type(message),
-                "sender_id": message.sender_id,
-                "sender_name": _get_sender_name(message),
-                "is_outgoing": message.out,
-                "sent_at": message.date,
-            })
-            messages_synced += 1
+        batch_values.append({
+            "chat_id": chat_id,
+            "telegram_message_id": message.id,
+            "text": message.text,
+            "has_media": bool(message.media),
+            "media_type": _get_media_type(message),
+            "sender_id": message.sender_id,
+            "sender_name": _get_sender_name(message),
+            "is_outgoing": message.out,
+            "sent_at": message.date,
+        })
+        messages_synced += 1
 
-            # Update last_id
-            if not last_id or message.id > last_id:
-                last_id = message.id
+        # Update last_id
+        if not last_id or message.id > last_id:
+            last_id = message.id
 
-            # Batch upsert using on_conflict_do_nothing for idempotency
-            if len(batch_values) >= settings.sync_batch_size:
-                stmt = pg_insert(TelegramMessage).values(batch_values)
-                stmt = stmt.on_conflict_do_nothing(
-                    constraint="uq_telegram_messages_chat_msg"
-                )
-                result = await db.execute(stmt)
-                # Adjust count: only count rows actually inserted
-                skipped = len(batch_values) - result.rowcount
-                messages_synced -= skipped
+        # Batch upsert using on_conflict_do_nothing for idempotency
+        if len(batch_values) >= settings.sync_batch_size:
+            stmt = pg_insert(TelegramMessage).values(batch_values)
+            stmt = stmt.on_conflict_do_nothing(
+                constraint="uq_telegram_messages_chat_msg"
+            ).returning(TelegramMessage.id)
+            result = await db.execute(stmt)
+            inserted_ids = [row[0] for row in result.fetchall()]
+            inserted_message_ids.extend(inserted_ids)
+            skipped = len(batch_values) - len(inserted_ids)
+            messages_synced -= skipped
 
-                batch_values = []
-                batch_count += 1
-                record_request()  # Track batch API call
+            batch_values = []
+            batch_count += 1
+            record_request()  # Track batch API call
 
-                # Update job progress
-                job.messages_processed = messages_synced
-                job.last_processed_id = last_id
-                await db.flush()
+            # Update job progress
+            job.messages_processed = messages_synced
+            job.last_processed_id = last_id
+            await db.flush()
 
-                # Progressive jittered delay — increases every N batches
-                progressive_extra = (
-                    (batch_count // settings.sync_progressive_delay_interval)
-                    * settings.sync_progressive_delay_step
-                )
-                base_delay = settings.sync_delay_seconds + progressive_extra
-                await _jittered_sleep(base_delay, settings.sync_delay_jitter)
-
-    except FloodWaitError as e:
-        wait_time = int(e.seconds * settings.flood_wait_multiplier)
-        logger.warning(f"FloodWait during sync: {wait_time}s (raw: {e.seconds}s)")
-        # Mark as PENDING for retry instead of FAILED
-        job.status = SyncStatus.PENDING
-        job.error_message = f"Rate limited. Retry after {wait_time} seconds."
-        await db.flush()
-        raise
+            # Progressive jittered delay — increases every N batches
+            progressive_extra = (
+                (batch_count // settings.sync_progressive_delay_interval)
+                * settings.sync_progressive_delay_step
+            )
+            base_delay = settings.sync_delay_seconds + progressive_extra
+            await _jittered_sleep(base_delay, settings.sync_delay_jitter)
 
     # Insert remaining batch
     if batch_values:
         stmt = pg_insert(TelegramMessage).values(batch_values)
         stmt = stmt.on_conflict_do_nothing(
             constraint="uq_telegram_messages_chat_msg"
-        )
+        ).returning(TelegramMessage.id)
         result = await db.execute(stmt)
-        skipped = len(batch_values) - result.rowcount
+        inserted_ids = [row[0] for row in result.fetchall()]
+        inserted_message_ids.extend(inserted_ids)
+        skipped = len(batch_values) - len(inserted_ids)
         messages_synced -= skipped
+
+    # Best-effort embedding generation for newly inserted text messages.
+    # Embedding failures should not fail message sync.
+    if inserted_message_ids:
+        try:
+            await embed_messages(db, inserted_message_ids)
+        except Exception as e:
+            logger.exception(f"Embedding step failed after sync for chat {chat_id}: {e}")
 
     # Update chat and job
     chat.last_message_id = last_id
@@ -235,8 +237,7 @@ async def sync_messages(
     ).scalar()
 
     job.messages_processed = messages_synced
-    job.status = SyncStatus.COMPLETED
-    job.completed_at = datetime.now(UTC)
+    job.last_processed_id = last_id
     await db.flush()
 
     return messages_synced

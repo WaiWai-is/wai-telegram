@@ -17,7 +17,7 @@ router = APIRouter()
 async def list_digests(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    limit: int = Query(default=30, le=100),
+    limit: int = Query(default=30, ge=1, le=100),
 ) -> list[DigestResponse]:
     """List user's daily digests."""
     digests = await get_digests(db, user.id, limit)
