@@ -24,6 +24,7 @@ redis_client = redis.from_url(settings.redis_url)
 # Lock configuration
 LOCK_TTL = 300  # 5 minutes
 LOCK_REFRESH_INTERVAL = 60  # Refresh every minute
+SYNC_PROGRESS_TTL = 3600  # 1h Redis key TTL for single-chat sync progress
 
 
 class DistributedLock:
@@ -195,6 +196,8 @@ def sync_chat_task(
             raise
     finally:
         lock.release()
+        if job_uuid:
+            redis_client.delete(f"sync:{job_uuid}:total", f"sync:{job_uuid}:seen")
 
 
 async def _run_sync(
@@ -215,7 +218,14 @@ async def _run_sync(
         job.completed_at = None
         await db.commit()
 
-        count = await sync_messages(db, user_id, chat_id, job.id, limit)
+        # Store expected total in Redis for progress tracking
+        if limit:
+            redis_client.setex(f"sync:{job.id}:total", SYNC_PROGRESS_TTL, limit)
+
+        def _on_progress(seen: int) -> None:
+            redis_client.setex(f"sync:{job.id}:seen", SYNC_PROGRESS_TTL, seen)
+
+        count = await sync_messages(db, user_id, chat_id, job.id, limit, on_progress=_on_progress)
 
         job.status = SyncStatus.COMPLETED
         job.completed_at = datetime.now(UTC)

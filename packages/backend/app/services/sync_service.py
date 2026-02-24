@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -106,11 +107,16 @@ async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
             "chat_type": _get_chat_type(dialog),
             "title": _get_chat_title(dialog),
             "username": getattr(dialog.entity, "username", None),
+            "last_activity_at": dialog.date,
         }
         stmt = pg_insert(TelegramChat).values(**values)
         stmt = stmt.on_conflict_do_update(
             constraint="uq_telegram_chats_user_chat",
-            set_={"title": stmt.excluded.title, "username": stmt.excluded.username},
+            set_={
+                "title": stmt.excluded.title,
+                "username": stmt.excluded.username,
+                "last_activity_at": stmt.excluded.last_activity_at,
+            },
         ).returning(TelegramChat)
         result = await db.execute(stmt)
         chat = result.scalar_one()
@@ -126,6 +132,7 @@ async def sync_messages(
     chat_id: UUID,
     job_id: UUID,
     limit: int | None = None,
+    on_progress: Callable[[int], None] | None = None,
 ) -> int:
     """Sync messages for a specific chat. Returns count of messages synced."""
     # Get chat
@@ -151,13 +158,18 @@ async def sync_messages(
     last_id = chat.last_message_id
     inserted_message_ids: list[UUID] = []
 
-    async for message in client.iter_messages(
-        chat.telegram_chat_id,
-        min_id=last_id or 0,
-        reverse=True,
-        limit=limit,
-        wait_time=0.5,
-    ):
+    messages_seen = 0
+
+    # First sync: newest-first (default Telethon order) to get recent messages.
+    # Incremental sync: oldest-first from last known ID to catch up chronologically.
+    if last_id:
+        iter_kwargs = {"min_id": last_id, "reverse": True, "limit": limit, "wait_time": 0.5}
+    else:
+        iter_kwargs = {"limit": limit, "wait_time": 0.5}
+
+    async for message in client.iter_messages(chat.telegram_chat_id, **iter_kwargs):
+        messages_seen += 1
+
         if not message.text and not message.media:
             continue
 
@@ -194,6 +206,9 @@ async def sync_messages(
             batch_count += 1
             record_request()  # Track batch API call
 
+            if on_progress:
+                on_progress(messages_seen)
+
             # Update job progress
             job.messages_processed = messages_synced
             job.last_processed_id = last_id
@@ -218,6 +233,9 @@ async def sync_messages(
         inserted_message_ids.extend(inserted_ids)
         skipped = len(batch_values) - len(inserted_ids)
         messages_synced -= skipped
+
+    if on_progress:
+        on_progress(messages_seen)
 
     # Best-effort embedding generation for newly inserted text messages.
     # Embedding failures should not fail message sync.

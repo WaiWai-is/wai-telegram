@@ -262,6 +262,7 @@ export interface Chat {
   title: string
   username: string | null
   last_sync_at: string | null
+  last_activity_at: string | null
   total_messages_synced: number
 }
 

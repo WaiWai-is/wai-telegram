@@ -31,7 +31,7 @@ async def list_chats(
     if chat_type:
         query = query.where(TelegramChat.chat_type == chat_type)
 
-    query = query.order_by(TelegramChat.title).offset(offset).limit(limit)
+    query = query.order_by(TelegramChat.last_activity_at.desc().nulls_last()).offset(offset).limit(limit)
 
     result = await db.execute(query)
     chats = result.scalars().all()

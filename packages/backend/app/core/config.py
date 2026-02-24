@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     sync_delay_jitter: float = 0.5
     sync_progressive_delay_interval: int = 5  # Increase delay every N batches
     sync_progressive_delay_step: float = 0.5  # Add this much per interval
-    sync_dialog_limit: int = 100
+    sync_dialog_limit: int = 500
     flood_wait_multiplier: float = 1.2
 
     # Telegram client settings (anti-ban)

@@ -143,6 +143,15 @@ async def get_sync_progress(
             current_chat_title = current_raw.decode() if current_raw else None
             if total_chats > 0:
                 progress_percent = round(chats_completed / total_chats * 100, 1)
+    else:
+        # Single-chat sync progress from Redis
+        total_raw = redis_client.get(f"sync:{job_id}:total")
+        seen_raw = redis_client.get(f"sync:{job_id}:seen")
+        if total_raw and seen_raw:
+            total = int(total_raw.decode())
+            seen = int(seen_raw.decode())
+            if total > 0:
+                progress_percent = min(round(seen / total * 100, 1), 100.0)
 
     return SyncProgressResponse(
         job_id=job.id,

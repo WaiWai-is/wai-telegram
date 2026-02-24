@@ -133,6 +133,39 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
           </div>
         </div>
 
+        {isSyncRunning && syncProgress?.status === 'in_progress' && (
+          <div className="mb-4 p-3 border rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
+              <span className="text-sm font-medium text-primary">Syncing messages...</span>
+              {syncProgress.progress_percent != null && (
+                <span className="text-sm text-secondary">{syncProgress.progress_percent}%</span>
+              )}
+              {syncProgress.messages_processed > 0 && (
+                <span className="text-sm text-tertiary">
+                  {syncProgress.messages_processed.toLocaleString()} new messages
+                </span>
+              )}
+            </div>
+            {syncProgress.progress_percent != null && (
+              <div className="w-full bg-surface-hover rounded-full h-1.5">
+                <div
+                  className="bg-primary h-1.5 rounded-full transition-all duration-500"
+                  style={{ width: `${syncProgress.progress_percent}%` }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {syncProgress?.status === 'pending' && syncProgress.retry_after_seconds && (
+          <div className="mb-4 p-3 border rounded-lg">
+            <span className="text-sm text-primary">
+              Sync rate-limited. Next retry in ~{syncProgress.retry_after_seconds}s
+            </span>
+          </div>
+        )}
+
         {syncMutation.isError && (
           <div className="mb-4 p-3 border rounded-lg text-primary">
             Sync failed: {(syncMutation.error as Error).message}
@@ -148,12 +181,6 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
         {lastSyncResult?.status === 'completed' && (
           <div className="mb-4 p-3 border rounded-lg text-primary">
             Synced {lastSyncResult.messages_processed} messages
-          </div>
-        )}
-
-        {syncProgress?.status === 'pending' && syncProgress.retry_after_seconds && (
-          <div className="mb-4 p-3 border rounded-lg text-primary">
-            Sync rate-limited. Next retry in about {syncProgress.retry_after_seconds} seconds.
           </div>
         )}
 
