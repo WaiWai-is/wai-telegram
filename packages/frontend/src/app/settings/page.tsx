@@ -9,15 +9,9 @@ import { ThemeToggle } from '@/components/ThemeToggle'
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 
-const DIGEST_HOURS = [
-  { value: 0, label: 'Midnight (00:00 UTC)' },
-  { value: 6, label: 'Morning (06:00 UTC)' },
-  { value: 9, label: 'Morning (09:00 UTC)' },
-  { value: 12, label: 'Noon (12:00 UTC)' },
-  { value: 15, label: 'Afternoon (15:00 UTC)' },
-  { value: 18, label: 'Evening (18:00 UTC)' },
-  { value: 21, label: 'Night (21:00 UTC)' },
-]
+function formatHourUTC(hour: number): string {
+  return `${String(hour).padStart(2, '0')}:00 UTC`
+}
 
 const SYNC_INTERVALS = [
   { value: 15, label: 'Every 15 minutes' },
@@ -324,16 +318,22 @@ export default function SettingsPage() {
                     <label className="block text-sm font-medium mb-1.5 text-secondary">
                       Digest time
                     </label>
-                    <select
-                      value={settings.digest_hour_utc}
-                      onChange={(e) => updateSetting('digest_hour_utc', Number(e.target.value))}
-                      disabled={updateSettingsMutation.isPending}
-                      className="w-full px-3 py-2.5 border rounded-lg bg-transparent text-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                    >
-                      {DIGEST_HOURS.map((h) => (
-                        <option key={h.value} value={h.value}>{h.label}</option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="time"
+                        value={`${String(settings.digest_hour_utc).padStart(2, '0')}:00`}
+                        onChange={(e) => {
+                          const hour = parseInt(e.target.value.split(':')[0], 10)
+                          if (!isNaN(hour)) updateSetting('digest_hour_utc', hour)
+                        }}
+                        step="3600"
+                        disabled={updateSettingsMutation.isPending}
+                        className="px-3 py-2.5 border rounded-lg bg-transparent text-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                      />
+                      <span className="text-sm text-tertiary">
+                        UTC ({formatHourUTC(settings.digest_hour_utc)})
+                      </span>
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between">
@@ -349,26 +349,30 @@ export default function SettingsPage() {
                   </div>
 
                   {settings.digest_telegram_enabled && (
-                    <div className="ml-0 p-4 border rounded-lg space-y-3">
-                      <p className="text-sm text-secondary">
-                        The bot will send digests to your Telegram account directly.
-                        Make sure you&apos;ve started a conversation with the bot first.
-                      </p>
-                      <button
-                        onClick={() => {
-                          setTestBotStatus(null)
-                          testBotMutation.mutate()
-                        }}
-                        disabled={testBotMutation.isPending}
-                        className="px-4 py-2 border text-primary rounded-lg hover:bg-surface-hover transition-colors disabled:opacity-50"
-                      >
-                        {testBotMutation.isPending ? 'Sending...' : 'Send Test Message'}
-                      </button>
-                      {testBotStatus && (
-                        <p className={`text-sm ${testBotStatus.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                          {testBotStatus.message}
-                        </p>
-                      )}
+                    <div className="p-4 border rounded-lg space-y-3">
+                      <p className="text-sm font-medium text-primary">Setup</p>
+                      <ol className="text-sm text-secondary space-y-1 list-decimal list-inside">
+                        <li>Open <a href="https://t.me/wai_telegram_bot" target="_blank" rel="noopener noreferrer" className="underline text-primary hover:opacity-80">@wai_telegram_bot</a> in Telegram</li>
+                        <li>Press <strong>Start</strong> to allow the bot to message you</li>
+                        <li>Send a test below to confirm it works</li>
+                      </ol>
+                      <div className="flex items-center gap-3 pt-1">
+                        <button
+                          onClick={() => {
+                            setTestBotStatus(null)
+                            testBotMutation.mutate()
+                          }}
+                          disabled={testBotMutation.isPending}
+                          className="px-4 py-2 border text-primary rounded-lg hover:bg-surface-hover transition-colors disabled:opacity-50"
+                        >
+                          {testBotMutation.isPending ? 'Sending...' : 'Send Test Message'}
+                        </button>
+                        {testBotStatus && (
+                          <p className={`text-sm ${testBotStatus.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                            {testBotStatus.message}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   )}
                 </>
