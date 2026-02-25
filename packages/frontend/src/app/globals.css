@@ -17,7 +17,7 @@
   --bubble-outgoing-text: #000000;
   --bubble-incoming-text: #000000;
   --timestamp-color: #8E9BA4;
-  --date-pill-bg: rgba(0, 0, 0, 0.12);
+  --date-pill-bg: rgba(0, 0, 0, 0.35);
   --date-pill-text: #FFFFFF;
   --chat-list-hover: rgba(0, 0, 0, 0.06);
   --sync-button-bg: #3390EC;

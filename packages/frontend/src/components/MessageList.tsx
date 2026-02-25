@@ -149,6 +149,16 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
     prevScrollHeightRef.current = virtualizer.getTotalSize()
   }, [items.length, initialScrollDone, virtualizer])
 
+  // Auto-fetch more if viewport isn't filled
+  useEffect(() => {
+    if (!initialScrollDone || !hasNextPage || isFetchingNextPage) return
+    const el = parentRef.current
+    if (el && el.scrollHeight <= el.clientHeight) {
+      prevScrollHeightRef.current = virtualizer.getTotalSize()
+      fetchNextPage()
+    }
+  }, [initialScrollDone, hasNextPage, isFetchingNextPage, items.length, fetchNextPage, virtualizer])
+
   // Load older messages when scrolling near top
   const handleScroll = useCallback(() => {
     const el = parentRef.current
@@ -161,21 +171,19 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
   }, [hasNextPage, isFetchingNextPage, fetchNextPage, virtualizer])
 
   // Floating date pill — find topmost visible message's date
-  const floatingDate = useMemo(() => {
-    const virtualItems = virtualizer.getVirtualItems()
-    if (virtualItems.length === 0) return null
-
-    for (const vi of virtualItems) {
-      const item = items[vi.index]
-      if (item.type === 'message') {
-        return formatDateSeparator(item.message.sent_at)
-      }
-      if (item.type === 'date') {
-        return formatDateSeparator(item.date)
-      }
+  const virtualItems = virtualizer.getVirtualItems()
+  let floatingDate: string | null = null
+  for (const vi of virtualItems) {
+    const item = items[vi.index]
+    if (item.type === 'message') {
+      floatingDate = formatDateSeparator(item.message.sent_at)
+      break
     }
-    return null
-  }, [virtualizer.getVirtualItems(), items])
+    if (item.type === 'date') {
+      floatingDate = formatDateSeparator(item.date)
+      break
+    }
+  }
 
   if (isLoading) {
     return (
@@ -221,14 +229,17 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
 
       <div
         ref={parentRef}
-        className="h-full overflow-auto px-2 sm:px-4"
+        className="h-full overflow-auto px-3 sm:px-4"
         onScroll={handleScroll}
+        style={{ opacity: initialScrollDone ? 1 : 0 }}
       >
         <div
           style={{
             height: `${virtualizer.getTotalSize()}px`,
             width: '100%',
             position: 'relative',
+            // Push messages to bottom when they don't fill the container
+            marginTop: Math.max(0, (parentRef.current?.clientHeight ?? 0) - virtualizer.getTotalSize()),
           }}
         >
           {virtualizer.getVirtualItems().map((virtualItem) => {
