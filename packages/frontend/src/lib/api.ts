@@ -181,10 +181,12 @@ class ApiClient {
   }
 
   // Chats
-  async getChats(chatType?: string) {
+  async getChats(chatType?: string, limit = 100, cursor?: string) {
     const params: Record<string, string> = {}
     if (chatType) params.chat_type = chatType
-    return this.request<{ chats: Chat[]; total: number }>(
+    params.limit = String(limit)
+    if (cursor) params.cursor = cursor
+    return this.request<ChatListPage>(
       'GET',
       '/api/v1/chats',
       { params }
@@ -192,17 +194,19 @@ class ApiClient {
   }
 
   async refreshChats() {
-    return this.request<{ chats: Chat[]; total: number }>(
+    return this.request<ChatListPage>(
       'POST',
       '/api/v1/chats/refresh'
     )
   }
 
-  async getChatMessages(chatId: string, limit = 50, offset = 0) {
-    return this.request<{ messages: Message[]; total: number | null; has_more: boolean }>(
+  async getChatMessages(chatId: string, limit = 50, before?: string) {
+    const params: Record<string, string> = { limit: String(limit) }
+    if (before) params.before = before
+    return this.request<MessageListPage>(
       'GET',
       `/api/v1/chats/${chatId}/messages`,
-      { params: { limit: String(limit), offset: String(offset) } }
+      { params }
     )
   }
 
@@ -308,6 +312,20 @@ export interface SearchResult {
   is_outgoing: boolean
   sent_at: string
   similarity: number
+}
+
+export interface ChatListPage {
+  chats: Chat[]
+  has_more: boolean
+  next_cursor: string | null
+  total: number | null
+}
+
+export interface MessageListPage {
+  messages: Message[]
+  total: number | null
+  has_more: boolean
+  next_cursor: string | null
 }
 
 export interface SyncJob {

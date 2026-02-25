@@ -21,6 +21,11 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
   const [lastSyncResult, setLastSyncResult] = useState<SyncJobProgress | null>(null)
 
   useEffect(() => {
+    // Always rehydrate from newest page when entering a chat.
+    queryClient.resetQueries({ queryKey: ['messages', id], exact: true })
+  }, [id, queryClient])
+
+  useEffect(() => {
     if (!authLoading && !user) {
       router.push('/login')
     }
@@ -28,7 +33,7 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
 
   const { data: chatData } = useQuery({
     queryKey: ['chats'],
-    queryFn: () => api.getChats(),
+    queryFn: () => api.getChats(undefined, 500),
     enabled: !!user,
   })
 
@@ -60,7 +65,8 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
     if (!syncProgress) return
     if (syncProgress.status === 'completed') {
       setLastSyncResult(syncProgress)
-      queryClient.invalidateQueries({ queryKey: ['messages', id] })
+      queryClient.resetQueries({ queryKey: ['messages', id], exact: true })
+      queryClient.invalidateQueries({ queryKey: ['messages', id], exact: true })
       queryClient.invalidateQueries({ queryKey: ['chats'] })
       setActiveJobId(null)
       return

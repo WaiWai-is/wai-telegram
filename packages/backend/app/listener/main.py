@@ -35,6 +35,8 @@ settings = get_settings()
 HEARTBEAT_INTERVAL = 30
 ACTIVE_KEY_TTL = 60
 HEALTH_CHECK_INTERVAL = 300  # 5 minutes
+SYNC_PROGRESS_TTL = 3600
+SYNC_HEARTBEAT_TTL = 180
 
 
 def _get_media_type(media) -> str | None:
@@ -300,6 +302,13 @@ class TelegramListener:
         client = self.clients.get(user_id)
         if not client:
             logger.error(f"No active client for user {user_id} during sync command")
+            async with get_db_context() as db:
+                result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
+                job = result.scalar_one_or_none()
+                if job:
+                    job.status = SyncStatus.FAILED
+                    job.error_message = "Listener client is not active for this user"
+                    await db.commit()
             return
 
         try:
@@ -314,7 +323,27 @@ class TelegramListener:
                 job.completed_at = None
                 await db.commit()
 
-                count = await sync_messages(db, user_id, chat_id, job_id, limit, client=client)
+                if limit:
+                    await self.redis.setex(f"sync:{job_id}:total", SYNC_PROGRESS_TTL, limit)
+                await self.redis.setex(f"sync:{job_id}:heartbeat", SYNC_HEARTBEAT_TTL, "1")
+
+                def _on_progress(seen: int) -> None:
+                    asyncio.create_task(
+                        self.redis.setex(f"sync:{job_id}:seen", SYNC_PROGRESS_TTL, seen)
+                    )
+                    asyncio.create_task(
+                        self.redis.setex(f"sync:{job_id}:heartbeat", SYNC_HEARTBEAT_TTL, "1")
+                    )
+
+                count = await sync_messages(
+                    db,
+                    user_id,
+                    chat_id,
+                    job_id,
+                    limit,
+                    on_progress=_on_progress,
+                    client=client,
+                )
 
                 job.status = SyncStatus.COMPLETED
                 job.completed_at = datetime.now(UTC)
@@ -331,6 +360,11 @@ class TelegramListener:
                     job.status = SyncStatus.FAILED
                     job.error_message = str(e)[:500]
                     await db.commit()
+            await self.redis.delete(
+                f"sync:{job_id}:total",
+                f"sync:{job_id}:seen",
+                f"sync:{job_id}:heartbeat",
+            )
 
     async def _redis_command_loop(self):
         """Listen for commands from API."""

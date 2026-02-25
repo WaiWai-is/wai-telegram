@@ -9,13 +9,14 @@ import { ChatAvatar } from '@/components/ChatAvatar'
 import { formatChatListTime } from '@/lib/chat-utils'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
-import type { SyncJob } from '@/lib/api'
+import type { SyncJob, SyncJobProgress } from '@/lib/api'
 
 export default function ChatsPage() {
   const router = useRouter()
   const { user, isLoading: authLoading } = useAuth()
   const queryClient = useQueryClient()
   const [bulkJobId, setBulkJobId] = useState<string | null>(null)
+  const [lastBulkResult, setLastBulkResult] = useState<SyncJobProgress | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
 
@@ -27,7 +28,7 @@ export default function ChatsPage() {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['chats'],
-    queryFn: () => api.getChats(),
+    queryFn: () => api.getChats(undefined, 500),
     enabled: !!user,
   })
 
@@ -39,22 +40,33 @@ export default function ChatsPage() {
     refetchInterval: (query) => {
       const status = query.state.data?.status
       if (status === 'in_progress' || status === 'pending') return 2000
-      if (status === 'completed' || status === 'failed') {
-        queryClient.invalidateQueries({ queryKey: ['chats'] })
-        return false
-      }
       return false
     },
   })
 
   const isBulkActive = bulkProgress?.status === 'in_progress' || bulkProgress?.status === 'pending'
 
+  useEffect(() => {
+    if (!bulkProgress) return
+    if (bulkProgress.status === 'completed' || bulkProgress.status === 'failed' || bulkProgress.status === 'cancelled') {
+      setLastBulkResult(bulkProgress)
+      setBulkJobId(null)
+      queryClient.invalidateQueries({ queryKey: ['chats'] })
+      queryClient.invalidateQueries({ queryKey: ['sync-jobs'] })
+    }
+  }, [bulkProgress, queryClient])
+
   // Recent sync jobs for per-chat status indicators
   const { data: recentJobs } = useQuery({
     queryKey: ['sync-jobs'],
     queryFn: () => api.getSyncJobs(100),
     enabled: !!user,
-    refetchInterval: isBulkActive ? 3000 : false,
+    refetchInterval: (query) => {
+      const hasPending = (query.state.data ?? []).some(
+        (j) => j.status === 'in_progress' || j.status === 'pending'
+      )
+      return hasPending ? 3000 : false
+    },
   })
 
   // Map chat_id -> active sync job
@@ -69,12 +81,15 @@ export default function ChatsPage() {
   const handleRefresh = async () => {
     setIsRefreshing(true)
     setRefreshError(null)
+    setLastBulkResult(null)
+    setBulkJobId(null)
     try {
       await api.refreshChats()
       queryClient.invalidateQueries({ queryKey: ['chats'] })
       const job = await api.syncAll(500)
       setBulkJobId(job.id)
     } catch (err) {
+      setBulkJobId(null)
       setRefreshError(err instanceof Error ? err.message : 'Failed to start sync')
     } finally {
       setIsRefreshing(false)
@@ -148,15 +163,15 @@ export default function ChatsPage() {
         </div>
       )}
 
-      {bulkProgress?.status === 'completed' && (
+      {lastBulkResult?.status === 'completed' && (
         <div className="px-4 py-2 border-b text-[13px] text-primary">
-          Sync complete &mdash; {bulkProgress.messages_processed.toLocaleString()} messages synced
+          Sync complete &mdash; {lastBulkResult.messages_processed.toLocaleString()} messages synced
         </div>
       )}
 
-      {bulkProgress?.status === 'failed' && (
+      {lastBulkResult?.status === 'failed' && (
         <div className="px-4 py-2 border-b text-[13px] text-primary">
-          Sync failed: {bulkProgress.error_message || 'Unknown error'}
+          Sync failed: {lastBulkResult.error_message || 'Unknown error'}
         </div>
       )}
 

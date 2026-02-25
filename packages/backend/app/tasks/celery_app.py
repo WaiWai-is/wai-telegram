@@ -33,4 +33,8 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.sync_tasks.listener_health_check",
         "schedule": 300,  # Every 5 minutes
     },
+    "reap-stale-sync-jobs": {
+        "task": "app.tasks.sync_tasks.reap_stale_sync_jobs",
+        "schedule": 120,  # Every 2 minutes
+    },
 }

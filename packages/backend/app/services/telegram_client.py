@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from uuid import UUID
 
@@ -15,53 +14,33 @@ from app.models.session import TelegramSession
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Cache for active Telegram clients
-_active_clients: dict[UUID, TelegramClient] = {}
-_client_locks: dict[UUID, asyncio.Lock] = {}
-
-
-def _get_client_lock(user_id: UUID) -> asyncio.Lock:
-    if user_id not in _client_locks:
-        _client_locks[user_id] = asyncio.Lock()
-    return _client_locks[user_id]
-
-
 async def get_client(user_id: UUID, db: AsyncSession) -> TelegramClient:
-    """Get or create a Telegram client for a user."""
-    async with _get_client_lock(user_id):
-        if user_id in _active_clients:
-            client = _active_clients[user_id]
-            if client.is_connected():
-                return client
-            else:
-                del _active_clients[user_id]
+    """Create a fresh Telegram client for a user.
 
-        # Load session from database
-        result = await db.execute(
-            select(TelegramSession).where(
-                TelegramSession.user_id == user_id, TelegramSession.is_active == True
-            )
+    Clients are intentionally not cached globally to avoid cross-event-loop reuse.
+    """
+    result = await db.execute(
+        select(TelegramSession).where(
+            TelegramSession.user_id == user_id, TelegramSession.is_active == True
         )
-        session = result.scalar_one_or_none()
-        if not session:
-            raise ValueError("No active Telegram session found")
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise ValueError("No active Telegram session found")
 
-        # Decrypt and create client
-        session_string = decrypt_session(session.session_string)
-        client = TelegramClient(
-            StringSession(session_string),
-            settings.telegram_api_id,
-            settings.telegram_api_hash,
-            device_model=settings.telegram_device_model,
-            system_version=settings.telegram_system_version,
-            app_version=settings.telegram_app_version,
-            flood_sleep_threshold=settings.telegram_flood_sleep_threshold,
-            receive_updates=False,
-        )
-        await client.connect()
-
-        _active_clients[user_id] = client
-        return client
+    session_string = decrypt_session(session.session_string)
+    client = TelegramClient(
+        StringSession(session_string),
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+        device_model=settings.telegram_device_model,
+        system_version=settings.telegram_system_version,
+        app_version=settings.telegram_app_version,
+        flood_sleep_threshold=settings.telegram_flood_sleep_threshold,
+        receive_updates=False,
+    )
+    await client.connect()
+    return client
 
 
 async def create_auth_client() -> TelegramClient:
@@ -180,11 +159,11 @@ async def save_session(
 
 
 async def disconnect_client(user_id: UUID) -> None:
-    """Disconnect and remove a client from cache."""
-    async with _get_client_lock(user_id):
-        if user_id in _active_clients:
-            client = _active_clients.pop(user_id)
-            await client.disconnect()
+    """Disconnect and remove a cached client if present.
+
+    No-op because sync clients are now created per operation.
+    """
+    _ = user_id
 
 
 async def delete_session(db: AsyncSession, user_id: UUID) -> None:

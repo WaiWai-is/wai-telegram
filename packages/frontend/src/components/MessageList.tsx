@@ -40,15 +40,15 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
     error,
   } = useInfiniteQuery({
     queryKey: ['messages', chatId],
-    queryFn: async ({ pageParam = 0 }) => {
-      return api.getChatMessages(chatId, PAGE_SIZE, pageParam as number)
+    queryFn: async ({ pageParam = null }) => {
+      return api.getChatMessages(chatId, PAGE_SIZE, (pageParam as string | null) || undefined)
     },
-    getNextPageParam: (_lastPage, allPages) => {
-      const lastPage = allPages[allPages.length - 1]
+    getNextPageParam: (lastPage) => {
       if (!lastPage.has_more) return undefined
-      return allPages.reduce((sum, p) => sum + p.messages.length, 0)
+      return lastPage.next_cursor ?? undefined
     },
-    initialPageParam: 0,
+    initialPageParam: null as string | null,
+    refetchOnMount: 'always',
   })
 
   // Flatten all pages into a single array in chronological order (oldest first)

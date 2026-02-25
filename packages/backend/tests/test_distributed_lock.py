@@ -29,12 +29,12 @@ def test_distributed_lock_release_does_not_delete_foreign_owner(monkeypatch) -> 
     monkeypatch.setattr(sync_tasks, "redis_client", fake_redis)
 
     user_id = uuid4()
-    lock = sync_tasks.DistributedLock(user_id)
+    lock = sync_tasks.DistributedLock(user_id, owner=f"chat:{uuid4()}")
     assert lock.acquire() is True
-    assert fake_redis.data[lock.lock_key] == lock.token
+    assert fake_redis.data[lock.lock_key] == lock.payload
 
     # Simulate lock expiry + reacquire by another worker.
-    fake_redis.data[lock.lock_key] = "other-owner-token"
+    fake_redis.data[lock.lock_key] = '{"owner":"other","token":"other-owner-token"}'
     lock.release()
 
-    assert fake_redis.data[lock.lock_key] == "other-owner-token"
+    assert fake_redis.data[lock.lock_key] == '{"owner":"other","token":"other-owner-token"}'

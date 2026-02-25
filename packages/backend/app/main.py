@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from sqlalchemy import text, update
+from sqlalchemy import select, text
 
 from app.api.v1 import api_router
 from app.core.config import get_settings
@@ -22,22 +22,30 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     # Startup: mark orphaned IN_PROGRESS jobs as FAILED
     try:
+        import redis as redis_lib
+
+        redis_client = redis_lib.from_url(settings.redis_url)
+        updated_jobs = 0
         async with async_session_factory() as db:
             cutoff = datetime.now(UTC) - timedelta(hours=2)
             result = await db.execute(
-                update(SyncJob)
-                .where(
+                select(SyncJob).where(
                     SyncJob.status == SyncStatus.IN_PROGRESS,
                     SyncJob.updated_at < cutoff,
                 )
-                .values(
-                    status=SyncStatus.FAILED,
-                    error_message="Marked as failed: job was orphaned (worker crash or timeout)",
-                )
             )
-            if result.rowcount > 0:
-                logger.warning(f"Marked {result.rowcount} orphaned sync jobs as FAILED")
-            await db.commit()
+            jobs = result.scalars().all()
+            for job in jobs:
+                heartbeat_key = f"bulk:{job.id}:heartbeat" if job.chat_id is None else f"sync:{job.id}:heartbeat"
+                if redis_client.get(heartbeat_key):
+                    continue
+                job.status = SyncStatus.FAILED
+                job.error_message = "Marked as failed: job was orphaned (worker crash or timeout)"
+                updated_jobs += 1
+            if updated_jobs > 0:
+                logger.warning(f"Marked {updated_jobs} orphaned sync jobs as FAILED")
+                await db.commit()
+        redis_client.close()
     except Exception as e:
         logger.error(f"Failed to clean up orphaned jobs on startup: {e}")
 

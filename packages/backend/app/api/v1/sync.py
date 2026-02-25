@@ -1,4 +1,3 @@
-import json
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
@@ -33,8 +32,12 @@ def _parse_retry_after_seconds(error_message: str | None) -> int | None:
 _STALE_JOB_THRESHOLD = timedelta(minutes=15)
 
 
+def _job_heartbeat_key(job: SyncJob) -> str:
+    return f"bulk:{job.id}:heartbeat" if job.chat_id is None else f"sync:{job.id}:heartbeat"
+
+
 async def _expire_stale_jobs(db: AsyncSession, user_id: UUID, chat_id: UUID | None) -> None:
-    """Mark IN_PROGRESS jobs as FAILED if no progress for 15 minutes."""
+    """Mark stale IN_PROGRESS jobs as FAILED if heartbeat is missing."""
     cutoff = datetime.now(UTC) - _STALE_JOB_THRESHOLD
     query = select(SyncJob).where(
         SyncJob.user_id == user_id,
@@ -46,10 +49,14 @@ async def _expire_stale_jobs(db: AsyncSession, user_id: UUID, chat_id: UUID | No
     else:
         query = query.where(SyncJob.chat_id.is_(None))
     stale_jobs = (await db.execute(query)).scalars().all()
+    updated = False
     for job in stale_jobs:
+        if redis_client.get(_job_heartbeat_key(job)):
+            continue
         job.status = SyncStatus.FAILED
         job.error_message = "Automatically expired: no progress for 15 minutes"
-    if stale_jobs:
+        updated = True
+    if updated:
         await db.flush()
 
 
@@ -126,20 +133,7 @@ async def sync_chat(
     job = await create_sync_job(db, user.id, chat_id)
     await db.commit()
 
-    # Route to listener if active, otherwise to Celery
-    if redis_client.get(f"listener:active:{user.id}"):
-        redis_client.publish(
-            f"listener:cmd:{user.id}",
-            json.dumps({
-                "command": "sync_chat",
-                "user_id": str(user.id),
-                "chat_id": str(chat_id),
-                "job_id": str(job.id),
-                "limit": limit,
-            }),
-        )
-    else:
-        sync_chat_task.delay(str(user.id), str(chat_id), str(job.id), limit)
+    sync_chat_task.delay(str(user.id), str(chat_id), str(job.id), limit)
 
     return SyncJobResponse.model_validate(job)
 

@@ -98,49 +98,64 @@ async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
     """Sync user's chat list from Telegram using upsert for atomicity."""
     client = await get_client(user_id, db)
     chats = []
-    record_request()  # Track iter_dialogs API call
+    try:
+        record_request()  # Track iter_dialogs API call
 
-    async for dialog in client.iter_dialogs(limit=settings.sync_dialog_limit):
-        # Extract last message preview
-        last_msg_text = None
-        last_msg_sender = None
-        if dialog.message:
-            msg = dialog.message
-            if msg.message:
-                last_msg_text = msg.message[:200]
-            elif msg.media:
-                media_label = _get_media_type(msg)
-                last_msg_text = f"[{media_label}]" if media_label else "[media]"
-            last_msg_sender = _get_sender_name(msg)
+        async for dialog in client.iter_dialogs(limit=settings.sync_dialog_limit):
+            # Extract last message preview
+            last_msg_text = None
+            last_msg_sender = None
+            if dialog.message:
+                msg = dialog.message
+                if msg.message:
+                    last_msg_text = msg.message[:200]
+                elif msg.media:
+                    media_label = _get_media_type(msg)
+                    last_msg_text = f"[{media_label}]" if media_label else "[media]"
+                last_msg_sender = _get_sender_name(msg)
 
-        values = {
-            "user_id": user_id,
-            "telegram_chat_id": dialog.entity.id,
-            "chat_type": _get_chat_type(dialog),
-            "title": _get_chat_title(dialog),
-            "username": getattr(dialog.entity, "username", None),
-            "last_activity_at": dialog.date,
-            "last_message_text": last_msg_text,
-            "last_message_sender_name": last_msg_sender,
-            "unread_count": dialog.unread_count,
-        }
-        stmt = pg_insert(TelegramChat).values(**values)
-        stmt = stmt.on_conflict_do_update(
-            constraint="uq_telegram_chats_user_chat",
-            set_={
-                "title": stmt.excluded.title,
-                "username": stmt.excluded.username,
-                "last_activity_at": stmt.excluded.last_activity_at,
-                "last_message_text": stmt.excluded.last_message_text,
-                "last_message_sender_name": stmt.excluded.last_message_sender_name,
-                "unread_count": stmt.excluded.unread_count,
-            },
-        ).returning(TelegramChat)
-        result = await db.execute(stmt)
-        chat = result.scalar_one()
-        chats.append(chat)
+            values = {
+                "user_id": user_id,
+                "telegram_chat_id": dialog.entity.id,
+                "chat_type": _get_chat_type(dialog),
+                "title": _get_chat_title(dialog),
+                "username": getattr(dialog.entity, "username", None),
+                "last_activity_at": dialog.date,
+                "last_message_text": last_msg_text,
+                "last_message_sender_name": last_msg_sender,
+                "unread_count": dialog.unread_count,
+            }
+            stmt = pg_insert(TelegramChat).values(**values)
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_telegram_chats_user_chat",
+                set_={
+                    "title": stmt.excluded.title,
+                    "username": stmt.excluded.username,
+                    "last_activity_at": stmt.excluded.last_activity_at,
+                    # Telegram dialog payloads sometimes omit preview fields.
+                    # Keep existing preview when the incoming value is null.
+                    "last_message_text": func.coalesce(
+                        stmt.excluded.last_message_text,
+                        TelegramChat.last_message_text,
+                    ),
+                    "last_message_sender_name": func.coalesce(
+                        stmt.excluded.last_message_sender_name,
+                        TelegramChat.last_message_sender_name,
+                    ),
+                    "unread_count": func.coalesce(
+                        stmt.excluded.unread_count,
+                        TelegramChat.unread_count,
+                        0,
+                    ),
+                },
+            ).returning(TelegramChat)
+            result = await db.execute(stmt)
+            chat = result.scalar_one()
+            chats.append(chat)
 
-    await db.flush()
+        await db.flush()
+    finally:
+        await client.disconnect()
     return chats
 
 
@@ -176,8 +191,10 @@ async def sync_messages(
     if not job:
         raise ValueError("Sync job not found")
 
+    owns_client = False
     if client is None:
         client = await get_client(user_id, db)
+        owns_client = True
     messages_synced = 0
     batch_values = []
     batch_count = 0
@@ -194,31 +211,64 @@ async def sync_messages(
     else:
         iter_kwargs = {"limit": limit, "wait_time": 0.5}
 
-    async for message in client.iter_messages(chat.telegram_chat_id, **iter_kwargs):
-        messages_seen += 1
+    try:
+        async for message in client.iter_messages(chat.telegram_chat_id, **iter_kwargs):
+            messages_seen += 1
 
-        if not message.text and not message.media:
-            continue
+            if not message.text and not message.media:
+                continue
 
-        batch_values.append({
-            "chat_id": chat_id,
-            "telegram_message_id": message.id,
-            "text": message.text,
-            "has_media": bool(message.media),
-            "media_type": _get_media_type(message),
-            "sender_id": message.sender_id,
-            "sender_name": _get_sender_name(message),
-            "is_outgoing": message.out,
-            "sent_at": message.date,
-        })
-        messages_synced += 1
+            batch_values.append({
+                "chat_id": chat_id,
+                "telegram_message_id": message.id,
+                "text": message.text,
+                "has_media": bool(message.media),
+                "media_type": _get_media_type(message),
+                "sender_id": message.sender_id,
+                "sender_name": _get_sender_name(message),
+                "is_outgoing": message.out,
+                "sent_at": message.date,
+            })
+            messages_synced += 1
 
-        # Update last_id
-        if not last_id or message.id > last_id:
-            last_id = message.id
+            # Update last_id
+            if not last_id or message.id > last_id:
+                last_id = message.id
 
-        # Batch upsert using on_conflict_do_nothing for idempotency
-        if len(batch_values) >= settings.sync_batch_size:
+            # Batch upsert using on_conflict_do_nothing for idempotency
+            if len(batch_values) >= settings.sync_batch_size:
+                stmt = pg_insert(TelegramMessage).values(batch_values)
+                stmt = stmt.on_conflict_do_nothing(
+                    constraint="uq_telegram_messages_chat_msg"
+                ).returning(TelegramMessage.id)
+                result = await db.execute(stmt)
+                inserted_ids = [row[0] for row in result.fetchall()]
+                inserted_message_ids.extend(inserted_ids)
+                skipped = len(batch_values) - len(inserted_ids)
+                messages_synced -= skipped
+
+                batch_values = []
+                batch_count += 1
+                record_request()  # Track batch API call
+
+                if on_progress:
+                    on_progress(messages_seen)
+
+                # Update job progress
+                job.messages_processed = messages_synced
+                job.last_processed_id = last_id
+                await db.flush()
+
+                # Progressive jittered delay — increases every N batches
+                progressive_extra = (
+                    (batch_count // settings.sync_progressive_delay_interval)
+                    * settings.sync_progressive_delay_step
+                )
+                base_delay = settings.sync_delay_seconds + progressive_extra
+                await _jittered_sleep(base_delay, settings.sync_delay_jitter)
+
+        # Insert remaining batch
+        if batch_values:
             stmt = pg_insert(TelegramMessage).values(batch_values)
             stmt = stmt.on_conflict_do_nothing(
                 constraint="uq_telegram_messages_chat_msg"
@@ -229,80 +279,55 @@ async def sync_messages(
             skipped = len(batch_values) - len(inserted_ids)
             messages_synced -= skipped
 
-            batch_values = []
-            batch_count += 1
-            record_request()  # Track batch API call
+        if on_progress:
+            on_progress(messages_seen)
 
-            if on_progress:
-                on_progress(messages_seen)
+        # Best-effort embedding generation for newly inserted text messages.
+        # Embedding failures should not fail message sync.
+        if inserted_message_ids:
+            try:
+                await embed_messages(db, inserted_message_ids)
+            except Exception as e:
+                logger.exception(f"Embedding step failed after sync for chat {chat_id}: {e}")
 
-            # Update job progress
-            job.messages_processed = messages_synced
-            job.last_processed_id = last_id
-            await db.flush()
-
-            # Progressive jittered delay — increases every N batches
-            progressive_extra = (
-                (batch_count // settings.sync_progressive_delay_interval)
-                * settings.sync_progressive_delay_step
+        # Update chat and job
+        chat.last_message_id = last_id
+        chat.last_sync_at = datetime.now(UTC)
+        chat.total_messages_synced = (
+            await db.execute(
+                select(func.count()).where(TelegramMessage.chat_id == chat_id)
             )
-            base_delay = settings.sync_delay_seconds + progressive_extra
-            await _jittered_sleep(base_delay, settings.sync_delay_jitter)
+        ).scalar()
 
-    # Insert remaining batch
-    if batch_values:
-        stmt = pg_insert(TelegramMessage).values(batch_values)
-        stmt = stmt.on_conflict_do_nothing(
-            constraint="uq_telegram_messages_chat_msg"
-        ).returning(TelegramMessage.id)
-        result = await db.execute(stmt)
-        inserted_ids = [row[0] for row in result.fetchall()]
-        inserted_message_ids.extend(inserted_ids)
-        skipped = len(batch_values) - len(inserted_ids)
-        messages_synced -= skipped
+        # Update chat preview from latest DB message
+        latest_msg = (
+            await db.execute(
+                select(TelegramMessage)
+                .where(TelegramMessage.chat_id == chat_id)
+                .order_by(
+                    TelegramMessage.sent_at.desc(),
+                    TelegramMessage.telegram_message_id.desc(),
+                    TelegramMessage.id.desc(),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if latest_msg:
+            preview = latest_msg.text[:200] if latest_msg.text else None
+            if not preview and latest_msg.media_type:
+                preview = f"[{latest_msg.media_type}]"
+            chat.last_message_text = preview
+            chat.last_message_sender_name = latest_msg.sender_name
+            chat.last_activity_at = latest_msg.sent_at
 
-    if on_progress:
-        on_progress(messages_seen)
+        job.messages_processed = messages_synced
+        job.last_processed_id = last_id
+        await db.flush()
 
-    # Best-effort embedding generation for newly inserted text messages.
-    # Embedding failures should not fail message sync.
-    if inserted_message_ids:
-        try:
-            await embed_messages(db, inserted_message_ids)
-        except Exception as e:
-            logger.exception(f"Embedding step failed after sync for chat {chat_id}: {e}")
-
-    # Update chat and job
-    chat.last_message_id = last_id
-    chat.last_sync_at = datetime.now(UTC)
-    chat.total_messages_synced = (
-        await db.execute(
-            select(func.count()).where(TelegramMessage.chat_id == chat_id)
-        )
-    ).scalar()
-
-    # Update chat preview from latest DB message
-    latest_msg = (
-        await db.execute(
-            select(TelegramMessage)
-            .where(TelegramMessage.chat_id == chat_id)
-            .order_by(TelegramMessage.sent_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if latest_msg:
-        preview = latest_msg.text[:200] if latest_msg.text else None
-        if not preview and latest_msg.media_type:
-            preview = f"[{latest_msg.media_type}]"
-        chat.last_message_text = preview
-        chat.last_message_sender_name = latest_msg.sender_name
-        chat.last_activity_at = latest_msg.sent_at
-
-    job.messages_processed = messages_synced
-    job.last_processed_id = last_id
-    await db.flush()
-
-    return messages_synced
+        return messages_synced
+    finally:
+        if owns_client:
+            await client.disconnect()
 
 
 async def create_sync_job(

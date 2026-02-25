@@ -26,4 +26,6 @@ class ChatResponse(BaseModel):
 
 class ChatListResponse(BaseModel):
     chats: list[ChatResponse]
-    total: int
+    has_more: bool = False
+    next_cursor: str | None = None
+    total: int | None = None
