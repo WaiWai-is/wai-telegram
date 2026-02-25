@@ -171,7 +171,8 @@ jobs:
           set -e
           cd /opt/wai-telegram/packages/frontend
           set -a && source /opt/wai-telegram/.env.production && set +a
-          npm ci
+          export NODE_OPTIONS="--max-old-space-size=512"
+          npm ci --prefer-offline
           npm run build
           chown -R wai:wai /opt/wai-telegram/packages/frontend
           EOF
