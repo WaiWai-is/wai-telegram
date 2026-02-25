@@ -1,104 +1,278 @@
 'use client'
 
-import { useRef } from 'react'
+import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { format } from 'date-fns'
-import clsx from 'clsx'
+import { useTheme } from 'next-themes'
+import { api, type Message } from '@/lib/api'
+import { shouldShowDateSeparator, isSameGroup, formatDateSeparator } from '@/lib/chat-utils'
+import { MessageBubble } from './MessageBubble'
+import { DateSeparator } from './DateSeparator'
 
-interface Message {
-  id: string
-  text: string | null
-  sender_name: string | null
-  is_outgoing: boolean
-  sent_at: string
-  has_media: boolean
-  media_type: string | null
-}
+type ProcessedItem =
+  | { type: 'sync-button' }
+  | { type: 'date'; date: string; key: string }
+  | { type: 'message'; message: Message; isFirstInGroup: boolean; isLastInGroup: boolean }
 
 interface MessageListProps {
-  messages: Message[]
-  isLoading?: boolean
+  chatId: string
+  onSyncMore: () => void
+  isSyncing: boolean
 }
 
-export function MessageList({ messages, isLoading }: MessageListProps) {
+const PAGE_SIZE = 50
+
+export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps) {
   const parentRef = useRef<HTMLDivElement>(null)
+  const { resolvedTheme } = useTheme()
+  const isDark = resolvedTheme === 'dark'
+  const [initialScrollDone, setInitialScrollDone] = useState(false)
+  const prevItemCountRef = useRef(0)
+  const prevScrollHeightRef = useRef(0)
+
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    isError,
+    error,
+  } = useInfiniteQuery({
+    queryKey: ['messages', chatId],
+    queryFn: async ({ pageParam = 0 }) => {
+      return api.getChatMessages(chatId, PAGE_SIZE, pageParam as number)
+    },
+    getNextPageParam: (_lastPage, allPages) => {
+      const lastPage = allPages[allPages.length - 1]
+      if (!lastPage.has_more) return undefined
+      return allPages.reduce((sum, p) => sum + p.messages.length, 0)
+    },
+    initialPageParam: 0,
+  })
+
+  // Flatten all pages into a single array in chronological order (oldest first)
+  const allMessages = useMemo(() => {
+    if (!data?.pages) return []
+    // Pages come newest-first from API. Flatten and reverse to get chronological.
+    const flat = data.pages.flatMap((p) => p.messages)
+    // Messages within each page are newest-first, so reverse entire array
+    return [...flat].reverse()
+  }, [data])
+
+  // Build processed items: sync button + date separators interleaved with messages
+  const items: ProcessedItem[] = useMemo(() => {
+    const result: ProcessedItem[] = []
+
+    // Show sync button at top when we've exhausted all API pages
+    if (!hasNextPage && allMessages.length > 0) {
+      result.push({ type: 'sync-button' })
+    }
+
+    for (let i = 0; i < allMessages.length; i++) {
+      const msg = allMessages[i]
+      const prevMsg = i > 0 ? allMessages[i - 1] : null
+
+      // Date separator
+      const hasDateSep = shouldShowDateSeparator(msg.sent_at, prevMsg?.sent_at ?? null)
+      if (hasDateSep) {
+        result.push({ type: 'date', date: msg.sent_at, key: `date-${msg.sent_at.slice(0, 10)}-${i}` })
+      }
+
+      // Message grouping — break group after date separators
+      const sameGroupAsPrev = !hasDateSep && isSameGroup(msg, prevMsg)
+      const nextMsg = i < allMessages.length - 1 ? allMessages[i + 1] : null
+      const nextHasDateSep = nextMsg ? shouldShowDateSeparator(nextMsg.sent_at, msg.sent_at) : false
+      const sameGroupAsNext = !nextHasDateSep && nextMsg ? isSameGroup(nextMsg, msg) : false
+
+      result.push({
+        type: 'message',
+        message: msg,
+        isFirstInGroup: !sameGroupAsPrev,
+        isLastInGroup: !sameGroupAsNext,
+      })
+    }
+
+    return result
+  }, [allMessages, hasNextPage])
 
   const virtualizer = useVirtualizer({
-    count: messages.length,
+    count: items.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 80,
-    overscan: 10,
+    estimateSize: (index) => {
+      const item = items[index]
+      if (item.type === 'sync-button') return 56
+      if (item.type === 'date') return 36
+      return 52
+    },
+    overscan: 15,
   })
+
+  // Initial scroll to bottom
+  useEffect(() => {
+    if (items.length > 0 && !initialScrollDone && !isLoading) {
+      // Small delay to let virtualizer measure
+      requestAnimationFrame(() => {
+        virtualizer.scrollToIndex(items.length - 1, { align: 'end' })
+        setInitialScrollDone(true)
+      })
+    }
+  }, [items.length, initialScrollDone, isLoading, virtualizer])
+
+  // Reset initial scroll when chat changes
+  useEffect(() => {
+    setInitialScrollDone(false)
+    prevItemCountRef.current = 0
+  }, [chatId])
+
+  // Preserve scroll position when older messages are prepended
+  useEffect(() => {
+    const el = parentRef.current
+    if (!el || !initialScrollDone) return
+
+    const prevCount = prevItemCountRef.current
+    const newCount = items.length
+
+    if (prevCount > 0 && newCount > prevCount) {
+      // The virtualizer has new items at the top; restore scroll offset
+      const prevHeight = prevScrollHeightRef.current
+      requestAnimationFrame(() => {
+        const newHeight = virtualizer.getTotalSize()
+        const delta = newHeight - prevHeight
+        if (delta > 0) {
+          el.scrollTop += delta
+        }
+      })
+    }
+
+    prevItemCountRef.current = newCount
+    prevScrollHeightRef.current = virtualizer.getTotalSize()
+  }, [items.length, initialScrollDone, virtualizer])
+
+  // Load older messages when scrolling near top
+  const handleScroll = useCallback(() => {
+    const el = parentRef.current
+    if (!el) return
+
+    if (el.scrollTop < 300 && hasNextPage && !isFetchingNextPage) {
+      prevScrollHeightRef.current = virtualizer.getTotalSize()
+      fetchNextPage()
+    }
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, virtualizer])
+
+  // Floating date pill — find topmost visible message's date
+  const floatingDate = useMemo(() => {
+    const virtualItems = virtualizer.getVirtualItems()
+    if (virtualItems.length === 0) return null
+
+    for (const vi of virtualItems) {
+      const item = items[vi.index]
+      if (item.type === 'message') {
+        return formatDateSeparator(item.message.sent_at)
+      }
+      if (item.type === 'date') {
+        return formatDateSeparator(item.date)
+      }
+    }
+    return null
+  }, [virtualizer.getVirtualItems(), items])
 
   if (isLoading) {
     return (
-      <div className="flex justify-center py-8">
+      <div className="flex items-center justify-center h-full">
         <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
       </div>
     )
   }
 
-  if (!messages.length) {
+  if (isError) {
     return (
-      <div className="text-center py-8 text-tertiary">
-        No messages found
+      <div className="flex items-center justify-center h-full text-primary">
+        Failed to load messages: {(error as Error).message}
+      </div>
+    )
+  }
+
+  if (allMessages.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full text-tertiary">
+        No messages synced yet
       </div>
     )
   }
 
   return (
-    <div ref={parentRef} className="h-[600px] overflow-auto">
+    <div className="relative h-full">
+      {/* Floating date pill */}
+      {floatingDate && initialScrollDone && (
+        <div className="absolute top-2 left-0 right-0 z-10 flex justify-center pointer-events-none">
+          <span className="px-3 py-[3px] rounded-full bg-date-pill-bg text-date-pill-text text-[13px] select-none">
+            {floatingDate}
+          </span>
+        </div>
+      )}
+
+      {/* Loading indicator for older messages */}
+      {isFetchingNextPage && (
+        <div className="absolute top-2 left-0 right-0 z-20 flex justify-center pointer-events-none">
+          <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent" />
+        </div>
+      )}
+
       <div
-        style={{
-          height: `${virtualizer.getTotalSize()}px`,
-          width: '100%',
-          position: 'relative',
-        }}
+        ref={parentRef}
+        className="h-full overflow-auto px-2 sm:px-4"
+        onScroll={handleScroll}
       >
-        {virtualizer.getVirtualItems().map((virtualItem) => {
-          const message = messages[virtualItem.index]
-          return (
-            <div
-              key={message.id}
-              data-index={virtualItem.index}
-              ref={virtualizer.measureElement}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                transform: `translateY(${virtualItem.start}px)`,
-              }}
-              className="py-2"
-            >
+        <div
+          style={{
+            height: `${virtualizer.getTotalSize()}px`,
+            width: '100%',
+            position: 'relative',
+          }}
+        >
+          {virtualizer.getVirtualItems().map((virtualItem) => {
+            const item = items[virtualItem.index]
+
+            return (
               <div
-                className={clsx(
-                  'max-w-[80%] rounded-lg p-3',
-                  message.is_outgoing
-                    ? 'ml-auto bg-primary text-surface'
-                    : 'mr-auto border text-primary'
-                )}
+                key={virtualItem.index}
+                data-index={virtualItem.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${virtualItem.start}px)`,
+                }}
               >
-                {!message.is_outgoing && message.sender_name && (
-                  <div className="text-xs font-medium mb-1 text-secondary">
-                    {message.sender_name}
+                {item.type === 'sync-button' && (
+                  <div className="flex justify-center py-3">
+                    <button
+                      onClick={onSyncMore}
+                      disabled={isSyncing}
+                      className="px-4 py-2 rounded-full bg-tg-blue text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
+                    >
+                      {isSyncing ? 'Syncing...' : 'Sync More Messages'}
+                    </button>
                   </div>
                 )}
-                <div className="whitespace-pre-wrap break-words">
-                  {message.text || (message.has_media ? `[${message.media_type || 'media'}]` : '')}
-                </div>
-                <div
-                  className={clsx(
-                    'text-xs mt-1',
-                    message.is_outgoing ? 'opacity-60' : 'text-tertiary'
-                  )}
-                >
-                  {format(new Date(message.sent_at), 'MMM d, h:mm a')}
-                </div>
+
+                {item.type === 'date' && <DateSeparator date={item.date} />}
+
+                {item.type === 'message' && (
+                  <MessageBubble
+                    message={item.message}
+                    isFirstInGroup={item.isFirstInGroup}
+                    isLastInGroup={item.isLastInGroup}
+                    isDark={isDark}
+                  />
+                )}
               </div>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
     </div>
   )

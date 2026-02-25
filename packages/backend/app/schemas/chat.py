@@ -15,6 +15,9 @@ class ChatResponse(BaseModel):
     last_sync_at: datetime | None
     last_activity_at: datetime | None
     total_messages_synced: int
+    last_message_text: str | None = None
+    last_message_sender_name: str | None = None
+    unread_count: int = 0
     created_at: datetime
 
     class Config:

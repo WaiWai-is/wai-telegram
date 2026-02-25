@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, SmallInteger
+from sqlalchemy import Boolean, DateTime, ForeignKey, SmallInteger, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -18,11 +18,8 @@ class UserSettings(Base):
     # Digest
     digest_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     digest_hour_utc: Mapped[int] = mapped_column(SmallInteger, default=9)
+    digest_timezone: Mapped[str] = mapped_column(String(50), default="UTC")
     digest_telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    # Auto-sync
-    auto_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    auto_sync_interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
 
     # Real-time
     realtime_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)

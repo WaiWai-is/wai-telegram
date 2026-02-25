@@ -282,6 +282,9 @@ export interface Chat {
   last_sync_at: string | null
   last_activity_at: string | null
   total_messages_synced: number
+  last_message_text: string | null
+  last_message_sender_name: string | null
+  unread_count: number
 }
 
 export interface Message {
@@ -337,9 +340,8 @@ export interface Digest {
 export interface UserSettings {
   digest_enabled: boolean
   digest_hour_utc: number
+  digest_timezone: string
   digest_telegram_enabled: boolean
-  auto_sync_enabled: boolean
-  auto_sync_interval_minutes: number
   realtime_sync_enabled: boolean
   listener_active: boolean
 }
@@ -347,8 +349,7 @@ export interface UserSettings {
 export interface UserSettingsUpdate {
   digest_enabled?: boolean
   digest_hour_utc?: number
+  digest_timezone?: string
   digest_telegram_enabled?: boolean
-  auto_sync_enabled?: boolean
-  auto_sync_interval_minutes?: number
   realtime_sync_enabled?: boolean
 }

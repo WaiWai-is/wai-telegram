@@ -20,9 +20,6 @@ router = APIRouter()
 config = get_settings()
 _redis = redis.from_url(config.redis_url)
 
-ALLOWED_INTERVALS = {15, 60, 360, 720, 1440}
-
-
 async def _get_or_create_settings(db: AsyncSession, user_id) -> UserSettings:
     """Get user settings, creating defaults if they don't exist."""
     result = await db.execute(
@@ -47,9 +44,8 @@ async def get_settings_endpoint(
     return UserSettingsResponse(
         digest_enabled=settings.digest_enabled,
         digest_hour_utc=settings.digest_hour_utc,
+        digest_timezone=settings.digest_timezone,
         digest_telegram_enabled=settings.digest_telegram_enabled,
-        auto_sync_enabled=settings.auto_sync_enabled,
-        auto_sync_interval_minutes=settings.auto_sync_interval_minutes,
         realtime_sync_enabled=settings.realtime_sync_enabled,
         listener_active=listener_active,
     )
@@ -65,13 +61,6 @@ async def update_settings(
     settings = await _get_or_create_settings(db, user.id)
 
     updates = body.model_dump(exclude_unset=True)
-
-    if "auto_sync_interval_minutes" in updates:
-        if updates["auto_sync_interval_minutes"] not in ALLOWED_INTERVALS:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"auto_sync_interval_minutes must be one of {sorted(ALLOWED_INTERVALS)}",
-            )
 
     # Track if realtime changed
     realtime_changed = (
@@ -97,9 +86,8 @@ async def update_settings(
     return UserSettingsResponse(
         digest_enabled=settings.digest_enabled,
         digest_hour_utc=settings.digest_hour_utc,
+        digest_timezone=settings.digest_timezone,
         digest_telegram_enabled=settings.digest_telegram_enabled,
-        auto_sync_enabled=settings.auto_sync_enabled,
-        auto_sync_interval_minutes=settings.auto_sync_interval_minutes,
         realtime_sync_enabled=settings.realtime_sync_enabled,
         listener_active=listener_active,
     )
@@ -121,7 +109,7 @@ async def test_bot(
     result = await db.execute(
         select(TelegramSession).where(
             TelegramSession.user_id == user.id,
-            TelegramSession.is_active == True,
+            TelegramSession.is_active == True,  # noqa: E712
         )
     )
     session = result.scalar_one_or_none()

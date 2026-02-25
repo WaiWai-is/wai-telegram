@@ -101,6 +101,18 @@ async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
     record_request()  # Track iter_dialogs API call
 
     async for dialog in client.iter_dialogs(limit=settings.sync_dialog_limit):
+        # Extract last message preview
+        last_msg_text = None
+        last_msg_sender = None
+        if dialog.message:
+            msg = dialog.message
+            if msg.message:
+                last_msg_text = msg.message[:200]
+            elif msg.media:
+                media_label = _get_media_type(msg)
+                last_msg_text = f"[{media_label}]" if media_label else "[media]"
+            last_msg_sender = _get_sender_name(msg)
+
         values = {
             "user_id": user_id,
             "telegram_chat_id": dialog.entity.id,
@@ -108,6 +120,9 @@ async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
             "title": _get_chat_title(dialog),
             "username": getattr(dialog.entity, "username", None),
             "last_activity_at": dialog.date,
+            "last_message_text": last_msg_text,
+            "last_message_sender_name": last_msg_sender,
+            "unread_count": dialog.unread_count,
         }
         stmt = pg_insert(TelegramChat).values(**values)
         stmt = stmt.on_conflict_do_update(
@@ -116,6 +131,9 @@ async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
                 "title": stmt.excluded.title,
                 "username": stmt.excluded.username,
                 "last_activity_at": stmt.excluded.last_activity_at,
+                "last_message_text": stmt.excluded.last_message_text,
+                "last_message_sender_name": stmt.excluded.last_message_sender_name,
+                "unread_count": stmt.excluded.unread_count,
             },
         ).returning(TelegramChat)
         result = await db.execute(stmt)
@@ -262,6 +280,22 @@ async def sync_messages(
             select(func.count()).where(TelegramMessage.chat_id == chat_id)
         )
     ).scalar()
+
+    # Update chat preview from latest DB message
+    latest_msg = (
+        await db.execute(
+            select(TelegramMessage)
+            .where(TelegramMessage.chat_id == chat_id)
+            .order_by(TelegramMessage.sent_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if latest_msg:
+        preview = latest_msg.text[:200] if latest_msg.text else None
+        if not preview and latest_msg.media_type:
+            preview = f"[{latest_msg.media_type}]"
+        chat.last_message_text = preview
+        chat.last_message_sender_name = latest_msg.sender_name
 
     job.messages_processed = messages_synced
     job.last_processed_id = last_id

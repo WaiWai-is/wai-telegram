@@ -1,25 +1,181 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
 import { api, UserSettings, UserSettingsUpdate } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
 
-function formatHourUTC(hour: number): string {
-  return `${String(hour).padStart(2, '0')}:00 UTC`
+// --- Timezone conversion utilities ---
+
+function getTimezoneOffsetHours(tz: string): number {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    timeZoneName: 'shortOffset',
+  })
+  const parts = formatter.formatToParts(new Date())
+  const tzPart = parts.find((p) => p.type === 'timeZoneName')?.value ?? 'GMT'
+  // tzPart is like "GMT", "GMT+5", "GMT-4", "GMT+5:30"
+  if (tzPart === 'GMT' || tzPart === 'UTC') return 0
+  const match = tzPart.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/)
+  if (!match) return 0
+  const sign = match[1] === '+' ? 1 : -1
+  const hours = parseInt(match[2], 10)
+  const minutes = parseInt(match[3] || '0', 10)
+  return sign * (hours + minutes / 60)
 }
 
-const SYNC_INTERVALS = [
-  { value: 15, label: 'Every 15 minutes' },
-  { value: 60, label: 'Every hour' },
-  { value: 360, label: 'Every 6 hours' },
-  { value: 720, label: 'Every 12 hours' },
-  { value: 1440, label: 'Every 24 hours' },
-]
+function localHourToUtc(localHour: number, tz: string): number {
+  const offset = getTimezoneOffsetHours(tz)
+  return ((localHour - offset) % 24 + 24) % 24
+}
+
+function utcHourToLocal(utcHour: number, tz: string): number {
+  const offset = getTimezoneOffsetHours(tz)
+  return ((utcHour + offset) % 24 + 24) % 24
+}
+
+function formatHour(hour: number): string {
+  return `${String(Math.floor(hour)).padStart(2, '0')}:00`
+}
+
+function detectTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone
+}
+
+function getTimezoneLabel(tz: string): string {
+  const offset = getTimezoneOffsetHours(tz)
+  const sign = offset >= 0 ? '+' : '-'
+  const absOffset = Math.abs(offset)
+  const h = Math.floor(absOffset)
+  const m = Math.round((absOffset - h) * 60)
+  const offsetStr = m > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${h}`
+  const city = tz.split('/').pop()!.replace(/_/g, ' ')
+  return `(UTC${sign}${offsetStr}) ${city}`
+}
+
+interface TimezoneOption {
+  value: string
+  label: string
+  region: string
+}
+
+function buildTimezoneList(): TimezoneOption[] {
+  const zones = (Intl as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.('timeZone') ?? []
+  return zones
+    .filter((tz) => tz.includes('/'))
+    .map((tz) => ({
+      value: tz,
+      label: getTimezoneLabel(tz),
+      region: tz.split('/')[0],
+    }))
+}
+
+// --- TimezonePicker component ---
+
+function TimezonePicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string
+  onChange: (tz: string) => void
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const allTimezones = useMemo(() => buildTimezoneList(), [])
+
+  const filtered = useMemo(() => {
+    if (!search) return allTimezones
+    const q = search.toLowerCase()
+    return allTimezones.filter(
+      (tz) => tz.label.toLowerCase().includes(q) || tz.value.toLowerCase().includes(q)
+    )
+  }, [allTimezones, search])
+
+  const grouped = useMemo(() => {
+    const groups: Record<string, TimezoneOption[]> = {}
+    for (const tz of filtered) {
+      if (!groups[tz.region]) groups[tz.region] = []
+      groups[tz.region].push(tz)
+    }
+    return groups
+  }, [filtered])
+
+  useEffect(() => {
+    if (!open) return
+    searchRef.current?.focus()
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+        setSearch('')
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(!open)}
+        className="w-full px-3 py-2.5 border rounded-lg bg-transparent text-primary text-left text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 flex items-center justify-between"
+      >
+        <span>{getTimezoneLabel(value)}</span>
+        <svg className={`w-4 h-4 text-tertiary transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full bg-surface border rounded-lg shadow-lg max-h-72 overflow-hidden flex flex-col">
+          <div className="p-2 border-b">
+            <input
+              ref={searchRef}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search timezone..."
+              className="w-full px-2 py-1.5 text-sm border rounded bg-transparent text-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
+          <div className="overflow-y-auto">
+            {Object.entries(grouped).map(([region, tzs]) => (
+              <div key={region}>
+                <div className="px-3 py-1.5 text-xs font-medium text-tertiary uppercase tracking-wider bg-surface-hover sticky top-0">
+                  {region}
+                </div>
+                {tzs.map((tz) => (
+                  <button
+                    key={tz.value}
+                    type="button"
+                    onClick={() => {
+                      onChange(tz.value)
+                      setOpen(false)
+                      setSearch('')
+                    }}
+                    className={`w-full px-3 py-2 text-sm text-left hover:bg-surface-hover transition-colors ${
+                      tz.value === value ? 'text-primary font-medium' : 'text-secondary'
+                    }`}
+                  >
+                    {tz.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {filtered.length === 0 && (
+              <div className="px-3 py-4 text-sm text-tertiary text-center">No timezones found</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function Toggle({
   checked,
@@ -69,6 +225,9 @@ export default function SettingsPage() {
 
   // Bot test state
   const [testBotStatus, setTestBotStatus] = useState<{ success?: boolean; message?: string } | null>(null)
+
+  // Timezone auto-detection
+  const [detectedTimezone, setDetectedTimezone] = useState<string | null>(null)
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -144,6 +303,48 @@ export default function SettingsPage() {
       setApiKey(data.api_key)
     },
   })
+
+  // Auto-detect timezone on first visit
+  useEffect(() => {
+    if (settings && settings.digest_timezone === 'UTC') {
+      const browserTz = detectTimezone()
+      if (browserTz && browserTz !== 'UTC') {
+        setDetectedTimezone(browserTz)
+      }
+    }
+  }, [settings])
+
+  const handleAcceptTimezone = useCallback(() => {
+    if (!detectedTimezone || !settings) return
+    // Keep the same local time by recalculating UTC hour
+    const currentLocalHour = utcHourToLocal(settings.digest_hour_utc, 'UTC')
+    const newUtcHour = localHourToUtc(currentLocalHour, detectedTimezone)
+    updateSettingsMutation.mutate({
+      digest_timezone: detectedTimezone,
+      digest_hour_utc: Math.round(newUtcHour) % 24,
+    })
+    setDetectedTimezone(null)
+  }, [detectedTimezone, settings, updateSettingsMutation])
+
+  const handleTimezoneChange = useCallback((tz: string) => {
+    if (!settings) return
+    // Keep the same local time, recalculate UTC hour
+    const currentLocalHour = utcHourToLocal(settings.digest_hour_utc, settings.digest_timezone)
+    const newUtcHour = localHourToUtc(currentLocalHour, tz)
+    updateSettingsMutation.mutate({
+      digest_timezone: tz,
+      digest_hour_utc: Math.round(newUtcHour) % 24,
+    })
+    setDetectedTimezone(null)
+  }, [settings, updateSettingsMutation])
+
+  const handleDigestTimeChange = useCallback((timeValue: string) => {
+    if (!settings) return
+    const localHour = parseInt(timeValue.split(':')[0], 10)
+    if (isNaN(localHour)) return
+    const utcHour = localHourToUtc(localHour, settings.digest_timezone)
+    updateSettingsMutation.mutate({ digest_hour_utc: Math.round(utcHour) % 24 })
+  }, [settings, updateSettingsMutation])
 
   if (authLoading || !user) {
     return (
@@ -314,6 +515,42 @@ export default function SettingsPage() {
 
               {settings.digest_enabled && (
                 <>
+                  {detectedTimezone && (
+                    <div className="flex items-center justify-between gap-3 p-3 border rounded-lg bg-surface-hover">
+                      <p className="text-sm text-secondary">
+                        Detected timezone: <span className="font-medium text-primary">{getTimezoneLabel(detectedTimezone)}</span>
+                      </p>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={handleAcceptTimezone}
+                          disabled={updateSettingsMutation.isPending}
+                          className="px-3 py-1.5 text-sm bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity"
+                        >
+                          Use this
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDetectedTimezone(null)}
+                          className="px-3 py-1.5 text-sm border text-secondary rounded-lg hover:bg-surface-hover transition-colors"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1.5 text-secondary">
+                      Timezone
+                    </label>
+                    <TimezonePicker
+                      value={settings.digest_timezone}
+                      onChange={handleTimezoneChange}
+                      disabled={updateSettingsMutation.isPending}
+                    />
+                  </div>
+
                   <div>
                     <label className="block text-sm font-medium mb-1.5 text-secondary">
                       Digest time
@@ -321,17 +558,14 @@ export default function SettingsPage() {
                     <div className="flex items-center gap-3">
                       <input
                         type="time"
-                        value={`${String(settings.digest_hour_utc).padStart(2, '0')}:00`}
-                        onChange={(e) => {
-                          const hour = parseInt(e.target.value.split(':')[0], 10)
-                          if (!isNaN(hour)) updateSetting('digest_hour_utc', hour)
-                        }}
+                        value={formatHour(utcHourToLocal(settings.digest_hour_utc, settings.digest_timezone))}
+                        onChange={(e) => handleDigestTimeChange(e.target.value)}
                         step="3600"
                         disabled={updateSettingsMutation.isPending}
                         className="px-3 py-2.5 border rounded-lg bg-transparent text-primary focus:outline-none focus:ring-1 focus:ring-primary"
                       />
                       <span className="text-sm text-tertiary">
-                        UTC ({formatHourUTC(settings.digest_hour_utc)})
+                        {formatHour(utcHourToLocal(settings.digest_hour_utc, settings.digest_timezone))} {settings.digest_timezone.split('/').pop()?.replace(/_/g, ' ')}
                       </span>
                     </div>
                   </div>
@@ -376,49 +610,6 @@ export default function SettingsPage() {
                     </div>
                   )}
                 </>
-              )}
-            </div>
-          ) : null}
-        </section>
-
-        {/* Auto-sync Settings */}
-        <section className="border rounded-xl p-6 mb-6">
-          <h2 className="text-lg font-medium mb-4 text-primary">
-            Auto-sync
-          </h2>
-
-          {settingsLoading ? (
-            <div className="animate-pulse h-24 bg-surface-hover rounded" />
-          ) : settings ? (
-            <div className="space-y-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-primary">Auto-sync messages</p>
-                  <p className="text-sm text-tertiary">Automatically sync new messages at a regular interval</p>
-                </div>
-                <Toggle
-                  checked={settings.auto_sync_enabled}
-                  onChange={(v) => updateSetting('auto_sync_enabled', v)}
-                  disabled={updateSettingsMutation.isPending}
-                />
-              </div>
-
-              {settings.auto_sync_enabled && (
-                <div>
-                  <label className="block text-sm font-medium mb-1.5 text-secondary">
-                    Sync interval
-                  </label>
-                  <select
-                    value={settings.auto_sync_interval_minutes}
-                    onChange={(e) => updateSetting('auto_sync_interval_minutes', Number(e.target.value))}
-                    disabled={updateSettingsMutation.isPending}
-                    className="w-full px-3 py-2.5 border rounded-lg bg-transparent text-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                  >
-                    {SYNC_INTERVALS.map((i) => (
-                      <option key={i.value} value={i.value}>{i.label}</option>
-                    ))}
-                  </select>
-                </div>
               )}
             </div>
           ) : null}

@@ -8,8 +8,11 @@ import redis.asyncio as aioredis
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from telethon import TelegramClient, events
+from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
 from telethon.tl.types import (
+    Channel,
+    Chat as TelegramGroupChat,
     MessageMediaDocument,
     MessageMediaPhoto,
     User as TelegramUser,
@@ -18,7 +21,7 @@ from telethon.tl.types import (
 from app.core.config import get_settings
 from app.core.database import get_db_context
 from app.core.security import decrypt_session
-from app.models.chat import TelegramChat
+from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
 from app.models.session import TelegramSession
 from app.models.settings import UserSettings
@@ -31,6 +34,7 @@ settings = get_settings()
 
 HEARTBEAT_INTERVAL = 30
 ACTIVE_KEY_TTL = 60
+HEALTH_CHECK_INTERVAL = 300  # 5 minutes
 
 
 def _get_media_type(media) -> str | None:
@@ -82,6 +86,7 @@ class TelegramListener:
         await asyncio.gather(
             self._redis_command_loop(),
             self._heartbeat_loop(),
+            self._health_check_loop(),
         )
 
     async def _load_enabled_users(self):
@@ -152,6 +157,55 @@ class TelegramListener:
         await self.redis.delete(f"listener:active:{user_id}")
         logger.info(f"Listener stopped for user {user_id}")
 
+    async def _auto_create_chat(self, db, user_id: UUID, entity, chat_id_tg: int) -> TelegramChat | None:
+        """Auto-create a TelegramChat record from a Telethon entity."""
+        if isinstance(entity, TelegramUser):
+            chat_type = ChatType.PRIVATE
+            title = _get_sender_name(entity) or f"User {chat_id_tg}"
+            username = entity.username
+        elif isinstance(entity, Channel):
+            chat_type = ChatType.SUPERGROUP if entity.megagroup else ChatType.CHANNEL
+            title = entity.title or f"Channel {chat_id_tg}"
+            username = entity.username
+        elif isinstance(entity, TelegramGroupChat):
+            chat_type = ChatType.GROUP
+            title = entity.title or f"Group {chat_id_tg}"
+            username = None
+        else:
+            logger.warning(f"Unknown entity type for chat {chat_id_tg}: {type(entity)}")
+            return None
+
+        stmt = pg_insert(TelegramChat).values(
+            user_id=user_id,
+            telegram_chat_id=chat_id_tg,
+            chat_type=chat_type,
+            title=title,
+            username=username,
+        )
+        stmt = stmt.on_conflict_do_nothing(
+            constraint="uq_telegram_chats_user_chat"
+        ).returning(TelegramChat.id)
+        result = await db.execute(stmt)
+        row = result.fetchone()
+        if row:
+            await db.flush()
+            # Re-fetch the full object
+            result = await db.execute(
+                select(TelegramChat).where(TelegramChat.id == row[0])
+            )
+            chat = result.scalar_one()
+            logger.info(f"Auto-created chat '{title}' ({chat_id_tg}) for user {user_id}")
+            return chat
+
+        # on_conflict_do_nothing means it already exists — fetch it
+        result = await db.execute(
+            select(TelegramChat).where(
+                TelegramChat.user_id == user_id,
+                TelegramChat.telegram_chat_id == chat_id_tg,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def _handle_message(self, user_id: UUID, event):
         """Save incoming message to DB."""
         message = event.message
@@ -172,9 +226,21 @@ class TelegramListener:
                 )
                 chat = result.scalar_one_or_none()
                 if not chat:
-                    return
+                    try:
+                        entity = await event.get_chat()
+                        chat = await self._auto_create_chat(db, user_id, entity, chat_id_tg)
+                        if not chat:
+                            return
+                    except Exception as e:
+                        logger.warning(f"Could not auto-create chat {chat_id_tg}: {e}")
+                        return
 
-                sender = await event.get_sender()
+                try:
+                    sender = await event.get_sender()
+                except FloodWaitError as e:
+                    logger.warning(f"FloodWait in listener for user {user_id}: {e.seconds}s")
+                    await asyncio.sleep(e.seconds)
+                    sender = await event.get_sender()
 
                 values = {
                     "chat_id": chat.id,
@@ -290,10 +356,26 @@ class TelegramListener:
                 logger.error(f"Error processing listener command: {e}")
 
     async def _heartbeat_loop(self):
-        """Refresh Redis active keys every 30s."""
+        """Refresh Redis active keys every 30s, only for connected clients."""
         while True:
-            for user_id in list(self.clients.keys()):
-                await self.redis.set(
-                    f"listener:active:{user_id}", "1", ex=ACTIVE_KEY_TTL
-                )
+            for user_id, client in list(self.clients.items()):
+                if client.is_connected():
+                    await self.redis.set(
+                        f"listener:active:{user_id}", "1", ex=ACTIVE_KEY_TTL
+                    )
+                else:
+                    logger.warning(f"Client disconnected for user {user_id}")
+                    await self.redis.delete(f"listener:active:{user_id}")
             await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+    async def _health_check_loop(self):
+        """Periodically verify client health and catch up missed updates."""
+        while True:
+            await asyncio.sleep(HEALTH_CHECK_INTERVAL)
+            for user_id, client in list(self.clients.items()):
+                try:
+                    if client.is_connected():
+                        await client.catch_up()
+                        logger.debug(f"Health check catch_up completed for user {user_id}")
+                except Exception as e:
+                    logger.error(f"Health check failed for user {user_id}: {e}")

@@ -1,7 +1,8 @@
 import asyncio
+import json
 import logging
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import redis
@@ -104,23 +105,6 @@ class DistributedLock:
             except Exception as e:
                 logger.error(f"Failed to refresh lock: {e}")
 
-
-def acquire_lock(user_id: UUID, ttl: int = LOCK_TTL) -> bool:
-    """Acquire a distributed lock for sync operations (legacy function)."""
-    lock_key = f"sync:{user_id}:lock"
-    return bool(redis_client.set(lock_key, "1", nx=True, ex=ttl))
-
-
-def release_lock(user_id: UUID) -> None:
-    """Release the sync lock (legacy function)."""
-    lock_key = f"sync:{user_id}:lock"
-    redis_client.delete(lock_key)
-
-
-def refresh_lock(user_id: UUID, ttl: int = LOCK_TTL) -> None:
-    """Refresh the lock TTL (legacy function)."""
-    lock_key = f"sync:{user_id}:lock"
-    redis_client.expire(lock_key, ttl)
 
 
 @shared_task(bind=True, max_retries=3)
@@ -339,53 +323,39 @@ async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> No
 
 
 @shared_task
-def auto_sync_users():
-    """Dispatch sync for users whose auto-sync interval has elapsed."""
-    return asyncio.run(_auto_sync_users())
+def listener_health_check():
+    """Check listener health for users with realtime sync enabled."""
+    return asyncio.run(_listener_health_check())
 
 
-async def _auto_sync_users() -> dict:
-    """Check users with auto_sync_enabled and dispatch syncs if interval elapsed."""
-    from app.models.chat import TelegramChat
+async def _listener_health_check() -> dict:
+    """Verify listener is active for all users with realtime_sync_enabled.
+
+    If a user's listener is not active (no Redis heartbeat key), publish a
+    start_user command so the listener process picks the user back up.
+    """
     from app.models.settings import UserSettings
 
-    dispatched = 0
-    skipped = 0
+    checked = 0
+    restarted = 0
 
     async with get_db_context() as db:
         result = await db.execute(
-            select(UserSettings).where(UserSettings.auto_sync_enabled == True)
+            select(UserSettings).where(UserSettings.realtime_sync_enabled == True)
         )
-        all_settings = result.scalars().all()
+        for us in result.scalars().all():
+            user_id = us.user_id
+            checked += 1
 
-        for user_settings in all_settings:
-            user_id = user_settings.user_id
+            if not redis_client.get(f"listener:active:{user_id}"):
+                redis_client.publish(
+                    "listener:cmd:global",
+                    json.dumps({"command": "start_user", "user_id": str(user_id)}),
+                )
+                restarted += 1
+                logger.warning(f"Listener inactive for user {user_id}, sent start command")
 
-            # Skip if listener is active (it handles sync)
-            if redis_client.get(f"listener:active:{user_id}"):
-                skipped += 1
-                continue
-
-            # Check most recent last_sync_at across their chats
-            result = await db.execute(
-                select(TelegramChat.last_sync_at)
-                .where(TelegramChat.user_id == user_id)
-                .order_by(TelegramChat.last_sync_at.desc().nulls_last())
-                .limit(1)
-            )
-            last_sync = result.scalar_one_or_none()
-
-            interval = timedelta(minutes=user_settings.auto_sync_interval_minutes)
-
-            if last_sync is None or (datetime.now(UTC) - last_sync) >= interval:
-                # Create a sync job and dispatch
-                job = await create_sync_job(db, user_id, chat_id=None)
-                await db.commit()
-                sync_all_chats_task.delay(str(user_id), str(job.id), 500)
-                dispatched += 1
-                logger.info(f"Auto-sync dispatched for user {user_id}")
-
-    return {"dispatched": dispatched, "skipped_listener_active": skipped}
+    return {"checked": checked, "restarted": restarted}
 
 
 async def _mark_job_state(

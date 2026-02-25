@@ -6,6 +6,7 @@ import { use } from 'react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { ChatAvatar } from '@/components/ChatAvatar'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { MessageList } from '@/components/MessageList'
@@ -32,18 +33,6 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
   })
 
   const chat = chatData?.chats.find((c) => c.id === id)
-
-  const {
-    data: messagesData,
-    isLoading,
-    isError: isMessagesError,
-    error: messagesError,
-    refetch: refetchMessages,
-  } = useQuery({
-    queryKey: ['messages', id],
-    queryFn: () => api.getChatMessages(id),
-    enabled: !!user && !!id,
-  })
 
   const syncMutation = useMutation({
     mutationFn: (limit?: number) => api.syncChat(id, limit),
@@ -87,122 +76,92 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
     syncProgress?.status === 'in_progress' ||
     syncProgress?.status === 'pending'
 
+  const handleSyncMore = () => {
+    if (!isSyncRunning) {
+      syncMutation.mutate(500)
+    }
+  }
+
   if (authLoading || !user) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center h-screen">
         <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
       </div>
     )
   }
 
   return (
-    <main className="min-h-screen p-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex justify-between items-center mb-6">
-          <div>
-            <Link href="/chats" className="text-sm text-tertiary hover:text-primary transition-colors mb-2 block">
-              &larr; Back to Chats
-            </Link>
-            <h1 className="text-3xl font-light tracking-tight text-primary">
-              {chat?.title || 'Chat'}
-            </h1>
-            {chat && (
-              <p className="text-sm text-tertiary">
-                {chat.total_messages_synced} messages synced
-              </p>
-            )}
+    <div className="h-screen flex flex-col bg-chat-bg">
+      {/* Header */}
+      <header className="flex items-center gap-3 px-3 py-2 bg-surface border-b shrink-0">
+        <Link
+          href="/chats"
+          className="flex items-center justify-center w-8 h-8 text-tg-blue hover:opacity-70 transition-opacity"
+          aria-label="Back to chats"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+        </Link>
+
+        <ChatAvatar title={chat?.title || 'Chat'} size={40} />
+
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-[15px] text-primary truncate">
+            {chat?.title || 'Chat'}
           </div>
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
-            <button
-              onClick={() => syncMutation.mutate(500)}
-              disabled={isSyncRunning}
-              className="px-3 py-2 bg-primary text-surface rounded-lg text-sm hover:opacity-80 disabled:opacity-50 transition-opacity"
-            >
-              {isSyncRunning ? 'Syncing...' : 'Sync Latest (500)'}
-            </button>
-            {!isSyncRunning && (
-              <button
-                onClick={() => syncMutation.mutate(undefined)}
-                title="Sync complete message history"
-                className="px-3 py-2 border text-primary rounded-lg text-sm hover:bg-surface-hover transition-colors"
-              >
-                Sync All
-              </button>
-            )}
-          </div>
+          {chat && (
+            <div className="text-[12px] text-tertiary">
+              {chat.total_messages_synced.toLocaleString()} messages
+            </div>
+          )}
         </div>
 
-        {isSyncRunning && syncProgress?.status === 'in_progress' && (
-          <div className="mb-4 p-3 border rounded-lg">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
-              <span className="text-sm font-medium text-primary">Syncing messages...</span>
-              {syncProgress.progress_percent != null && (
-                <span className="text-sm text-secondary">{syncProgress.progress_percent}%</span>
-              )}
-              {syncProgress.messages_processed > 0 && (
-                <span className="text-sm text-tertiary">
-                  {syncProgress.messages_processed.toLocaleString()} new messages
-                </span>
-              )}
-            </div>
-            {syncProgress.progress_percent != null && (
-              <div className="w-full bg-surface-hover rounded-full h-1.5">
-                <div
-                  className="bg-primary h-1.5 rounded-full transition-all duration-500"
-                  style={{ width: `${syncProgress.progress_percent}%` }}
-                />
-              </div>
-            )}
-          </div>
-        )}
+        <ThemeToggle />
+      </header>
 
-        {syncProgress?.status === 'pending' && syncProgress.retry_after_seconds && (
-          <div className="mb-4 p-3 border rounded-lg">
-            <span className="text-sm text-primary">
-              Sync rate-limited. Next retry in ~{syncProgress.retry_after_seconds}s
+      {/* Sync progress bar */}
+      {isSyncRunning && syncProgress?.status === 'in_progress' && (
+        <div className="px-4 py-2 bg-surface border-b shrink-0">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="animate-spin rounded-full h-3 w-3 border-2 border-tg-blue border-t-transparent" />
+            <span className="text-[12px] text-secondary">
+              Syncing...
+              {syncProgress.messages_processed > 0 && ` ${syncProgress.messages_processed.toLocaleString()} messages`}
             </span>
           </div>
-        )}
-
-        {syncMutation.isError && (
-          <div className="mb-4 p-3 border rounded-lg text-primary">
-            Sync failed: {(syncMutation.error as Error).message}
-          </div>
-        )}
-
-        {lastSyncResult?.status === 'failed' && (
-          <div className="mb-4 p-3 border rounded-lg text-primary">
-            Sync failed: {lastSyncResult.error_message || 'Unknown sync failure'}
-          </div>
-        )}
-
-        {lastSyncResult?.status === 'completed' && (
-          <div className="mb-4 p-3 border rounded-lg text-primary">
-            Synced {lastSyncResult.messages_processed} messages
-          </div>
-        )}
-
-        {isMessagesError && (
-          <div className="mb-4 p-3 border rounded-lg flex items-center justify-between gap-4">
-            <span className="text-primary">Failed to load messages: {(messagesError as Error).message}</span>
-            <button
-              onClick={() => refetchMessages()}
-              className="px-3 py-1 bg-primary text-surface rounded hover:opacity-80 transition-opacity"
-            >
-              Retry
-            </button>
-          </div>
-        )}
-
-        <div className="border rounded-xl p-4">
-          <MessageList
-            messages={messagesData?.messages || []}
-            isLoading={isLoading}
-          />
+          {syncProgress.progress_percent != null && (
+            <div className="w-full bg-surface-hover rounded-full h-1">
+              <div
+                className="bg-tg-blue h-1 rounded-full transition-all duration-500"
+                style={{ width: `${syncProgress.progress_percent}%` }}
+              />
+            </div>
+          )}
         </div>
+      )}
+
+      {/* Status banners */}
+      {syncMutation.isError && (
+        <div className="px-4 py-2 bg-surface border-b text-[13px] text-primary shrink-0">
+          Sync failed: {(syncMutation.error as Error).message}
+        </div>
+      )}
+      {lastSyncResult?.status === 'failed' && (
+        <div className="px-4 py-2 bg-surface border-b text-[13px] text-primary shrink-0">
+          Sync failed: {lastSyncResult.error_message || 'Unknown error'}
+        </div>
+      )}
+      {lastSyncResult?.status === 'completed' && (
+        <div className="px-4 py-2 bg-surface border-b text-[13px] text-primary shrink-0">
+          Synced {lastSyncResult.messages_processed.toLocaleString()} messages
+        </div>
+      )}
+
+      {/* Message area */}
+      <div className="flex-1 min-h-0">
+        <MessageList chatId={id} onSyncMore={handleSyncMore} isSyncing={isSyncRunning} />
       </div>
-    </main>
+    </div>
   )
 }

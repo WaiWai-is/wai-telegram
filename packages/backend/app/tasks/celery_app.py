@@ -29,8 +29,8 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.digest_tasks.generate_all_digests",
         "schedule": 3600,  # Every hour — per-user hour matching inside task
     },
-    "auto-sync-users": {
-        "task": "app.tasks.sync_tasks.auto_sync_users",
+    "listener-health-check": {
+        "task": "app.tasks.sync_tasks.listener_health_check",
         "schedule": 300,  # Every 5 minutes
     },
 }

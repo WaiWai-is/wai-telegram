@@ -9,6 +9,18 @@
   --color-tertiary: rgba(0, 0, 0, 0.4);
   --color-border: rgba(0, 0, 0, 0.08);
   --color-surface-hover: rgba(0, 0, 0, 0.03);
+
+  /* Telegram chat colors */
+  --chat-bg: #E8ECEE;
+  --bubble-outgoing: #EFFDDE;
+  --bubble-incoming: #FFFFFF;
+  --bubble-outgoing-text: #000000;
+  --bubble-incoming-text: #000000;
+  --timestamp-color: #8E9BA4;
+  --date-pill-bg: rgba(0, 0, 0, 0.12);
+  --date-pill-text: #FFFFFF;
+  --chat-list-hover: rgba(0, 0, 0, 0.06);
+  --sync-button-bg: #3390EC;
 }
 
 .dark {
@@ -18,6 +30,17 @@
   --color-tertiary: rgba(255, 255, 255, 0.4);
   --color-border: rgba(255, 255, 255, 0.1);
   --color-surface-hover: rgba(255, 255, 255, 0.05);
+
+  /* Telegram chat colors — dark */
+  --chat-bg: #0E1621;
+  --bubble-outgoing: #2B5278;
+  --bubble-incoming: #182533;
+  --bubble-outgoing-text: #FFFFFF;
+  --bubble-incoming-text: #FFFFFF;
+  --timestamp-color: #6D7F8F;
+  --date-pill-bg: rgba(0, 0, 0, 0.35);
+  --date-pill-text: rgba(255, 255, 255, 0.8);
+  --chat-list-hover: rgba(255, 255, 255, 0.06);
 }
 
 @layer base {
@@ -31,4 +54,32 @@
 body {
   color: var(--foreground);
   background: var(--background);
+}
+
+/* Bubble tails */
+.bubble-tail-out,
+.bubble-tail-in {
+  position: relative;
+}
+
+.bubble-tail-out::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  right: -8px;
+  width: 12px;
+  height: 16px;
+  background: var(--bubble-outgoing);
+  clip-path: polygon(0 0, 0 100%, 100% 100%);
+}
+
+.bubble-tail-in::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: -8px;
+  width: 12px;
+  height: 16px;
+  background: var(--bubble-incoming);
+  clip-path: polygon(100% 0, 0 100%, 100% 100%);
 }

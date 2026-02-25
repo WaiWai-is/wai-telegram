@@ -2,10 +2,11 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
-import { format } from 'date-fns'
 import { api, Chat } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { ChatAvatar } from '@/components/ChatAvatar'
+import { formatChatListTime } from '@/lib/chat-utils'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import type { SyncJob } from '@/lib/api'
@@ -69,11 +70,8 @@ export default function ChatsPage() {
     setIsRefreshing(true)
     setRefreshError(null)
     try {
-      // Step 1: Discover chats from Telegram
       await api.refreshChats()
       queryClient.invalidateQueries({ queryKey: ['chats'] })
-
-      // Step 2: Start bulk message sync (500 per chat)
       const job = await api.syncAll(500)
       setBulkJobId(job.id)
     } catch (err) {
@@ -85,167 +83,164 @@ export default function ChatsPage() {
 
   if (authLoading || !user) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center h-screen">
         <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
       </div>
     )
   }
 
-  const getChatTypeIcon = (type: Chat['chat_type']) => {
-    switch (type) {
-      case 'private':
-        return '\u{1F464}'
-      case 'group':
-        return '\u{1F465}'
-      case 'supergroup':
-        return '\u{1F465}'
-      case 'channel':
-        return '\u{1F4E2}'
-      default:
-        return '\u{1F4AC}'
-    }
-  }
-
   const isBusy = isRefreshing || isBulkActive
 
   return (
-    <main className="min-h-screen p-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex justify-between items-center mb-6">
-          <div>
-            <Link href="/" className="text-sm text-tertiary hover:text-primary transition-colors mb-2 block">
-              &larr; Back to Dashboard
-            </Link>
-            <h1 className="text-3xl font-light tracking-tight text-primary">
-              Your Chats
-            </h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <ThemeToggle />
-            <button
-              onClick={handleRefresh}
-              disabled={isBusy}
-              className="px-4 py-2 bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity"
-            >
-              {isRefreshing ? 'Refreshing...' : isBulkActive ? 'Syncing...' : 'Refresh from Telegram'}
-            </button>
-          </div>
+    <div className="h-screen flex flex-col bg-surface">
+      {/* Header */}
+      <header className="flex items-center justify-between px-4 py-3 border-b shrink-0">
+        <div className="flex items-center gap-3">
+          <Link
+            href="/"
+            className="flex items-center justify-center w-8 h-8 text-tg-blue hover:opacity-70 transition-opacity"
+            aria-label="Back to dashboard"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </Link>
+          <h1 className="text-[17px] font-semibold text-primary">Chats</h1>
         </div>
+        <div className="flex items-center gap-3">
+          <ThemeToggle />
+          <button
+            onClick={handleRefresh}
+            disabled={isBusy}
+            className="px-3 py-1.5 rounded-lg bg-tg-blue text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
+          >
+            {isRefreshing ? 'Refreshing...' : isBulkActive ? 'Syncing...' : 'Refresh'}
+          </button>
+        </div>
+      </header>
 
-        {refreshError && (
-          <div className="mb-4 p-3 border rounded-lg">
-            <span className="text-sm text-primary">
-              {refreshError}
-            </span>
-          </div>
-        )}
+      {/* Sync banners */}
+      {refreshError && (
+        <div className="px-4 py-2 border-b text-[13px] text-primary">
+          {refreshError}
+        </div>
+      )}
 
-        {/* Bulk sync progress banner */}
-        {isBulkActive && (
-          <div className="mb-4 p-3 border rounded-lg">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
-              <span className="text-sm font-medium text-primary">
-                Syncing messages...
-              </span>
+      {isBulkActive && (
+        <div className="px-4 py-2 border-b shrink-0">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="animate-spin rounded-full h-3 w-3 border-2 border-tg-blue border-t-transparent" />
+            <span className="text-[12px] text-secondary">
+              Syncing messages...
               {bulkProgress?.total_chats != null && (
-                <span className="text-sm text-secondary">
-                  {bulkProgress.chats_completed}/{bulkProgress.total_chats} chats
-                  &middot; {bulkProgress.messages_processed.toLocaleString()} messages
-                </span>
+                <> {bulkProgress.chats_completed}/{bulkProgress.total_chats} chats &middot; {bulkProgress.messages_processed.toLocaleString()} messages</>
               )}
+            </span>
+          </div>
+          {bulkProgress?.total_chats != null && bulkProgress.total_chats > 0 && (
+            <div className="w-full bg-surface-hover rounded-full h-1">
+              <div
+                className="bg-tg-blue h-1 rounded-full transition-all duration-500"
+                style={{ width: `${bulkProgress.progress_percent ?? 0}%` }}
+              />
             </div>
-            {bulkProgress?.total_chats != null && bulkProgress.total_chats > 0 && (
-              <div className="w-full bg-surface-hover rounded-full h-1.5">
-                <div
-                  className="bg-primary h-1.5 rounded-full transition-all duration-500"
-                  style={{ width: `${bulkProgress.progress_percent ?? 0}%` }}
-                />
-              </div>
-            )}
-            {bulkProgress?.current_chat && (
-              <p className="text-xs text-tertiary mt-1 truncate">
-                Currently: {bulkProgress.current_chat}
-              </p>
-            )}
-          </div>
-        )}
+          )}
+        </div>
+      )}
 
-        {/* Bulk sync completed */}
-        {bulkProgress?.status === 'completed' && (
-          <div className="mb-4 p-3 border rounded-lg">
-            <span className="text-sm text-primary">
-              Sync complete &mdash; {bulkProgress.messages_processed.toLocaleString()} messages synced
-            </span>
-          </div>
-        )}
+      {bulkProgress?.status === 'completed' && (
+        <div className="px-4 py-2 border-b text-[13px] text-primary">
+          Sync complete &mdash; {bulkProgress.messages_processed.toLocaleString()} messages synced
+        </div>
+      )}
 
-        {/* Bulk sync failed */}
-        {bulkProgress?.status === 'failed' && (
-          <div className="mb-4 p-3 border rounded-lg">
-            <span className="text-sm text-primary">
-              Sync failed: {bulkProgress.error_message || 'Unknown error'}
-            </span>
-          </div>
-        )}
+      {bulkProgress?.status === 'failed' && (
+        <div className="px-4 py-2 border-b text-[13px] text-primary">
+          Sync failed: {bulkProgress.error_message || 'Unknown error'}
+        </div>
+      )}
 
+      {/* Chat list */}
+      <div className="flex-1 overflow-auto">
         {isLoading ? (
           <div className="flex justify-center py-8">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
           </div>
         ) : error ? (
-          <div className="p-4 border rounded-lg text-primary">
+          <div className="px-4 py-8 text-center text-primary text-[14px]">
             Failed to load chats. Make sure you&apos;ve connected your Telegram account.
           </div>
         ) : !data?.chats.length ? (
           <div className="text-center py-12 text-tertiary">
-            <p className="mb-4">No chats synced yet.</p>
+            <p className="mb-4 text-[14px]">No chats synced yet.</p>
             <Link
               href="/settings"
-              className="text-tertiary hover:text-primary transition-colors"
+              className="text-tg-blue hover:opacity-70 transition-opacity text-[14px]"
             >
               Connect your Telegram account to get started
             </Link>
           </div>
         ) : (
-          <div className="space-y-2">
-            {data.chats.map((chat) => (
-              <Link
-                key={chat.id}
-                href={`/chats/${chat.id}`}
-                className="block p-4 border rounded-lg hover:bg-surface-hover transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">{getChatTypeIcon(chat.chat_type)}</span>
+          <div className="divide-y">
+            {data.chats.map((chat) => {
+              const isSyncing = syncStatusByChat.has(chat.id)
+              const isGroup = chat.chat_type === 'group' || chat.chat_type === 'supergroup' || chat.chat_type === 'channel'
+              const hasPreview = !!chat.last_message_text
+              const hasUnread = chat.unread_count > 0
+
+              return (
+                <Link
+                  key={chat.id}
+                  href={`/chats/${chat.id}`}
+                  className="flex items-center gap-3 px-4 py-[10px] hover:bg-chat-list-hover transition-colors"
+                >
+                  <ChatAvatar title={chat.title} size={48} />
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-medium text-primary truncate">
-                      {chat.title}
-                    </h3>
-                    <div className="flex gap-4 text-sm text-tertiary items-center">
-                      {syncStatusByChat.has(chat.id) ? (
-                        <span className="flex items-center gap-1 text-secondary">
-                          <div className="animate-spin rounded-full h-3 w-3 border border-secondary border-t-transparent" />
-                          Syncing...
+                    <div className="flex justify-between items-baseline gap-2">
+                      <span className="font-medium text-[15px] text-primary truncate">
+                        {chat.title}
+                      </span>
+                      {chat.last_activity_at && (
+                        <span className={`text-[12px] shrink-0 ${hasUnread ? 'text-tg-blue font-medium' : 'text-tertiary'}`}>
+                          {formatChatListTime(chat.last_activity_at)}
                         </span>
-                      ) : chat.total_messages_synced > 0 ? (
-                        <span>{chat.total_messages_synced.toLocaleString()} messages</span>
-                      ) : (
-                        <span className="text-tertiary">Not synced</span>
                       )}
-                      {chat.last_sync_at && (
-                        <span>
-                          Synced {format(new Date(chat.last_sync_at), 'MMM d, h:mm a')}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 min-w-0 text-[14px] text-tertiary truncate">
+                        {isSyncing ? (
+                          <span className="flex items-center gap-1 text-secondary">
+                            <span className="inline-block animate-spin rounded-full h-3 w-3 border border-secondary border-t-transparent" />
+                            Syncing...
+                          </span>
+                        ) : hasPreview ? (
+                          <span>
+                            {isGroup && chat.last_message_sender_name && (
+                              <span className="text-primary font-medium">
+                                {chat.last_message_sender_name}:{' '}
+                              </span>
+                            )}
+                            {chat.last_message_text}
+                          </span>
+                        ) : chat.total_messages_synced > 0 ? (
+                          <span>{chat.total_messages_synced.toLocaleString()} messages</span>
+                        ) : (
+                          <span>Not synced</span>
+                        )}
+                      </div>
+                      {hasUnread && (
+                        <span className="shrink-0 min-w-[20px] h-[20px] px-1.5 rounded-full bg-tg-blue text-white text-[11px] font-medium flex items-center justify-center">
+                          {chat.unread_count > 999 ? '999+' : chat.unread_count}
                         </span>
                       )}
                     </div>
                   </div>
-                  <span className="text-tertiary">&rarr;</span>
-                </div>
-              </Link>
-            ))}
+                </Link>
+              )
+            })}
           </div>
         )}
       </div>
-    </main>
+    </div>
   )
 }

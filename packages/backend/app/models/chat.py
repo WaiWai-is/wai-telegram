@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -32,6 +32,9 @@ class TelegramChat(Base):
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     last_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     total_messages_synced: Mapped[int] = mapped_column(Integer, default=0)
+    last_message_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_message_sender_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    unread_count: Mapped[int | None] = mapped_column(Integer, nullable=True, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
