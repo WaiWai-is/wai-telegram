@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
 env:
   SSH_OPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes
   DEPLOY_DIR: /opt/wai-telegram
@@ -171,7 +175,6 @@ jobs:
           set -e
           cd /opt/wai-telegram/packages/frontend
           set -a && source /opt/wai-telegram/.env.production && set +a
-          export NODE_OPTIONS="--max-old-space-size=512"
           npm ci --prefer-offline
           npm run build
           chown -R wai:wai /opt/wai-telegram/packages/frontend
