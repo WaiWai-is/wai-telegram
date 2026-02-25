@@ -262,9 +262,16 @@ class TelegramListener:
                 if inserted:
                     inserted_id = inserted[0]
 
-                # Update chat's last_message_id
+                # Update chat's last_message_id and preview
                 if not chat.last_message_id or message.id > chat.last_message_id:
                     chat.last_message_id = message.id
+                    preview = message.text[:200] if message.text else None
+                    if not preview and message.media:
+                        media_label = _get_media_type(message.media)
+                        preview = f"[{media_label}]" if media_label else "[media]"
+                    chat.last_message_text = preview
+                    chat.last_message_sender_name = _get_sender_name(sender)
+                    chat.last_activity_at = message.date
                 chat.last_sync_at = datetime.now(UTC)
                 chat.total_messages_synced = (
                     await db.execute(
@@ -358,14 +365,17 @@ class TelegramListener:
     async def _heartbeat_loop(self):
         """Refresh Redis active keys every 30s, only for connected clients."""
         while True:
-            for user_id, client in list(self.clients.items()):
-                if client.is_connected():
-                    await self.redis.set(
-                        f"listener:active:{user_id}", "1", ex=ACTIVE_KEY_TTL
-                    )
-                else:
-                    logger.warning(f"Client disconnected for user {user_id}")
-                    await self.redis.delete(f"listener:active:{user_id}")
+            try:
+                for user_id, client in list(self.clients.items()):
+                    if client.is_connected():
+                        await self.redis.set(
+                            f"listener:active:{user_id}", "1", ex=ACTIVE_KEY_TTL
+                        )
+                    else:
+                        logger.warning(f"Client disconnected for user {user_id}")
+                        await self.redis.delete(f"listener:active:{user_id}")
+            except Exception as e:
+                logger.error(f"Heartbeat loop error: {e}")
             await asyncio.sleep(HEARTBEAT_INTERVAL)
 
     async def _health_check_loop(self):

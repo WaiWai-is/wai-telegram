@@ -296,6 +296,7 @@ async def sync_messages(
             preview = f"[{latest_msg.media_type}]"
         chat.last_message_text = preview
         chat.last_message_sender_name = latest_msg.sender_name
+        chat.last_activity_at = latest_msg.sent_at
 
     job.messages_processed = messages_synced
     job.last_processed_id = last_id
