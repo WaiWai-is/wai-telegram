@@ -22,18 +22,16 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      - name: Install dependencies
+        run: uv sync --dev
       - name: Lint backend
-        working-directory: packages/backend
-        run: |
-          uv sync --dev
-          uv run ruff check .
-          uv run ruff format --check .
+        run: uv run ruff check packages/backend
+      - name: Format check backend
+        run: uv run ruff format --check packages/backend
       - name: Lint MCP server
-        working-directory: packages/mcp-server
-        run: |
-          uv sync --dev
-          uv run ruff check .
-          uv run ruff format --check .
+        run: uv run ruff check packages/mcp-server
+      - name: Format check MCP server
+        run: uv run ruff format --check packages/mcp-server
 
   typescript-lint:
     runs-on: ubuntu-latest
@@ -92,7 +90,6 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies
-        working-directory: packages/backend
         run: uv sync --dev
       - name: Create pgvector extension
         run: |
@@ -147,7 +144,6 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies
-        working-directory: packages/mcp-server
         run: uv sync --dev
       - name: Run tests
         working-directory: packages/mcp-server
