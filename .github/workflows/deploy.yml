@@ -282,6 +282,18 @@ jobs:
           exit 1
           EOF
 
+      - name: Stop services before deploy
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          # Stop services that hold DB connections so migrations can run
+          systemctl stop wai-backend wai-celery wai-celery-beat wai-listener || true
+          sleep 2
+          EOF
+
       - name: Install backend dependencies
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
