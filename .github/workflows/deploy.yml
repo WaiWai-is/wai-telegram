@@ -369,15 +369,25 @@ jobs:
         run: |
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
-          # Wait for services to fully initialize (celery takes ~20s)
-          sleep 20
+          # Wait for services to initialize (celery needs ~30s on 2GB server)
+          sleep 30
           systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend wai-listener
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-db$'
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-redis$'
-          cd /opt/wai-telegram/packages/backend
-          /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app inspect ping --timeout=10 | grep -q pong
           curl -sf --max-time 10 http://127.0.0.1:8000/health/live > /dev/null
           curl -sf --max-time 10 http://127.0.0.1:8000/health/ready > /dev/null
+          # Celery ping with retries (worker may still be starting)
+          cd /opt/wai-telegram/packages/backend
+          for i in 1 2 3; do
+            if /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app inspect ping --timeout=15 2>/dev/null | grep -q pong; then
+              echo "Celery worker responding"
+              exit 0
+            fi
+            echo "Celery not ready yet, attempt $i/3..."
+            sleep 10
+          done
+          echo "Celery worker failed to respond"
+          exit 1
           EOF
 
       - name: Health check
