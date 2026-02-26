@@ -341,6 +341,9 @@ export interface SearchResult {
   is_outgoing: boolean
   sent_at: string
   similarity: number
+  has_media: boolean
+  media_type: string | null
+  transcribed_at: string | null
 }
 
 export interface ChatListPage {

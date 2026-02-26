@@ -25,7 +25,7 @@ dependencies = [
     "httpx>=0.28.0",
     "email-validator>=2.2.0",
     "slowapi>=0.1.9",  # Rate limiting
-    "deepgram-sdk>=5.0.0",  # Voice transcription
+    "deepgram-sdk>=6.0.0",  # Voice transcription (v6 API)
 ]
 
 [project.optional-dependencies]

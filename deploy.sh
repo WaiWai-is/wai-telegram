@@ -38,6 +38,8 @@ rsync -avz --exclude '.git' \
     --exclude '*.pyc' \
     --exclude 'code/' \
     --exclude '.DS_Store' \
+    --exclude '.env.production' \
+    --exclude '.env' \
     ./ "${SERVER}:${DEPLOY_DIR}/"
 
 # Step 2: Run remote setup commands
@@ -89,6 +91,8 @@ if [ -d /opt/wai-telegram/packages ]; then
     mv "${TMP_BACKUP}" "${FINAL_BACKUP}"
     ln -sfn "${FINAL_BACKUP}" /opt/wai-telegram-backup
     echo "Backup created at ${FINAL_BACKUP}"
+    # Keep only the 5 most recent backups
+    ls -dt /opt/wai-telegram-backups/*/ 2>/dev/null | tail -n +6 | xargs rm -rf
 fi
 
 # Fix ownership
@@ -112,16 +116,7 @@ cd ../..
 
 # Build frontend
 echo "Building frontend..."
-cd packages/frontend
-set -a && source /opt/wai-telegram/.env.production && set +a
-if [ -z "${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}" ]; then
-    echo "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is required for production builds"
-    exit 1
-fi
-npm ci
-npm run build
-chown -R wai:wai /opt/wai-telegram/packages/frontend
-cd ../..
+su - wai -c 'cd /opt/wai-telegram/packages/frontend && set -a && source /opt/wai-telegram/.env.production && set +a && if [ -z "${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}" ]; then echo "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is required for production builds"; exit 1; fi && npm ci --prefer-offline && npm run build'
 
 # Install systemd services
 echo "Installing systemd services..."

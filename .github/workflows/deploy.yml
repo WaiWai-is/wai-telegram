@@ -74,6 +74,8 @@ jobs:
             mv "${TMP_BACKUP}" "${FINAL_BACKUP}"
             ln -sfn "${FINAL_BACKUP}" /opt/wai-telegram-backup
             echo "Backup created at ${FINAL_BACKUP}"
+            # Keep only the 5 most recent backups
+            ls -dt /opt/wai-telegram-backups/*/ 2>/dev/null | tail -n +6 | xargs rm -rf
           fi
           EOF
 
@@ -173,11 +175,7 @@ jobs:
         run: |
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
-          cd /opt/wai-telegram/packages/frontend
-          set -a && source /opt/wai-telegram/.env.production && set +a
-          npm ci --prefer-offline
-          npm run build
-          chown -R wai:wai /opt/wai-telegram/packages/frontend
+          su - wai -c 'cd /opt/wai-telegram/packages/frontend && set -a && source /opt/wai-telegram/.env.production && set +a && npm ci --prefer-offline && npm run build'
           EOF
 
       - name: Deploy systemd services
