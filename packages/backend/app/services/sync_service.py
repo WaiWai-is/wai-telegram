@@ -208,6 +208,19 @@ async def sync_messages(
 
     messages_seen = 0
 
+    # Pre-load telegram_message_ids that already have transcription in this chat.
+    # This avoids expensive re-download + re-transcribe for already-transcribed msgs.
+    already_transcribed: set[int] = set()
+    _rows = (
+        await db.execute(
+            select(TelegramMessage.telegram_message_id).where(
+                TelegramMessage.chat_id == chat_id,
+                TelegramMessage.transcribed_at.isnot(None),
+            )
+        )
+    ).scalars().all()
+    already_transcribed = set(_rows)
+
     # Always fetch newest-first with the requested limit.
     # When limit is None ("Sync All"): Telethon fetches entire chat history.
     # When limit is N ("Sync Latest N"): Telethon fetches the N newest messages.
@@ -240,13 +253,17 @@ async def sync_messages(
                 "transcribed_at": None,
             }
 
-            # Transcribe voice/video_note messages
-            if media_type in TRANSCRIBABLE_MEDIA_TYPES:
+            # Transcribe voice/video_note messages (skip if already transcribed in DB)
+            if (
+                media_type in TRANSCRIBABLE_MEDIA_TYPES
+                and message.id not in already_transcribed
+            ):
                 try:
                     transcript = await download_and_transcribe(client, message)
                     if transcript:
                         msg_values["text"] = transcript
                         msg_values["transcribed_at"] = datetime.now(UTC)
+                        already_transcribed.add(message.id)
                 except Exception as e:
                     logger.warning(
                         f"Transcription failed for message {message.id}: {e}"
@@ -289,10 +306,10 @@ async def sync_messages(
                 if on_progress:
                     on_progress(messages_seen)
 
-                # Update job progress
+                # Commit batch so progress is visible and work survives interruptions
                 job.messages_processed = messages_synced
                 job.last_processed_id = last_id
-                await db.flush()
+                await db.commit()
 
                 # Progressive jittered delay — increases every N batches
                 progressive_extra = (
@@ -366,7 +383,7 @@ async def sync_messages(
 
         job.messages_processed = messages_synced
         job.last_processed_id = last_id
-        await db.flush()
+        await db.commit()
 
         return messages_synced
     finally:
