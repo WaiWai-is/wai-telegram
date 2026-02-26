@@ -853,11 +853,14 @@ export default function SettingsPage() {
                     <th className="text-left px-4 py-2.5 font-medium text-secondary">Name</th>
                     <th className="text-left px-4 py-2.5 font-medium text-secondary">Key</th>
                     <th className="text-left px-4 py-2.5 font-medium text-secondary">Status</th>
+                    <th className="text-left px-4 py-2.5 font-medium text-secondary">Expires</th>
                     <th className="text-right px-4 py-2.5 font-medium text-secondary">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {apiKeys.map((key) => (
+                  {apiKeys.map((key) => {
+                    const isExpired = key.expires_at && new Date(key.expires_at) < new Date()
+                    return (
                     <tr key={key.id} className="border-t">
                       <td className="px-4 py-2.5 text-primary">{key.name}</td>
                       <td className="px-4 py-2.5">
@@ -865,12 +868,19 @@ export default function SettingsPage() {
                       </td>
                       <td className="px-4 py-2.5">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                          key.is_active
+                          isExpired
+                            ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                            : key.is_active
                             ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
                             : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
                         }`}>
-                          {key.is_active ? 'Active' : 'Inactive'}
+                          {isExpired ? 'Expired' : key.is_active ? 'Active' : 'Inactive'}
                         </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-tertiary">
+                        {key.expires_at
+                          ? new Date(key.expires_at).toLocaleDateString()
+                          : 'Never'}
                       </td>
                       <td className="px-4 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -910,7 +920,8 @@ export default function SettingsPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

@@ -50,6 +50,12 @@ class UserResponse(BaseModel):
 
 class ApiKeyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    expires_in_days: int | None = Field(
+        default=365,
+        ge=1,
+        le=3650,
+        description="Key expiration in days (1-3650). Null for no expiration.",
+    )
 
 
 class ApiKeyResponse(BaseModel):
@@ -59,6 +65,7 @@ class ApiKeyResponse(BaseModel):
     is_active: bool
     created_at: datetime
     last_used_at: datetime | None
+    expires_at: datetime | None
 
     class Config:
         from_attributes = True
@@ -69,6 +76,7 @@ class ApiKeyCreateResponse(BaseModel):
     name: str
     api_key: str
     key_hint: str
+    expires_at: datetime | None
     message: str = "Store this API key securely. It won't be shown again."
 
 

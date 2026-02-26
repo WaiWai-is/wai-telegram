@@ -413,6 +413,7 @@ export interface ApiKeyInfo {
   is_active: boolean
   created_at: string
   last_used_at: string | null
+  expires_at: string | null
 }
 
 export interface ApiKeyCreateResponse {
@@ -420,5 +421,6 @@ export interface ApiKeyCreateResponse {
   name: string
   api_key: string
   key_hint: string
+  expires_at: string | null
   message: string
 }

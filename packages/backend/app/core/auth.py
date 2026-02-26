@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -15,6 +16,8 @@ from app.core.database import get_db
 from app.core.security import compute_api_key_prefix, decode_token, verify_api_key
 from app.models.api_key import ApiKey
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 api_key_scheme = HTTPBearer(auto_error=False)
@@ -54,6 +57,21 @@ async def get_current_user(
         # Iterate candidates to handle (unlikely) prefix collisions
         for api_key_record in result.scalars().all():
             if verify_api_key(api_key.credentials, api_key_record.key_hash):
+                # Check expiration
+                if (
+                    api_key_record.expires_at
+                    and api_key_record.expires_at < datetime.now(UTC)
+                ):
+                    logger.warning(
+                        "Expired API key used: %s (expired %s)",
+                        api_key_record.key_hint,
+                        api_key_record.expires_at.isoformat(),
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="API key has expired",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
                 api_key_record.last_used_at = datetime.now(UTC)
                 await db.flush()
                 result = await db.execute(

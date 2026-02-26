@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
@@ -158,6 +159,7 @@ async def list_api_keys(
             is_active=k.is_active,
             created_at=k.created_at,
             last_used_at=k.last_used_at,
+            expires_at=k.expires_at,
         )
         for k in keys
     ]
@@ -185,12 +187,17 @@ async def create_api_key(
 
     raw_key = generate_api_key()
 
+    expires_at = None
+    if body.expires_in_days is not None:
+        expires_at = datetime.now(UTC) + timedelta(days=body.expires_in_days)
+
     api_key = ApiKey(
         user_id=user.id,
         name=body.name,
         key_hash=hash_api_key(raw_key),
         key_prefix=compute_api_key_prefix(raw_key),
         key_hint=get_key_hint(raw_key),
+        expires_at=expires_at,
     )
     db.add(api_key)
     await db.flush()
@@ -200,6 +207,7 @@ async def create_api_key(
         name=api_key.name,
         api_key=raw_key,
         key_hint=api_key.key_hint,
+        expires_at=api_key.expires_at,
     )
 
 
@@ -285,4 +293,5 @@ async def toggle_api_key(
         is_active=api_key.is_active,
         created_at=api_key.created_at,
         last_used_at=api_key.last_used_at,
+        expires_at=api_key.expires_at,
     )

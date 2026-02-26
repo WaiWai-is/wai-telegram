@@ -208,13 +208,12 @@ async def sync_messages(
 
     messages_seen = 0
 
-    # When limit is set ("Sync Latest N"): always fetch newest-first regardless
-    # of last_message_id — handles stale IDs from old syncs, dedup via DB constraint.
-    # When limit is None ("Sync All") and last_id exists: incremental catch-up.
-    if last_id and limit is None:
-        iter_kwargs = {"min_id": last_id, "reverse": True, "wait_time": 0.5}
-    else:
-        iter_kwargs = {"limit": limit, "wait_time": 0.5}
+    # Always fetch newest-first with the requested limit.
+    # When limit is None ("Sync All"): Telethon fetches entire chat history.
+    # When limit is N ("Sync Latest N"): Telethon fetches the N newest messages.
+    # Deduplication is handled by the DB constraint (on_conflict_do_nothing),
+    # so re-fetching already-synced messages is safe.
+    iter_kwargs = {"limit": limit, "wait_time": 0.5}
 
     try:
         async for message in client.iter_messages(chat.telegram_chat_id, **iter_kwargs):
