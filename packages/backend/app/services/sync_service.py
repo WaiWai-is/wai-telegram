@@ -212,13 +212,17 @@ async def sync_messages(
     # This avoids expensive re-download + re-transcribe for already-transcribed msgs.
     already_transcribed: set[int] = set()
     _rows = (
-        await db.execute(
-            select(TelegramMessage.telegram_message_id).where(
-                TelegramMessage.chat_id == chat_id,
-                TelegramMessage.transcribed_at.isnot(None),
+        (
+            await db.execute(
+                select(TelegramMessage.telegram_message_id).where(
+                    TelegramMessage.chat_id == chat_id,
+                    TelegramMessage.transcribed_at.isnot(None),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     already_transcribed = set(_rows)
 
     # Always fetch newest-first with the requested limit.
