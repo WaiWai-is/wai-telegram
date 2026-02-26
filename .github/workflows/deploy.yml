@@ -22,16 +22,14 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - name: Install dependencies
-        run: uv sync --all-extras
       - name: Lint backend
-        run: uv run ruff check packages/backend
+        run: uvx ruff check packages/backend
       - name: Format check backend
-        run: uv run ruff format --check packages/backend
+        run: uvx ruff format --check packages/backend
       - name: Lint MCP server
-        run: uv run ruff check packages/mcp-server
+        run: uvx ruff check packages/mcp-server
       - name: Format check MCP server
-        run: uv run ruff format --check packages/mcp-server
+        run: uvx ruff format --check packages/mcp-server
 
   typescript-lint:
     runs-on: ubuntu-latest
