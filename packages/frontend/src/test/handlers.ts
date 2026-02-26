@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw'
 
-const API_BASE = 'http://test/api/v1'
+const API_BASE = 'http://localhost/api/v1'
 
 export const handlers = [
   // Auth
@@ -150,7 +150,7 @@ export const handlers = [
   }),
 
   http.put(`${API_BASE}/settings`, async ({ request }) => {
-    const body = await request.json()
+    const body = await request.json() as Record<string, unknown>
     return HttpResponse.json({
       digest_enabled: true,
       digest_hour_utc: 9,

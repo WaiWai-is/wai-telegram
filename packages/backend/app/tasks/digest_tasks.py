@@ -25,12 +25,15 @@ def generate_all_digests():
     yesterday = (date.today() - timedelta(days=1)).isoformat()
 
     if not result:
-        return {"date": yesterday, "hour": current_hour, "users_processed": 0, "dispatched": 0}
+        return {
+            "date": yesterday,
+            "hour": current_hour,
+            "users_processed": 0,
+            "dispatched": 0,
+        }
 
     # Dispatch all user digests in parallel
-    job = group(
-        generate_user_digest.s(str(uid), yesterday) for uid in result
-    )
+    job = group(generate_user_digest.s(str(uid), yesterday) for uid in result)
     job.apply_async()
 
     return {
@@ -66,9 +69,7 @@ async def _get_eligible_user_ids(current_hour: int) -> list[UUID]:
 @shared_task
 def generate_user_digest(user_id: str, digest_date: str | None = None):
     """Generate digest for a specific user."""
-    return asyncio.run(
-        _generate_user_digest(UUID(user_id), digest_date)
-    )
+    return asyncio.run(_generate_user_digest(UUID(user_id), digest_date))
 
 
 async def _generate_user_digest(user_id: UUID, digest_date: str | None) -> dict:
@@ -102,7 +103,9 @@ async def _generate_user_digest(user_id: UUID, digest_date: str | None) -> dict:
                     )
                     logger.info(f"Sent digest to Telegram for user {user_id}")
                 except Exception as e:
-                    logger.error(f"Failed to send digest to Telegram for user {user_id}: {e}")
+                    logger.error(
+                        f"Failed to send digest to Telegram for user {user_id}: {e}"
+                    )
 
         return {
             "digest_id": str(digest.id),

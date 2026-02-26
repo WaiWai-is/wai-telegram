@@ -15,7 +15,9 @@ class DailyDigest(Base):
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     digest_date: Mapped[date] = mapped_column(Date, index=True)
     content: Mapped[str] = mapped_column(Text)
     summary_stats: Mapped[dict] = mapped_column(JSONB, default=dict)

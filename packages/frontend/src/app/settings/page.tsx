@@ -217,14 +217,21 @@ interface PlatformConfig {
 
 const PLATFORM_CONFIGS: PlatformConfig[] = [
   {
+    id: 'claude-ai',
+    name: 'Claude.ai',
+    filePath: 'Settings → Connectors → Add custom connector',
+    getConfig: (apiKey) =>
+      `Name: Telegram WAI\nRemote MCP server URL:\nhttps://telegram.waiwai.is/mcp/sse?key=${apiKey}`,
+  },
+  {
     id: 'claude-desktop',
     name: 'Claude Desktop',
     filePath: '~/Library/Application Support/Claude/claude_desktop_config.json',
     getConfig: (apiKey) => JSON.stringify({
       mcpServers: {
-        'telegram-ai': {
+        'telegram-wai': {
           command: 'uvx',
-          args: ['telegram-ai-mcp'],
+          args: ['--from', 'telegram-wai-mcp', 'telegram-wai-mcp'],
           env: {
             TELEGRAM_AI_URL: 'https://telegram.waiwai.is',
             TELEGRAM_AI_KEY: apiKey,
@@ -238,7 +245,7 @@ const PLATFORM_CONFIGS: PlatformConfig[] = [
     name: 'Claude Code',
     filePath: 'Run in terminal',
     getConfig: (apiKey) =>
-      `claude mcp add telegram-ai -- uvx telegram-ai-mcp\n# Then set env vars:\nexport TELEGRAM_AI_URL="https://telegram.waiwai.is"\nexport TELEGRAM_AI_KEY="${apiKey}"`,
+      `claude mcp add telegram-wai -e TELEGRAM_AI_URL=https://telegram.waiwai.is -e TELEGRAM_AI_KEY=${apiKey} -- uvx --from telegram-wai-mcp telegram-wai-mcp`,
   },
   {
     id: 'cursor',
@@ -246,9 +253,9 @@ const PLATFORM_CONFIGS: PlatformConfig[] = [
     filePath: '.cursor/mcp.json',
     getConfig: (apiKey) => JSON.stringify({
       mcpServers: {
-        'telegram-ai': {
+        'telegram-wai': {
           command: 'uvx',
-          args: ['telegram-ai-mcp'],
+          args: ['--from', 'telegram-wai-mcp', 'telegram-wai-mcp'],
           env: {
             TELEGRAM_AI_URL: 'https://telegram.waiwai.is',
             TELEGRAM_AI_KEY: apiKey,
@@ -263,9 +270,9 @@ const PLATFORM_CONFIGS: PlatformConfig[] = [
     filePath: '~/.codeium/windsurf/mcp_config.json',
     getConfig: (apiKey) => JSON.stringify({
       mcpServers: {
-        'telegram-ai': {
+        'telegram-wai': {
           command: 'uvx',
-          args: ['telegram-ai-mcp'],
+          args: ['--from', 'telegram-wai-mcp', 'telegram-wai-mcp'],
           env: {
             TELEGRAM_AI_URL: 'https://telegram.waiwai.is',
             TELEGRAM_AI_KEY: apiKey,
@@ -280,9 +287,9 @@ const PLATFORM_CONFIGS: PlatformConfig[] = [
     filePath: 'Cline MCP settings in VS Code',
     getConfig: (apiKey) => JSON.stringify({
       mcpServers: {
-        'telegram-ai': {
+        'telegram-wai': {
           command: 'uvx',
-          args: ['telegram-ai-mcp'],
+          args: ['--from', 'telegram-wai-mcp', 'telegram-wai-mcp'],
           env: {
             TELEGRAM_AI_URL: 'https://telegram.waiwai.is',
             TELEGRAM_AI_KEY: apiKey,

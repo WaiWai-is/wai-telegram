@@ -31,7 +31,10 @@ class User(Base):
         "DailyDigest", back_populates="user", cascade="all, delete-orphan"
     )
     settings: Mapped["UserSettings | None"] = relationship(
-        "UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan"
+        "UserSettings",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
     api_keys: Mapped[list["ApiKey"]] = relationship(
         "ApiKey", back_populates="user", cascade="all, delete-orphan"

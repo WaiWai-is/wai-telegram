@@ -5,10 +5,11 @@ Revises: 005_user_settings
 Create Date: 2026-02-25
 
 """
+
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "006_add_digest_timezone"
@@ -20,7 +21,9 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column(
         "user_settings",
-        sa.Column("digest_timezone", sa.String(50), nullable=False, server_default="UTC"),
+        sa.Column(
+            "digest_timezone", sa.String(50), nullable=False, server_default="UTC"
+        ),
     )
 
 

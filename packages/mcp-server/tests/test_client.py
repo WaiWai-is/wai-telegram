@@ -1,10 +1,9 @@
-from unittest.mock import AsyncMock, patch, MagicMock
-from datetime import date, datetime, UTC
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 import httpx
-
-from telegram_ai_mcp.client import TelegramAIClient
+import pytest
+from telegram_wai_mcp.client import TelegramAIClient
 
 
 @pytest.fixture
@@ -52,7 +51,9 @@ class TestSearchMessages:
             json={"results": [], "query": "hello", "total": 0},
             request=httpx.Request("POST", "http://test:8000/api/v1/search"),
         )
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ):
             result = await client.search_messages("hello")
             assert result["total"] == 0
 
@@ -63,7 +64,9 @@ class TestSearchMessages:
             json={"results": [], "query": "test", "total": 0},
             request=httpx.Request("POST", "http://test:8000/api/v1/search"),
         )
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response) as mock_req:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_req:
             await client.search_messages(
                 "test",
                 chat_ids=["chat-1"],
@@ -82,7 +85,9 @@ class TestSearchMessages:
             json={"results": [], "query": "test", "total": 0},
             request=httpx.Request("POST", "http://test:8000/api/v1/search"),
         )
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response) as mock_req:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_req:
             await client.search_messages("test", limit=500)
             payload = mock_req.call_args.kwargs.get("json", {})
             assert payload["limit"] == 100  # clamped to MAX_LIMIT
@@ -96,7 +101,9 @@ class TestListChats:
             json={"chats": [], "has_more": False, "total": 0},
             request=httpx.Request("GET", "http://test:8000/api/v1/chats"),
         )
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ):
             result = await client.list_chats()
             assert result["total"] == 0
 
@@ -107,7 +114,9 @@ class TestListChats:
             json={"chats": [], "has_more": False, "total": 0},
             request=httpx.Request("GET", "http://test:8000/api/v1/chats"),
         )
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response) as mock_req:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_req:
             await client.list_chats(chat_type="private")
             params = mock_req.call_args.kwargs.get("params", {})
             assert params["chat_type"] == "private"
@@ -121,7 +130,9 @@ class TestGetMessages:
             json={"messages": [], "has_more": False, "total": 0},
             request=httpx.Request("GET", "http://test:8000/api/v1/chats/chat-1/messages"),
         )
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ):
             result = await client.get_messages("chat-1")
             assert "messages" in result
 
@@ -132,7 +143,9 @@ class TestGetMessages:
             json={"messages": [], "has_more": False, "total": 0},
             request=httpx.Request("GET", "http://test:8000/api/v1/chats/chat-1/messages"),
         )
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response) as mock_req:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_req:
             await client.get_messages("chat-1", before="cursor123")
             params = mock_req.call_args.kwargs.get("params", {})
             assert params["before"] == "cursor123"
@@ -146,7 +159,9 @@ class TestSyncChat:
             json={"id": "job-1", "status": "pending"},
             request=httpx.Request("POST", "http://test:8000/api/v1/sync/chats/chat-1"),
         )
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ):
             result = await client.sync_chat("chat-1")
             assert result["status"] == "pending"
 
@@ -160,17 +175,25 @@ class TestErrorHandling:
             request=httpx.Request("GET", "http://test:8000/api/v1/chats/bad"),
         )
         mock_response.raise_for_status = MagicMock(
-            side_effect=httpx.HTTPStatusError("Not found", request=mock_response.request, response=mock_response)
+            side_effect=httpx.HTTPStatusError(
+                "Not found", request=mock_response.request, response=mock_response
+            )
         )
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ):
             with pytest.raises(RuntimeError, match="HTTP 404"):
                 await client.get_chat("bad")
 
     @pytest.mark.asyncio
     async def test_request_error_raises_runtime_error(self, client):
         with patch.object(
-            client._client, "request", new_callable=AsyncMock,
-            side_effect=httpx.RequestError("Connection refused", request=httpx.Request("GET", "http://test"))
+            client._client,
+            "request",
+            new_callable=AsyncMock,
+            side_effect=httpx.RequestError(
+                "Connection refused", request=httpx.Request("GET", "http://test")
+            ),
         ):
             with pytest.raises(RuntimeError, match="request failed"):
                 await client.list_chats()

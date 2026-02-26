@@ -6,10 +6,10 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from telegram_ai_mcp.client import TelegramAIClient
+from telegram_wai_mcp.client import TelegramAIClient
 
 # Initialize MCP server
-server = Server("telegram-ai-mcp")
+server = Server("telegram-wai-mcp")
 client: TelegramAIClient | None = None
 MAX_LIMIT = 200
 MAX_LOOKBACK_DAYS = 180
@@ -122,7 +122,13 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="search_messages",
-            description="Semantic search across your Telegram messages. Finds messages by meaning, not just keywords.",
+            description=(
+                "Semantic search across synced Telegram messages. "
+                "Finds messages by meaning using vector embeddings, not just keywords. "
+                "Only searches messages that have been synced — if a chat was recently added "
+                "or has few synced messages, use sync_chat first to download more history. "
+                "Returns up to 100 results ranked by relevance."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -136,7 +142,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum results to return (default: 20)",
+                        "description": "Maximum results to return (1-100, default: 20)",
                         "default": 20,
                     },
                     "date_from": {
@@ -153,7 +159,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="list_chats",
-            description="List your synced Telegram chats (private, group, supergroup, or channel).",
+            description=(
+                "List synced Telegram chats with metadata including message counts and last sync time. "
+                "Use this to discover available chats and their IDs before reading messages or searching. "
+                "Each chat shows total_messages_synced — if this number seems low for an active chat, "
+                "use sync_chat to download more history."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -167,7 +178,15 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_chat_messages",
-            description="Read messages from a specific chat with pagination. Use the 'before' cursor to page through history.",
+            description=(
+                "Read messages from a specific chat with cursor-based pagination. "
+                "Returns messages newest-first. To page through history, pass the next_cursor "
+                "value from the previous response as the 'before' parameter. "
+                "IMPORTANT: When you reach 'End of synced messages', it means you've seen all "
+                "messages currently in the database — but there may be older messages in Telegram "
+                "that haven't been synced yet. The response includes total_messages_synced count. "
+                "To download more history, use sync_chat with message_limit=0 for a full sync."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -177,12 +196,12 @@ async def list_tools() -> list[Tool]:
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Number of messages to return (default: 50, max: 200)",
+                        "description": "Number of messages to return per page (1-200, default: 50)",
                         "default": 50,
                     },
                     "before": {
                         "type": "string",
-                        "description": "Pagination cursor - pass next_cursor from a previous response to get older messages",
+                        "description": "Pagination cursor from previous response's next_cursor — pass this to get the next (older) page of messages",
                     },
                 },
                 "required": ["chat_id"],
@@ -190,7 +209,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_daily_digest",
-            description="Get an AI-generated daily digest summarizing your Telegram activity.",
+            description=(
+                "Get an AI-generated daily digest summarizing Telegram activity for a specific date. "
+                "Covers the top active chats with message counts and key discussion points. "
+                "Defaults to yesterday if no date is specified."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -203,7 +226,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_chat_summary",
-            description="Get a summary of activity in a specific chat over recent days.",
+            description=(
+                "Get a summary of recent activity in a specific chat. "
+                "Shows message count and the most recent messages over the specified period. "
+                "For comprehensive history, use get_chat_messages with pagination instead."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -213,7 +240,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "days": {
                         "type": "integer",
-                        "description": "Number of days to include (default: 7)",
+                        "description": "Number of days to include (1-180, default: 7)",
                         "default": 7,
                     },
                 },
@@ -222,7 +249,14 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="sync_chat",
-            description="Trigger a message sync from Telegram for a specific chat. Use when you need the latest messages or when a chat has incomplete data.",
+            description=(
+                "Download messages from Telegram for a specific chat. "
+                "Use this when: (1) a chat has no or few synced messages, "
+                "(2) you reached 'End of synced messages' but need older history, "
+                "(3) you need the very latest messages that arrived after the last sync. "
+                "Set message_limit=0 to download the ENTIRE chat history (recommended for first sync). "
+                "The sync runs in the background — use get_sync_status to check progress."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -232,8 +266,8 @@ async def list_tools() -> list[Tool]:
                     },
                     "message_limit": {
                         "type": "integer",
-                        "description": "Maximum messages to sync (default: 500)",
-                        "default": 500,
+                        "description": "Maximum messages to download. 0 = unlimited (full history). Default: 0 (download all messages).",
+                        "default": 0,
                     },
                 },
                 "required": ["chat_id"],
@@ -241,7 +275,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_sync_status",
-            description="Check the progress of a sync job started with sync_chat.",
+            description=(
+                "Check the progress of a sync job started with sync_chat. "
+                "Returns status (pending/in_progress/completed/failed), messages processed count, "
+                "and progress percentage. Poll this every few seconds until status is 'completed'."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -323,11 +361,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         elif name == "sync_chat":
             chat_id = _require_str(args, "chat_id")
             message_limit = _optional_int(
-                args, "message_limit", default=500, minimum=1, maximum=10000
+                args, "message_limit", default=0, minimum=0, maximum=10000
             )
             result = await api.sync_chat(
                 chat_id=chat_id,
-                message_limit=message_limit,
+                message_limit=message_limit if message_limit > 0 else None,
             )
             return format_sync_started(result)
 
@@ -352,7 +390,7 @@ def format_search_results(result: dict) -> list[TextContent]:
 
     total = result.get("total", 0)
     query = result.get("query", "")
-    lines = [f"Found {total} messages for query: \"{query}\"\n"]
+    lines = [f'Found {total} messages for query: "{query}"\n']
     for r in result.get("results", []):
         sender = r.get("sender_name") or ("You" if r.get("is_outgoing") else "Unknown")
         text = _format_media_label(r)[:200]
@@ -360,8 +398,7 @@ def format_search_results(result: dict) -> list[TextContent]:
         sent_at = _format_date(r.get("sent_at"))
         chat_title = r.get("chat_title") or "Unknown"
         lines.append(
-            f"[{chat_title}] {sender}: {text}\n"
-            f"  - Sent: {sent_at} | Relevance: {similarity:.0f}%\n"
+            f"[{chat_title}] {sender}: {text}\n  - Sent: {sent_at} | Relevance: {similarity:.0f}%\n"
         )
     return [TextContent(type="text", text="\n".join(lines))]
 
@@ -377,9 +414,10 @@ def format_chat_list(result: dict) -> list[TextContent]:
         title = chat.get("title", "Unknown")
         chat_type = chat.get("chat_type", "unknown")
         chat_id = chat.get("id", "unknown")
+        last_sync = chat.get("last_sync_at")
+        sync_info = f"Last synced: {_format_date(last_sync)}" if last_sync else "Never synced"
         lines.append(
-            f"• {title} ({chat_type})\n"
-            f"  ID: {chat_id} | Messages: {synced}\n"
+            f"- {title} ({chat_type})\n  ID: {chat_id} | Messages synced: {synced} | {sync_info}\n"
         )
     return [TextContent(type="text", text="\n".join(lines))]
 
@@ -389,6 +427,9 @@ def format_chat_messages(result: dict) -> list[TextContent]:
     messages = result.get("messages", [])
     if not messages:
         return [TextContent(type="text", text="No messages found in this chat.")]
+
+    total_synced = result.get("total_messages_synced")
+    last_sync = result.get("last_sync_at")
 
     lines = [f"Messages ({len(messages)} returned):\n"]
     for msg in messages:
@@ -400,9 +441,22 @@ def format_chat_messages(result: dict) -> list[TextContent]:
     has_more = result.get("has_more", False)
     next_cursor = result.get("next_cursor")
     if has_more and next_cursor:
-        lines.append(f"\n--- More messages available. Use before=\"{next_cursor}\" to continue ---")
-    elif not has_more:
-        lines.append("\n--- End of messages ---")
+        lines.append(
+            f'\n--- More messages available. Use before="{next_cursor}" to load the next page ---'
+        )
+    else:
+        # End of synced messages — provide context
+        sync_parts = []
+        if total_synced is not None:
+            sync_parts.append(f"{total_synced} messages synced in total")
+        if last_sync:
+            sync_parts.append(f"last synced: {_format_date(last_sync)}")
+        sync_info = " (" + ", ".join(sync_parts) + ")" if sync_parts else ""
+        lines.append(
+            f"\n--- End of synced messages{sync_info}. "
+            f"There may be older messages in Telegram not yet downloaded. "
+            f"Use sync_chat with message_limit=0 to download full history. ---"
+        )
 
     return [TextContent(type="text", text="\n".join(lines))]
 
@@ -422,16 +476,35 @@ def format_digest(result: dict) -> list[TextContent]:
 def format_chat_summary(result: dict) -> list[TextContent]:
     """Format chat summary for display."""
     chat = result.get("chat", {})
+    total_synced = chat.get("total_messages_synced", 0)
+    last_sync = chat.get("last_sync_at")
+    msg_count = result.get("message_count", 0)
+    period = result.get("period_days", "unknown")
+
     lines = [
-        f"Chat Summary: {chat.get('title', 'Unknown')}\n",
-        f"Period: Last {result.get('period_days', 'unknown')} days\n",
-        f"Messages: {result.get('message_count', 0)}\n",
-        "\nRecent messages:\n",
+        f"Chat: {chat.get('title', 'Unknown')}\n",
+        f"Period: Last {period} days | Messages in period: {msg_count} | Total synced: {total_synced}\n",
     ]
-    for msg in result.get("messages", [])[:10]:
-        sender = msg.get("sender_name", "Unknown")
-        text = _format_media_label(msg)[:100]
-        lines.append(f"• {sender}: {text}\n")
+    if last_sync:
+        lines.append(f"Last synced: {_format_date(last_sync)}\n")
+
+    recent = result.get("messages", [])
+    if recent:
+        lines.append(f"\nRecent messages ({len(recent)} shown):\n")
+        for msg in recent:
+            sender = msg.get("sender_name") or ("You" if msg.get("is_outgoing") else "Unknown")
+            text = _format_media_label(msg)[:150]
+            sent_at = _format_date(msg.get("sent_at"))
+            lines.append(f"[{sent_at}] {sender}: {text}\n")
+    else:
+        lines.append("\nNo messages found in this period.\n")
+
+    if msg_count > len(recent):
+        lines.append(
+            f"\nShowing {len(recent)} of {msg_count} messages. "
+            f"Use get_chat_messages for full paginated access."
+        )
+
     return [TextContent(type="text", text="\n".join(lines))]
 
 
@@ -440,10 +513,10 @@ def format_sync_started(result: dict) -> list[TextContent]:
     job_id = result.get("id") or result.get("job_id", "unknown")
     status = result.get("status", "unknown")
     lines = [
-        f"Sync started successfully.\n",
+        "Sync started successfully.\n",
         f"Job ID: {job_id}\n",
         f"Status: {status}\n",
-        f"\nUse get_sync_status with job_id=\"{job_id}\" to check progress.",
+        f'\nUse get_sync_status with job_id="{job_id}" to check progress.',
     ]
     return [TextContent(type="text", text="\n".join(lines))]
 
@@ -466,9 +539,9 @@ def format_sync_status(result: dict) -> list[TextContent]:
     if error:
         lines.append(f"Error: {error}\n")
     if status == "in_progress":
-        lines.append(f"\nSync is still running. Check again in a few seconds.")
+        lines.append("\nSync is still running. Check again in a few seconds.")
     elif status == "completed":
-        lines.append(f"\nSync completed. You can now read the messages with get_chat_messages.")
+        lines.append("\nSync completed. You can now read the messages with get_chat_messages.")
 
     return [TextContent(type="text", text="\n".join(lines))]
 

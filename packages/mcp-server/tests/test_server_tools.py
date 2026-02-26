@@ -1,7 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-
-from telegram_ai_mcp import server
+from telegram_wai_mcp import server
 
 
 class TestToolList:

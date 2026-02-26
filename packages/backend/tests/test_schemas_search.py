@@ -1,9 +1,8 @@
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
-
 from app.schemas.search import SearchRequest
+from pydantic import ValidationError
 
 
 class TestSearchRequest:
@@ -38,7 +37,7 @@ class TestSearchRequest:
         assert req.chat_ids == [chat_id]
 
     def test_date_filters(self):
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
 
         req = SearchRequest(
             query="hello",

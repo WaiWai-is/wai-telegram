@@ -1,7 +1,6 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from app.services.bot_service import _split_message, send_telegram_message
 
 

@@ -32,9 +32,7 @@ async def generate_embeddings(texts: list[str]) -> list[list[float]]:
     return [item.embedding for item in response.data]
 
 
-async def embed_messages(
-    db: AsyncSession, message_ids: list[UUID]
-) -> int:
+async def embed_messages(db: AsyncSession, message_ids: list[UUID]) -> int:
     """Generate embeddings for messages. Returns count of embedded messages."""
     if not message_ids:
         return 0

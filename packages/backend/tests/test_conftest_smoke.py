@@ -1,15 +1,13 @@
 """Smoke tests to verify the test infrastructure works."""
-from sqlalchemy import select
 
 from app.models.user import User
+from sqlalchemy import select
+
 from tests.factories import (
-    ApiKeyFactory,
-    DailyDigestFactory,
     TelegramChatFactory,
     TelegramMessageFactory,
     TelegramSessionFactory,
     UserFactory,
-    UserSettingsFactory,
 )
 
 
@@ -28,7 +26,9 @@ async def test_db_session_works(db_session):
 
 async def test_test_user_fixture(db_session, test_user):
     """Verify the test_user fixture creates a user in the DB."""
-    result = await db_session.execute(select(User).where(User.email == "test@example.com"))
+    result = await db_session.execute(
+        select(User).where(User.email == "test@example.com")
+    )
     user = result.scalar_one()
     assert user.id == test_user.id
 

@@ -1,7 +1,7 @@
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
-import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
@@ -9,12 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.chat import TelegramChat
 from app.models.sync_job import SyncJob, SyncStatus
 from app.schemas.sync import SyncJobResponse, SyncProgressResponse
-from app.core.limiter import limiter
 from app.services.sync_service import create_sync_job
-from app.tasks.sync_tasks import sync_chat_task, sync_all_chats_task, redis_client
+from app.tasks.sync_tasks import redis_client, sync_all_chats_task, sync_chat_task
 
 router = APIRouter()
 _RETRY_SECONDS_RE = re.compile(r"retry_after_seconds=(\d+)")
@@ -33,10 +33,16 @@ _STALE_JOB_THRESHOLD = timedelta(minutes=15)
 
 
 def _job_heartbeat_key(job: SyncJob) -> str:
-    return f"bulk:{job.id}:heartbeat" if job.chat_id is None else f"sync:{job.id}:heartbeat"
+    return (
+        f"bulk:{job.id}:heartbeat"
+        if job.chat_id is None
+        else f"sync:{job.id}:heartbeat"
+    )
 
 
-async def _expire_stale_jobs(db: AsyncSession, user_id: UUID, chat_id: UUID | None) -> None:
+async def _expire_stale_jobs(
+    db: AsyncSession, user_id: UUID, chat_id: UUID | None
+) -> None:
     """Mark stale IN_PROGRESS jobs as FAILED if heartbeat is missing."""
     cutoff = datetime.now(UTC) - _STALE_JOB_THRESHOLD
     query = select(SyncJob).where(
@@ -81,7 +87,9 @@ async def sync_all_chats(
         )
     )
     if result.scalar_one_or_none():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Bulk sync already in progress")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Bulk sync already in progress"
+        )
 
     job = await create_sync_job(db, user.id, chat_id=None)
     await db.commit()
@@ -110,7 +118,9 @@ async def sync_chat(
     )
     chat = result.scalar_one_or_none()
     if not chat:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found"
+        )
 
     # Expire stale jobs before checking for conflicts
     await _expire_stale_jobs(db, user.id, chat_id)
@@ -153,12 +163,16 @@ async def get_sync_progress(
     )
     job = result.scalar_one_or_none()
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
+        )
 
     # Get chat title if available
     chat_title = None
     if job.chat_id:
-        result = await db.execute(select(TelegramChat).where(TelegramChat.id == job.chat_id))
+        result = await db.execute(
+            select(TelegramChat).where(TelegramChat.id == job.chat_id)
+        )
         chat = result.scalar_one_or_none()
         if chat:
             chat_title = chat.title

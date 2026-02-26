@@ -1,7 +1,6 @@
 import pytest
-from pydantic import ValidationError
-
 from app.schemas.settings import UserSettingsUpdate
+from pydantic import ValidationError
 
 
 class TestUserSettingsUpdate:

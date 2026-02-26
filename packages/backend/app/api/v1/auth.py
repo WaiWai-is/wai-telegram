@@ -213,7 +213,9 @@ async def test_mcp_connection(
     """Test MCP connection - returns backend health + user data summary."""
     chat_count = (
         await db.execute(
-            select(func.count()).select_from(TelegramChat).where(TelegramChat.user_id == user.id)
+            select(func.count())
+            .select_from(TelegramChat)
+            .where(TelegramChat.user_id == user.id)
         )
     ).scalar()
     message_count = (
@@ -247,7 +249,9 @@ async def revoke_api_key(
     )
     api_key = result.scalar_one_or_none()
     if not api_key:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
+        )
     await db.delete(api_key)
     await db.flush()
 
@@ -267,7 +271,9 @@ async def toggle_api_key(
     )
     api_key = result.scalar_one_or_none()
     if not api_key:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
+        )
 
     api_key.is_active = body.is_active
     await db.flush()

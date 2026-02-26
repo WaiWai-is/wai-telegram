@@ -51,10 +51,12 @@ class TestGetDigestByDate:
 class TestGenerateDigest:
     async def test_generate_success(self, auth_client, db_session, test_user):
         digest = DailyDigest(
+            id=uuid4(),
             user_id=test_user.id,
             digest_date=date.today(),
             content="Generated digest",
             summary_stats={"total_messages": 5},
+            created_at=datetime.now(UTC),
         )
         with patch(
             "app.api.v1.digests.generate_digest",

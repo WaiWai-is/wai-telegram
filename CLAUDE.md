@@ -11,8 +11,7 @@ Telegram message syncing and AI-powered search/digest platform. Syncs Telegram c
 - **MCP Server**: `packages/mcp-server/` — exposes search/digest tools for Claude
 
 ## Infrastructure
-- **Server**: `178.62.255.184` (DigitalOcean, Ubuntu 24.04, 2GB RAM)
-- **SSH**: `ssh root@178.62.255.184`
+- **Server**: DigitalOcean (Ubuntu 24.04, 2GB RAM) — IP and SSH configured via `DEPLOY_HOST` env var
 - **Domain**: `telegram.waiwai.is`
 - **SSL**: Let's Encrypt (auto-renew via certbot)
 - **Deploy**: GitHub Actions → SSH → rsync + restart services (auto on push to main)
@@ -21,20 +20,20 @@ Telegram message syncing and AI-powered search/digest platform. Syncs Telegram c
 ## Server Access
 ```bash
 # SSH to server
-ssh root@178.62.255.184
+ssh $DEPLOY_USER@$DEPLOY_HOST
 
 # Check service status
-ssh root@178.62.255.184 systemctl status wai-backend wai-frontend wai-celery wai-celery-beat
+ssh $DEPLOY_USER@$DEPLOY_HOST systemctl status wai-backend wai-frontend wai-celery wai-celery-beat
 
 # View logs
-ssh root@178.62.255.184 journalctl -u wai-backend -f
-ssh root@178.62.255.184 journalctl -u wai-celery -f
+ssh $DEPLOY_USER@$DEPLOY_HOST journalctl -u wai-backend -f
+ssh $DEPLOY_USER@$DEPLOY_HOST journalctl -u wai-celery -f
 
 # Docker containers (PostgreSQL + Redis)
-ssh root@178.62.255.184 docker ps
+ssh $DEPLOY_USER@$DEPLOY_HOST docker ps
 
 # Restart all services
-ssh root@178.62.255.184 'systemctl restart wai-backend wai-celery wai-celery-beat wai-frontend'
+ssh $DEPLOY_USER@$DEPLOY_HOST 'systemctl restart wai-backend wai-celery wai-celery-beat wai-frontend'
 ```
 
 ## Key Paths
@@ -74,7 +73,7 @@ cd packages/backend && uv run alembic upgrade head
 ./deploy.sh
 
 # Server logs
-ssh root@178.62.255.184 journalctl -u wai-backend -f
+ssh $DEPLOY_USER@$DEPLOY_HOST journalctl -u wai-backend -f
 ```
 
 ## GitHub Secrets (for Actions deploy)

@@ -1,7 +1,12 @@
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from app.core.security import compute_api_key_prefix, get_key_hint, hash_api_key, hash_password
+from app.core.security import (
+    compute_api_key_prefix,
+    get_key_hint,
+    hash_api_key,
+    hash_password,
+)
 from app.models.api_key import ApiKey
 from app.models.chat import ChatType, TelegramChat
 from app.models.digest import DailyDigest

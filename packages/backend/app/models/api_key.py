@@ -29,9 +29,7 @@ class ApiKey(Base):
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="api_keys")
 
-    __table_args__ = (
-        Index("ix_api_keys_prefix", "key_prefix"),
-    )
+    __table_args__ = (Index("ix_api_keys_prefix", "key_prefix"),)
 
 
 from app.models.user import User  # noqa: E402

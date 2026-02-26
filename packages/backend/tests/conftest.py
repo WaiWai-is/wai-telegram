@@ -12,14 +12,13 @@ from uuid import uuid4
 
 import fakeredis
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import JSON, String
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.core.config import Settings, get_settings
+from app.core.config import get_settings
 from app.core.database import Base, get_db
 from app.core.security import create_access_token, hash_password
 from app.models.user import User
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import JSON, String
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 @pytest.fixture
@@ -73,12 +72,17 @@ def _remove_hnsw_index():
     filtered = tuple(
         arg
         for arg in original_args
-        if not (hasattr(arg, "dialect_options") and "postgresql_using" in arg.dialect_options.get("postgresql", {}))
+        if not (
+            hasattr(arg, "dialect_options")
+            and "postgresql_using" in arg.dialect_options.get("postgresql", {})
+        )
     )
     TelegramMessage.__table_args__ = filtered
     # Also remove from table.indexes to prevent create_all from emitting it
     hnsw_indexes = [
-        idx for idx in TelegramMessage.__table__.indexes if "postgresql_using" in idx.dialect_options.get("postgresql", {})
+        idx
+        for idx in TelegramMessage.__table__.indexes
+        if "postgresql_using" in idx.dialect_options.get("postgresql", {})
     ]
     for idx in hnsw_indexes:
         TelegramMessage.__table__.indexes.discard(idx)

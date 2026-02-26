@@ -11,7 +11,9 @@ class FakeRedis:
         self.data: dict[str, str] = {}
         self.ttls: dict[str, int] = {}
 
-    def set(self, key: str, value: str, nx: bool = False, ex: int | None = None) -> bool:
+    def set(
+        self, key: str, value: str, nx: bool = False, ex: int | None = None
+    ) -> bool:
         if nx and key in self.data:
             return False
         self.data[key] = value

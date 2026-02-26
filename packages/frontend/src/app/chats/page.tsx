@@ -86,7 +86,7 @@ export default function ChatsPage() {
     try {
       await api.refreshChats()
       queryClient.invalidateQueries({ queryKey: ['chats'] })
-      const job = await api.syncAll(500)
+      const job = await api.syncAll(0)
       setBulkJobId(job.id)
     } catch (err) {
       setBulkJobId(null)

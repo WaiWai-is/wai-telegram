@@ -1,12 +1,12 @@
 from unittest.mock import MagicMock
 
+from app.models.chat import ChatType
 from app.services.sync_service import (
     _get_chat_title,
     _get_chat_type,
     _get_media_type,
     _get_sender_name,
 )
-from app.models.chat import ChatType
 
 
 class TestGetChatType:

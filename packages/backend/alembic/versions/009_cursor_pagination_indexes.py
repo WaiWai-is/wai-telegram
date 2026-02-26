@@ -5,10 +5,10 @@ Revises: 008_drop_auto_sync_columns
 Create Date: 2026-02-25
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
-
 
 # revision identifiers, used by Alembic.
 revision: str = "009_cursor_pagination_indexes"

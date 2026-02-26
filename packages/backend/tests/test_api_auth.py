@@ -1,11 +1,11 @@
 from uuid import uuid4
 
 from app.core.security import (
+    compute_api_key_prefix,
     create_access_token,
     create_refresh_token,
-    hash_api_key,
-    compute_api_key_prefix,
     get_key_hint,
+    hash_api_key,
 )
 from app.models.api_key import ApiKey
 

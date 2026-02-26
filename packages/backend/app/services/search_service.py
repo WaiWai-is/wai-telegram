@@ -5,9 +5,9 @@ from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models.chat import TelegramChat
 from app.models.message import TelegramMessage
-from app.core.config import get_settings
 from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
 from app.services.embedding_service import generate_query_embedding
 
@@ -114,8 +114,7 @@ async def get_recent_messages(
     limit: int = 100,
 ) -> list[TelegramMessage]:
     """Get recent messages for a user."""
-    from datetime import timedelta
-    from datetime import UTC
+    from datetime import UTC, timedelta
 
     cutoff = datetime.now(UTC) - timedelta(hours=hours)
 

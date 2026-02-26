@@ -36,11 +36,17 @@ async def lifespan(app: FastAPI):
             )
             jobs = result.scalars().all()
             for job in jobs:
-                heartbeat_key = f"bulk:{job.id}:heartbeat" if job.chat_id is None else f"sync:{job.id}:heartbeat"
+                heartbeat_key = (
+                    f"bulk:{job.id}:heartbeat"
+                    if job.chat_id is None
+                    else f"sync:{job.id}:heartbeat"
+                )
                 if redis_client.get(heartbeat_key):
                     continue
                 job.status = SyncStatus.FAILED
-                job.error_message = "Marked as failed: job was orphaned (worker crash or timeout)"
+                job.error_message = (
+                    "Marked as failed: job was orphaned (worker crash or timeout)"
+                )
                 updated_jobs += 1
             if updated_jobs > 0:
                 logger.warning(f"Marked {updated_jobs} orphaned sync jobs as FAILED")
@@ -54,6 +60,7 @@ async def lifespan(app: FastAPI):
     # Shutdown: disconnect temporary auth clients
     try:
         from app.api.v1.telegram import _auth_clients
+
         for key, (client, _) in list(_auth_clients.items()):
             try:
                 await client.disconnect()

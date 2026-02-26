@@ -3,7 +3,11 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
+from fastapi.security import (
+    HTTPAuthorizationCredentials,
+    HTTPBearer,
+    OAuth2PasswordBearer,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,7 +56,9 @@ async def get_current_user(
             if verify_api_key(api_key.credentials, api_key_record.key_hash):
                 api_key_record.last_used_at = datetime.now(UTC)
                 await db.flush()
-                result = await db.execute(select(User).where(User.id == api_key_record.user_id))
+                result = await db.execute(
+                    select(User).where(User.id == api_key_record.user_id)
+                )
                 user = result.scalar_one_or_none()
                 if user:
                     return user

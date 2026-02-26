@@ -9,6 +9,7 @@ from telethon import TelegramClient
 
 from app.core.auth import CurrentUser
 from app.core.database import get_db
+from app.core.limiter import limiter
 from app.models.session import TelegramSession
 from app.schemas.telegram import (
     RequestCodeRequest,
@@ -17,7 +18,6 @@ from app.schemas.telegram import (
     VerifyCodeRequest,
     VerifyCodeResponse,
 )
-from app.core.limiter import limiter
 from app.services import telegram_client
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ async def _cleanup_expired_auth_clients() -> None:
     # Enforce max limit — evict oldest if over cap
     if len(_auth_clients) > MAX_AUTH_CLIENTS:
         sorted_keys = sorted(_auth_clients, key=lambda k: _auth_clients[k][1])
-        for key in sorted_keys[:len(_auth_clients) - MAX_AUTH_CLIENTS]:
+        for key in sorted_keys[: len(_auth_clients) - MAX_AUTH_CLIENTS]:
             client, _ = _auth_clients.pop(key)
             logger.info(f"Evicted auth client (over limit): {key}")
             await _disconnect_auth_client(client)
@@ -87,7 +87,9 @@ async def request_code(
             code_type=code_type,
         )
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e)
+        )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 

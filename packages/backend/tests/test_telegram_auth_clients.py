@@ -1,5 +1,4 @@
 import pytest
-
 from app.api.v1.telegram import (
     _auth_clients,
     _pop_and_disconnect_auth_client,

@@ -5,10 +5,11 @@ Revises:
 Create Date: 2025-01-23
 
 """
+
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
@@ -71,7 +72,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_telegram_chats_user_id", "telegram_chats", ["user_id"])
-    op.create_index("ix_telegram_chats_telegram_chat_id", "telegram_chats", ["telegram_chat_id"])
+    op.create_index(
+        "ix_telegram_chats_telegram_chat_id", "telegram_chats", ["telegram_chat_id"]
+    )
 
     # Telegram messages table
     op.create_table(
@@ -94,7 +97,9 @@ def upgrade() -> None:
     )
     op.create_index("ix_telegram_messages_chat_id", "telegram_messages", ["chat_id"])
     op.create_index(
-        "ix_telegram_messages_telegram_message_id", "telegram_messages", ["telegram_message_id"]
+        "ix_telegram_messages_telegram_message_id",
+        "telegram_messages",
+        ["telegram_message_id"],
     )
     op.create_index("ix_telegram_messages_sent_at", "telegram_messages", ["sent_at"])
     op.create_index(
@@ -122,7 +127,12 @@ def upgrade() -> None:
         sa.Column(
             "status",
             sa.Enum(
-                "PENDING", "IN_PROGRESS", "COMPLETED", "FAILED", "CANCELLED", name="syncstatus"
+                "PENDING",
+                "IN_PROGRESS",
+                "COMPLETED",
+                "FAILED",
+                "CANCELLED",
+                name="syncstatus",
             ),
             nullable=False,
         ),

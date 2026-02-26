@@ -1,8 +1,6 @@
 from datetime import timedelta
-from unittest.mock import patch
 
 import pytest
-
 from app.core.security import (
     compute_api_key_prefix,
     create_access_token,

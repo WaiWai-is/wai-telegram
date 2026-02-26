@@ -1,4 +1,4 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from app.services.rate_limiter import check_budget, get_budget_status, record_request
 
@@ -49,8 +49,10 @@ class TestCheckBudget:
         mock_redis = MagicMock()
         mock_redis.get.side_effect = lambda key: b"999" if "hourly" in key else b"10"
 
-        with patch("app.services.rate_limiter._get_redis", return_value=mock_redis), \
-             patch("app.services.rate_limiter.settings") as mock_settings:
+        with (
+            patch("app.services.rate_limiter._get_redis", return_value=mock_redis),
+            patch("app.services.rate_limiter.settings") as mock_settings,
+        ):
             mock_settings.rate_budget_hourly = 200
             mock_settings.rate_budget_daily = 2000
             assert check_budget() is False
@@ -59,8 +61,10 @@ class TestCheckBudget:
         mock_redis = MagicMock()
         mock_redis.get.side_effect = lambda key: b"10" if "hourly" in key else b"9999"
 
-        with patch("app.services.rate_limiter._get_redis", return_value=mock_redis), \
-             patch("app.services.rate_limiter.settings") as mock_settings:
+        with (
+            patch("app.services.rate_limiter._get_redis", return_value=mock_redis),
+            patch("app.services.rate_limiter.settings") as mock_settings,
+        ):
             mock_settings.rate_budget_hourly = 200
             mock_settings.rate_budget_daily = 2000
             assert check_budget() is False

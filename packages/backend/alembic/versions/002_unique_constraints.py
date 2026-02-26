@@ -5,10 +5,10 @@ Revises: 001_initial
 Create Date: 2026-02-24
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "002_unique_constraints"
@@ -66,5 +66,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_constraint("uq_daily_digests_user_date", "daily_digests", type_="unique")
-    op.drop_constraint("uq_telegram_messages_chat_msg", "telegram_messages", type_="unique")
+    op.drop_constraint(
+        "uq_telegram_messages_chat_msg", "telegram_messages", type_="unique"
+    )
     op.drop_constraint("uq_telegram_chats_user_chat", "telegram_chats", type_="unique")

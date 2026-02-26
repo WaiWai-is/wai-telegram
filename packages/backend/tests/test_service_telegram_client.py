@@ -1,8 +1,6 @@
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 import pytest
-
 from app.services.telegram_client import (
     _get_code_type_name,
     request_code,
@@ -46,7 +44,11 @@ class TestRequestCode:
         mock_result.timeout = 300
         mock_client.send_code_request = AsyncMock(return_value=mock_result)
 
-        with patch("app.services.telegram_client.create_auth_client", new_callable=AsyncMock, return_value=mock_client):
+        with patch(
+            "app.services.telegram_client.create_auth_client",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
             client, phone_hash, code_type = await request_code("+1234567890")
             assert phone_hash == "hash123"
             assert code_type == "app"
@@ -60,7 +62,11 @@ class TestRequestCode:
         mock_client.send_code_request = AsyncMock(side_effect=error)
         mock_client.disconnect = AsyncMock()
 
-        with patch("app.services.telegram_client.create_auth_client", new_callable=AsyncMock, return_value=mock_client):
+        with patch(
+            "app.services.telegram_client.create_auth_client",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
             with pytest.raises(ValueError, match="Too many attempts"):
                 await request_code("+1234567890")
 

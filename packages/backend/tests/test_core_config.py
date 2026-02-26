@@ -1,7 +1,22 @@
 import pytest
+from app.core.config import Settings, get_settings
 from pydantic import ValidationError
 
-from app.core.config import Settings, get_settings
+# Keys set by conftest.py that interfere with Settings() defaults
+_CONFTEST_ENV_KEYS = [
+    "SECRET_KEY",
+    "ENCRYPTION_KEY",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "ENVIRONMENT",
+]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_env(monkeypatch):
+    """Remove conftest env vars so Settings() uses its own defaults."""
+    for key in _CONFTEST_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
 
 class TestSettingsDefaults:

@@ -106,7 +106,9 @@ class DistributedLock:
 
     def acquire(self) -> bool:
         """Acquire the lock atomically."""
-        acquired = bool(redis_client.set(self.lock_key, self.payload, nx=True, ex=self.ttl))
+        acquired = bool(
+            redis_client.set(self.lock_key, self.payload, nx=True, ex=self.ttl)
+        )
         if acquired:
             self._start_heartbeat()
         return acquired
@@ -150,7 +152,9 @@ class DistributedLock:
 
     def _start_heartbeat(self) -> None:
         self._stop_heartbeat.clear()
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop, daemon=True
+        )
         self._heartbeat_thread.start()
 
     def _heartbeat_loop(self) -> None:
@@ -225,17 +229,20 @@ def sync_chat_task(
             )
             raise
     except Exception as e:
-        backoff = 60 * (3 ** self.request.retries)
+        backoff = 60 * (3**self.request.retries)
         will_retry = self.request.retries < self.max_retries
         asyncio.run(
             _mark_job_state(
                 job_uuid,
                 SyncStatus.PENDING if will_retry else SyncStatus.FAILED,
-                f"sync_error: {e}" + (f" retry_after_seconds={backoff}" if will_retry else ""),
+                f"sync_error: {e}"
+                + (f" retry_after_seconds={backoff}" if will_retry else ""),
             )
         )
         if will_retry:
-            logger.error("Sync failed for chat %s: %s, retrying in %ss", chat_id, e, backoff)
+            logger.error(
+                "Sync failed for chat %s: %s, retrying in %ss", chat_id, e, backoff
+            )
             try:
                 raise self.retry(exc=e, countdown=backoff)
             except MaxRetriesExceededError:
@@ -283,7 +290,9 @@ async def _run_sync(
             redis_client.setex(f"sync:{job.id}:seen", SYNC_PROGRESS_TTL, seen)
             _touch_single_heartbeat(job.id)
 
-        count = await sync_messages(db, user_id, chat_id, job.id, limit, on_progress=_on_progress)
+        count = await sync_messages(
+            db, user_id, chat_id, job.id, limit, on_progress=_on_progress
+        )
 
         job.status = SyncStatus.COMPLETED
         job.completed_at = datetime.now(UTC)
@@ -307,7 +316,9 @@ def sync_all_chats_task(self, user_id: str, job_id: str, limit_per_chat: int = 5
     if not lock.acquire():
         logger.info("Bulk sync skipped — another sync in progress for user %s", user_id)
         asyncio.run(
-            _mark_job_state(job_uuid, SyncStatus.FAILED, "Another sync is already in progress")
+            _mark_job_state(
+                job_uuid, SyncStatus.FAILED, "Another sync is already in progress"
+            )
         )
         return {"status": "skipped", "reason": "sync_in_progress"}
 
@@ -351,7 +362,9 @@ async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> No
         total_messages = 0
 
         for i, chat in enumerate(chats):
-            redis_client.setex(f"bulk:{job_id}:current_chat", BULK_SYNC_TTL, chat.title[:80])
+            redis_client.setex(
+                f"bulk:{job_id}:current_chat", BULK_SYNC_TTL, chat.title[:80]
+            )
             _touch_bulk_heartbeat(job_id)
 
             sub_job = None
@@ -360,11 +373,17 @@ async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> No
                 sub_job.status = SyncStatus.IN_PROGRESS
                 await db.commit()
                 if effective_limit is not None:
-                    redis_client.setex(f"sync:{sub_job.id}:total", SYNC_PROGRESS_TTL, effective_limit)
+                    redis_client.setex(
+                        f"sync:{sub_job.id}:total", SYNC_PROGRESS_TTL, effective_limit
+                    )
                 _touch_single_heartbeat(sub_job.id)
 
-                def _on_sub_progress(seen: int, current_sub_job_id: UUID = sub_job.id) -> None:
-                    redis_client.setex(f"sync:{current_sub_job_id}:seen", SYNC_PROGRESS_TTL, seen)
+                def _on_sub_progress(
+                    seen: int, current_sub_job_id: UUID = sub_job.id
+                ) -> None:
+                    redis_client.setex(
+                        f"sync:{current_sub_job_id}:seen", SYNC_PROGRESS_TTL, seen
+                    )
                     _touch_single_heartbeat(current_sub_job_id)
                     _touch_bulk_heartbeat(job_id)
 
@@ -383,9 +402,17 @@ async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> No
                 await db.commit()
 
                 total_messages += count
-                logger.info("Bulk sync: chat %s/%s '%s': %s messages", i + 1, total, chat.title[:40], count)
+                logger.info(
+                    "Bulk sync: chat %s/%s '%s': %s messages",
+                    i + 1,
+                    total,
+                    chat.title[:40],
+                    count,
+                )
             except Exception as e:
-                logger.error("Bulk sync: failed chat %s (%s): %s", chat.id, chat.title[:40], e)
+                logger.error(
+                    "Bulk sync: failed chat %s (%s): %s", chat.id, chat.title[:40], e
+                )
                 if sub_job is not None:
                     try:
                         sub_job.status = SyncStatus.FAILED
@@ -439,7 +466,9 @@ async def _listener_health_check() -> dict:
                     json.dumps({"command": "start_user", "user_id": str(user_id)}),
                 )
                 restarted += 1
-                logger.warning("Listener inactive for user %s, sent start command", user_id)
+                logger.warning(
+                    "Listener inactive for user %s, sent start command", user_id
+                )
 
     return {"checked": checked, "restarted": restarted}
 
@@ -466,7 +495,11 @@ async def _reap_stale_sync_jobs() -> dict:
         scanned = len(jobs)
 
         for job in jobs:
-            heartbeat_key = _bulk_heartbeat_key(job.id) if job.chat_id is None else _single_heartbeat_key(job.id)
+            heartbeat_key = (
+                _bulk_heartbeat_key(job.id)
+                if job.chat_id is None
+                else _single_heartbeat_key(job.id)
+            )
             if redis_client.get(heartbeat_key):
                 continue
 

@@ -14,6 +14,7 @@ from app.models.session import TelegramSession
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+
 async def get_client(user_id: UUID, db: AsyncSession) -> TelegramClient:
     """Create a fresh Telegram client for a user.
 

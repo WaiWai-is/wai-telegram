@@ -12,9 +12,13 @@ from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
 from telethon.tl.types import (
     Channel,
-    Chat as TelegramGroupChat,
     MessageMediaDocument,
     MessageMediaPhoto,
+)
+from telethon.tl.types import (
+    Chat as TelegramGroupChat,
+)
+from telethon.tl.types import (
     User as TelegramUser,
 )
 
@@ -28,7 +32,10 @@ from app.models.settings import UserSettings
 from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
 from app.services.sync_service import sync_messages
-from app.services.transcription_service import TRANSCRIBABLE_MEDIA_TYPES, download_and_transcribe
+from app.services.transcription_service import (
+    TRANSCRIBABLE_MEDIA_TYPES,
+    download_and_transcribe,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -102,7 +109,9 @@ class TelegramListener:
                 try:
                     await self._start_user(user_settings.user_id)
                 except Exception as e:
-                    logger.error(f"Failed to start listener for user {user_settings.user_id}: {e}")
+                    logger.error(
+                        f"Failed to start listener for user {user_settings.user_id}: {e}"
+                    )
 
     async def _start_user(self, user_id: UUID):
         """Create Telethon client with event handlers."""
@@ -160,7 +169,9 @@ class TelegramListener:
         await self.redis.delete(f"listener:active:{user_id}")
         logger.info(f"Listener stopped for user {user_id}")
 
-    async def _auto_create_chat(self, db, user_id: UUID, entity, chat_id_tg: int) -> TelegramChat | None:
+    async def _auto_create_chat(
+        self, db, user_id: UUID, entity, chat_id_tg: int
+    ) -> TelegramChat | None:
         """Auto-create a TelegramChat record from a Telethon entity."""
         if isinstance(entity, TelegramUser):
             chat_type = ChatType.PRIVATE
@@ -197,7 +208,9 @@ class TelegramListener:
                 select(TelegramChat).where(TelegramChat.id == row[0])
             )
             chat = result.scalar_one()
-            logger.info(f"Auto-created chat '{title}' ({chat_id_tg}) for user {user_id}")
+            logger.info(
+                f"Auto-created chat '{title}' ({chat_id_tg}) for user {user_id}"
+            )
             return chat
 
         # on_conflict_do_nothing means it already exists — fetch it
@@ -231,7 +244,9 @@ class TelegramListener:
                 if not chat:
                     try:
                         entity = await event.get_chat()
-                        chat = await self._auto_create_chat(db, user_id, entity, chat_id_tg)
+                        chat = await self._auto_create_chat(
+                            db, user_id, entity, chat_id_tg
+                        )
                         if not chat:
                             return
                     except Exception as e:
@@ -241,7 +256,9 @@ class TelegramListener:
                 try:
                     sender = await event.get_sender()
                 except FloodWaitError as e:
-                    logger.warning(f"FloodWait in listener for user {user_id}: {e.seconds}s")
+                    logger.warning(
+                        f"FloodWait in listener for user {user_id}: {e.seconds}s"
+                    )
                     await asyncio.sleep(e.seconds)
                     sender = await event.get_sender()
 
@@ -268,7 +285,9 @@ class TelegramListener:
                             values["text"] = transcript
                             values["transcribed_at"] = datetime.now(UTC)
                     except Exception as e:
-                        logger.warning(f"Transcription failed for message {message.id}: {e}")
+                        logger.warning(
+                            f"Transcription failed for message {message.id}: {e}"
+                        )
 
                 stmt = pg_insert(TelegramMessage).values(**values)
                 stmt = stmt.on_conflict_do_nothing(
@@ -339,15 +358,21 @@ class TelegramListener:
                 await db.commit()
 
                 if limit:
-                    await self.redis.setex(f"sync:{job_id}:total", SYNC_PROGRESS_TTL, limit)
-                await self.redis.setex(f"sync:{job_id}:heartbeat", SYNC_HEARTBEAT_TTL, "1")
+                    await self.redis.setex(
+                        f"sync:{job_id}:total", SYNC_PROGRESS_TTL, limit
+                    )
+                await self.redis.setex(
+                    f"sync:{job_id}:heartbeat", SYNC_HEARTBEAT_TTL, "1"
+                )
 
                 def _on_progress(seen: int) -> None:
                     asyncio.create_task(
                         self.redis.setex(f"sync:{job_id}:seen", SYNC_PROGRESS_TTL, seen)
                     )
                     asyncio.create_task(
-                        self.redis.setex(f"sync:{job_id}:heartbeat", SYNC_HEARTBEAT_TTL, "1")
+                        self.redis.setex(
+                            f"sync:{job_id}:heartbeat", SYNC_HEARTBEAT_TTL, "1"
+                        )
                     )
 
                 count = await sync_messages(
@@ -365,7 +390,9 @@ class TelegramListener:
                 job.messages_processed = count
                 await db.commit()
 
-                logger.info(f"Listener sync completed: chat {chat_id}, {count} messages")
+                logger.info(
+                    f"Listener sync completed: chat {chat_id}, {count} messages"
+                )
         except Exception as e:
             logger.error(f"Listener sync failed for chat {chat_id}: {e}")
             async with get_db_context() as db:
@@ -435,6 +462,8 @@ class TelegramListener:
                 try:
                     if client.is_connected():
                         await client.catch_up()
-                        logger.debug(f"Health check catch_up completed for user {user_id}")
+                        logger.debug(
+                            f"Health check catch_up completed for user {user_id}"
+                        )
                 except Exception as e:
                     logger.error(f"Health check failed for user {user_id}: {e}")

@@ -2,11 +2,20 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database import Base
 from app.core.config import get_settings
+from app.core.database import Base
 
 settings = get_settings()
 
@@ -29,17 +38,25 @@ class TelegramMessage(Base):
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(settings.embedding_dimensions), nullable=True
     )
-    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    transcribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    embedded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    transcribed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
 
     # Relationships
-    chat: Mapped["TelegramChat"] = relationship("TelegramChat", back_populates="messages")
+    chat: Mapped["TelegramChat"] = relationship(
+        "TelegramChat", back_populates="messages"
+    )
 
     __table_args__ = (
-        UniqueConstraint("chat_id", "telegram_message_id", name="uq_telegram_messages_chat_msg"),
+        UniqueConstraint(
+            "chat_id", "telegram_message_id", name="uq_telegram_messages_chat_msg"
+        ),
         Index("ix_telegram_messages_chat_sent", "chat_id", "sent_at"),
         Index(
             "ix_telegram_messages_embedding_hnsw",

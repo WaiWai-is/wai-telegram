@@ -1,7 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from app.services.transcription_service import (
     MAX_AUDIO_BYTES,
     download_and_transcribe,
@@ -23,7 +21,9 @@ class TestTranscribeAudio:
             mock_settings.deepgram_model = "nova-3"
             with patch("deepgram.AsyncDeepgramClient") as mock_dg_cls:
                 mock_dg = AsyncMock()
-                mock_dg.listen.v1.media.transcribe_file = AsyncMock(return_value=mock_response)
+                mock_dg.listen.v1.media.transcribe_file = AsyncMock(
+                    return_value=mock_response
+                )
                 mock_dg_cls.return_value = mock_dg
 
                 result = await transcribe_audio(b"audio data")
@@ -38,7 +38,9 @@ class TestTranscribeAudio:
             mock_settings.deepgram_model = "nova-3"
             with patch("deepgram.AsyncDeepgramClient") as mock_dg_cls:
                 mock_dg = AsyncMock()
-                mock_dg.listen.v1.media.transcribe_file = AsyncMock(return_value=mock_response)
+                mock_dg.listen.v1.media.transcribe_file = AsyncMock(
+                    return_value=mock_response
+                )
                 mock_dg_cls.return_value = mock_dg
 
                 result = await transcribe_audio(b"audio data")
@@ -61,6 +63,7 @@ class TestDownloadAndTranscribe:
 
         with patch("app.services.transcription_service.settings") as mock_settings:
             mock_settings.deepgram_api_key = "test-key"
+
             # download_media writes to the buffer; simulate empty buffer
             async def fake_download(msg, file):
                 pass  # leave buffer empty
@@ -96,8 +99,14 @@ class TestDownloadAndTranscribe:
 
         mock_client.download_media = fake_download
 
-        with patch("app.services.transcription_service.settings") as mock_settings, \
-             patch("app.services.transcription_service.transcribe_audio", new_callable=AsyncMock, return_value="Transcribed text"):
+        with (
+            patch("app.services.transcription_service.settings") as mock_settings,
+            patch(
+                "app.services.transcription_service.transcribe_audio",
+                new_callable=AsyncMock,
+                return_value="Transcribed text",
+            ),
+        ):
             mock_settings.deepgram_api_key = "test-key"
             result = await download_and_transcribe(mock_client, mock_message)
             assert result == "Transcribed text"

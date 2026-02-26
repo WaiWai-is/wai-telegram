@@ -1,8 +1,12 @@
 from datetime import UTC, datetime
 
 import pytest
-
-from app.core.cursor import CursorError, decode_cursor, encode_cursor, parse_cursor_datetime
+from app.core.cursor import (
+    CursorError,
+    decode_cursor,
+    encode_cursor,
+    parse_cursor_datetime,
+)
 
 
 class TestCursorRoundtrip:
@@ -38,7 +42,11 @@ class TestCursorRoundtrip:
         import base64
         import json
 
-        data = base64.urlsafe_b64encode(json.dumps([1, 2, 3]).encode()).decode().rstrip("=")
+        data = (
+            base64.urlsafe_b64encode(json.dumps([1, 2, 3]).encode())
+            .decode()
+            .rstrip("=")
+        )
         with pytest.raises(CursorError):
             decode_cursor(data)
 

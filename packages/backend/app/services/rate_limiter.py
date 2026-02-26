@@ -54,9 +54,13 @@ def check_budget() -> bool:
     """Check if we're within rate budget. Returns True if safe to proceed."""
     status = get_budget_status()
     if status["hourly_remaining"] <= 0:
-        logger.warning(f"Hourly rate budget exhausted: {status['hourly_used']}/{status['hourly_limit']}")
+        logger.warning(
+            f"Hourly rate budget exhausted: {status['hourly_used']}/{status['hourly_limit']}"
+        )
         return False
     if status["daily_remaining"] <= 0:
-        logger.warning(f"Daily rate budget exhausted: {status['daily_used']}/{status['daily_limit']}")
+        logger.warning(
+            f"Daily rate budget exhausted: {status['daily_used']}/{status['daily_limit']}"
+        )
         return False
     return True

@@ -1,7 +1,7 @@
+import logging
 import os
 from datetime import date, datetime
 from typing import Any
-import logging
 
 import httpx
 
@@ -20,9 +20,7 @@ class TelegramAIClient:
         base_url: str | None = None,
         api_key: str | None = None,
     ):
-        self.base_url = base_url or os.environ.get(
-            "TELEGRAM_AI_URL", "http://localhost:8000"
-        )
+        self.base_url = base_url or os.environ.get("TELEGRAM_AI_URL", "http://localhost:8000")
         self.api_key = api_key or os.environ.get("TELEGRAM_AI_KEY", "")
         headers = {}
         if self.api_key:
@@ -114,7 +112,7 @@ class TelegramAIClient:
         chat_id: str,
         message_limit: int | None = None,
     ) -> dict[str, Any]:
-        """Trigger message sync for a chat."""
+        """Trigger message sync for a chat. message_limit=None means unlimited."""
         params: dict[str, Any] = {}
         if message_limit is not None:
             params["limit"] = message_limit
@@ -131,9 +129,7 @@ class TelegramAIClient:
         """Get or generate daily digest."""
         if digest_date:
             try:
-                return await self._request(
-                    "GET", f"/api/v1/digests/{digest_date.isoformat()}"
-                )
+                return await self._request("GET", f"/api/v1/digests/{digest_date.isoformat()}")
             except RuntimeError as e:
                 if "HTTP 404" in str(e):
                     # Generate if not found
@@ -150,25 +146,60 @@ class TelegramAIClient:
         chat_id: str,
         days: int = 7,
     ) -> dict[str, Any]:
-        """Get summary of chat activity."""
-        from datetime import timedelta, UTC
+        """Get summary of chat activity using message pagination."""
+        from datetime import UTC, timedelta
 
         days = self._clamp(days, 1, MAX_LOOKBACK_DAYS)
         date_from = datetime.now(UTC) - timedelta(days=days)
 
-        # Get messages for the period
-        result = await self.search_messages(
-            query="*",
-            chat_ids=[chat_id],
-            date_from=date_from,
-            limit=100,
-        )
-
+        # Get chat details for metadata
         chat = await self.get_chat(chat_id)
+
+        # Paginate through messages to collect those within the date range
+        messages: list[dict] = []
+        cursor: str | None = None
+        pages_fetched = 0
+        max_pages = 10  # Safety limit
+
+        while pages_fetched < max_pages:
+            messages_result = await self.get_messages(
+                chat_id=chat_id,
+                limit=200,
+                before=cursor,
+            )
+            page = messages_result.get("messages", [])
+            if not page:
+                break
+
+            pages_fetched += 1
+            all_in_range = True
+            for msg in page:
+                sent_at = msg.get("sent_at")
+                if sent_at:
+                    try:
+                        msg_date = datetime.fromisoformat(sent_at)
+                        if msg_date >= date_from:
+                            messages.append(msg)
+                        else:
+                            # Messages are newest-first; once we're before the range, stop
+                            all_in_range = False
+                            break
+                    except (ValueError, TypeError):
+                        messages.append(msg)
+                else:
+                    messages.append(msg)
+
+            if not all_in_range:
+                break
+            if not messages_result.get("has_more"):
+                break
+            cursor = messages_result.get("next_cursor")
+            if not cursor:
+                break
 
         return {
             "chat": chat,
             "period_days": days,
-            "message_count": result.get("total", 0),
-            "messages": result.get("results", [])[:20],
+            "message_count": len(messages),
+            "messages": messages[:50],  # Cap display to 50 most recent
         }

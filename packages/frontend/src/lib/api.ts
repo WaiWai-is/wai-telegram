@@ -245,7 +245,7 @@ class ApiClient {
     return this.request<SyncJob>('POST', `/api/v1/sync/chats/${chatId}`, { params })
   }
 
-  async syncAll(limitPerChat = 500) {
+  async syncAll(limitPerChat = 0) {
     return this.request<SyncJob>('POST', '/api/v1/sync/all', {
       params: { limit_per_chat: String(limitPerChat) },
     })
@@ -358,6 +358,8 @@ export interface MessageListPage {
   total: number | null
   has_more: boolean
   next_cursor: string | null
+  total_messages_synced: number | null
+  last_sync_at: string | null
 }
 
 export interface SyncJob {

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -11,8 +11,10 @@ class TestSyncAll:
         mock_task = MagicMock()
         mock_task.delay = MagicMock()
 
-        with patch("app.api.v1.sync.sync_all_chats_task", mock_task), \
-             patch("app.api.v1.sync.redis_client", MagicMock()):
+        with (
+            patch("app.api.v1.sync.sync_all_chats_task", mock_task),
+            patch("app.api.v1.sync.redis_client", MagicMock()),
+        ):
             response = await auth_client.post("/api/v1/sync/all")
             assert response.status_code == 200
             data = response.json()
@@ -30,7 +32,9 @@ class TestSyncAll:
         db_session.add(job)
         await db_session.flush()
 
-        with patch("app.api.v1.sync.redis_client", MagicMock(get=MagicMock(return_value=b"1"))):
+        with patch(
+            "app.api.v1.sync.redis_client", MagicMock(get=MagicMock(return_value=b"1"))
+        ):
             response = await auth_client.post("/api/v1/sync/all")
             assert response.status_code == 409
 
@@ -49,8 +53,10 @@ class TestSyncChat:
         mock_task = MagicMock()
         mock_task.delay = MagicMock()
 
-        with patch("app.api.v1.sync.sync_chat_task", mock_task), \
-             patch("app.api.v1.sync.redis_client", MagicMock()):
+        with (
+            patch("app.api.v1.sync.sync_chat_task", mock_task),
+            patch("app.api.v1.sync.redis_client", MagicMock()),
+        ):
             response = await auth_client.post(f"/api/v1/sync/chats/{chat.id}")
             assert response.status_code == 200
             data = response.json()

@@ -26,3 +26,5 @@ class MessageListResponse(BaseModel):
     total: int | None = None
     has_more: bool
     next_cursor: str | None = None
+    total_messages_synced: int | None = None
+    last_sync_at: datetime | None = None

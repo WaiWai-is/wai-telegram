@@ -6,17 +6,17 @@ from app.schemas.auth import (
     TokenResponse,
     UserResponse,
 )
-from app.schemas.chat import ChatResponse, ChatListResponse
-from app.schemas.digest import DigestResponse, DigestGenerateRequest
-from app.schemas.message import MessageResponse, MessageListResponse
+from app.schemas.chat import ChatListResponse, ChatResponse
+from app.schemas.digest import DigestGenerateRequest, DigestResponse
+from app.schemas.message import MessageListResponse, MessageResponse
 from app.schemas.search import SearchRequest, SearchResponse
 from app.schemas.sync import SyncJobResponse, SyncProgressResponse
 from app.schemas.telegram import (
     RequestCodeRequest,
     RequestCodeResponse,
+    SessionResponse,
     VerifyCodeRequest,
     VerifyCodeResponse,
-    SessionResponse,
 )
 
 __all__ = [

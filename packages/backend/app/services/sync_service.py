@@ -11,10 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telethon.tl.types import (
     Channel,
     Chat,
-    User as TelegramUser,
     Message,
     MessageMediaDocument,
     MessageMediaPhoto,
+)
+from telethon.tl.types import (
+    User as TelegramUser,
 )
 
 from app.core.config import get_settings
@@ -24,7 +26,10 @@ from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
 from app.services.rate_limiter import record_request
 from app.services.telegram_client import get_client
-from app.services.transcription_service import TRANSCRIBABLE_MEDIA_TYPES, download_and_transcribe
+from app.services.transcription_service import (
+    TRANSCRIBABLE_MEDIA_TYPES,
+    download_and_transcribe,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -174,7 +179,6 @@ async def sync_messages(
     If client is provided (e.g. from the listener service), it is used directly
     instead of calling get_client().
     """
-    from telethon import TelegramClient
 
     # Get chat
     result = await db.execute(
@@ -240,7 +244,9 @@ async def sync_messages(
                         msg_values["text"] = transcript
                         msg_values["transcribed_at"] = datetime.now(UTC)
                 except Exception as e:
-                    logger.warning(f"Transcription failed for message {message.id}: {e}")
+                    logger.warning(
+                        f"Transcription failed for message {message.id}: {e}"
+                    )
 
             batch_values.append(msg_values)
             messages_synced += 1
@@ -275,9 +281,8 @@ async def sync_messages(
 
                 # Progressive jittered delay — increases every N batches
                 progressive_extra = (
-                    (batch_count // settings.sync_progressive_delay_interval)
-                    * settings.sync_progressive_delay_step
-                )
+                    batch_count // settings.sync_progressive_delay_interval
+                ) * settings.sync_progressive_delay_step
                 base_delay = settings.sync_delay_seconds + progressive_extra
                 await _jittered_sleep(base_delay, settings.sync_delay_jitter)
 
@@ -302,7 +307,9 @@ async def sync_messages(
             try:
                 await embed_messages(db, inserted_message_ids)
             except Exception as e:
-                logger.exception(f"Embedding step failed after sync for chat {chat_id}: {e}")
+                logger.exception(
+                    f"Embedding step failed after sync for chat {chat_id}: {e}"
+                )
 
         # Update chat and job
         chat.last_message_id = last_id

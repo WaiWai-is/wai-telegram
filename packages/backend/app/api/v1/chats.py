@@ -7,7 +7,12 @@ from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import CurrentUser
-from app.core.cursor import CursorError, decode_cursor, encode_cursor, parse_cursor_datetime
+from app.core.cursor import (
+    CursorError,
+    decode_cursor,
+    encode_cursor,
+    parse_cursor_datetime,
+)
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.chat import ChatType, TelegramChat
@@ -41,7 +46,9 @@ def _decode_chat_cursor(cursor: str) -> dict[str, Any]:
 def _encode_chat_cursor(chat: TelegramChat) -> str:
     return encode_cursor(
         {
-            "last_activity_at": chat.last_activity_at.isoformat() if chat.last_activity_at else None,
+            "last_activity_at": chat.last_activity_at.isoformat()
+            if chat.last_activity_at
+            else None,
             "last_message_id": chat.last_message_id,
             "id": str(chat.id),
         }
@@ -125,8 +132,10 @@ async def list_chats(
     next_cursor = _encode_chat_cursor(chats[-1]) if has_more and chats else None
 
     # Backward compatibility total count.
-    count_query = select(func.count()).select_from(TelegramChat).where(
-        TelegramChat.user_id == user.id
+    count_query = (
+        select(func.count())
+        .select_from(TelegramChat)
+        .where(TelegramChat.user_id == user.id)
     )
     if chat_type:
         count_query = count_query.where(TelegramChat.chat_type == chat_type)
@@ -172,7 +181,9 @@ async def get_chat(
     )
     chat = result.scalar_one_or_none()
     if not chat:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found"
+        )
     return ChatResponse.model_validate(chat)
 
 
@@ -186,15 +197,18 @@ async def get_chat_messages(
     offset: int = Query(default=0, ge=0),
 ) -> MessageListResponse:
     """Get messages for a chat (cursor pagination, offset fallback)."""
-    # Verify chat ownership
+    # Verify chat ownership and get chat metadata
     result = await db.execute(
         select(TelegramChat).where(
             TelegramChat.id == chat_id,
             TelegramChat.user_id == user.id,
         )
     )
-    if not result.scalar_one_or_none():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+    chat = result.scalar_one_or_none()
+    if not chat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found"
+        )
 
     # Get messages
     query = (
@@ -228,7 +242,9 @@ async def get_chat_messages(
     has_more = len(messages) > limit
     if has_more:
         messages = messages[:limit]
-    next_cursor = _encode_message_cursor(messages[-1]) if has_more and messages else None
+    next_cursor = (
+        _encode_message_cursor(messages[-1]) if has_more and messages else None
+    )
 
     return MessageListResponse(
         messages=[
@@ -250,4 +266,6 @@ async def get_chat_messages(
         total=None,
         has_more=has_more,
         next_cursor=next_cursor,
+        total_messages_synced=chat.total_messages_synced,
+        last_sync_at=chat.last_sync_at,
     )

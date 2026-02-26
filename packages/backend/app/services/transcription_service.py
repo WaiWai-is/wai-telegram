@@ -1,6 +1,5 @@
 import io
 import logging
-from datetime import UTC, datetime
 
 from app.core.config import get_settings
 

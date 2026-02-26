@@ -1,6 +1,4 @@
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 from app.models.session import TelegramSession
 from app.models.settings import UserSettings
@@ -36,7 +34,9 @@ class TestUpdateSettings:
             assert data["digest_hour_utc"] == 14
             assert data["digest_enabled"] is True  # unchanged default
 
-    async def test_realtime_toggle_publishes_redis(self, auth_client, db_session, test_user):
+    async def test_realtime_toggle_publishes_redis(
+        self, auth_client, db_session, test_user
+    ):
         # Create settings first
         settings = UserSettings(
             user_id=test_user.id,
@@ -86,8 +86,10 @@ class TestTestBot:
         db_session.add(session)
         await db_session.flush()
 
-        with patch("app.api.v1.settings.config") as mock_config, \
-             patch("app.api.v1.settings.send_telegram_message", new_callable=AsyncMock):
+        with (
+            patch("app.api.v1.settings.config") as mock_config,
+            patch("app.api.v1.settings.send_telegram_message", new_callable=AsyncMock),
+        ):
             mock_config.telegram_bot_token = "bot-token-123"
             response = await auth_client.post("/api/v1/settings/test-bot")
             assert response.status_code == 200

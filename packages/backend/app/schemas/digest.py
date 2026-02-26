@@ -1,4 +1,5 @@
-from datetime import date as date_type, datetime
+from datetime import date as date_type
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -16,4 +17,6 @@ class DigestResponse(BaseModel):
 
 
 class DigestGenerateRequest(BaseModel):
-    date: date_type | None = Field(default=None, description="Date in YYYY-MM-DD format, defaults to yesterday")
+    date: date_type | None = Field(
+        default=None, description="Date in YYYY-MM-DD format, defaults to yesterday"
+    )

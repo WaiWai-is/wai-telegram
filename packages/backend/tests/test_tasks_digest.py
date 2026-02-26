@@ -1,15 +1,10 @@
-from datetime import UTC, datetime
-from uuid import uuid4
-
+from app.core.security import hash_password
 from app.models.settings import UserSettings
 from app.models.user import User
-from app.core.security import hash_password
 
 
 class TestGetEligibleUserIds:
     async def test_matching_hour(self, db_session):
-        from app.tasks.digest_tasks import _get_eligible_user_ids
-
         user = User(
             email="digest@example.com",
             password_hash=hash_password("TestPass1"),

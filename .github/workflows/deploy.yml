@@ -85,7 +85,7 @@ jobs:
       REDIS_URL: redis://localhost:6379
       ENVIRONMENT: development
       SECRET_KEY: ci-test-secret-key
-      ENCRYPTION_KEY: ZHVtbXktZW5jcnlwdGlvbi1rZXktZm9yLWNp
+      ENCRYPTION_KEY: sZEBNdB1PTJZ8o9vGjJsXnUN9cQXz94O1jSWv7l4hQw=
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

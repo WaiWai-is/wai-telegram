@@ -12,13 +12,18 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.session import TelegramSession
 from app.models.settings import UserSettings
-from app.schemas.settings import TestBotResponse, UserSettingsResponse, UserSettingsUpdate
+from app.schemas.settings import (
+    TestBotResponse,
+    UserSettingsResponse,
+    UserSettingsUpdate,
+)
 from app.services.bot_service import send_telegram_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 config = get_settings()
 _redis = redis.from_url(config.redis_url)
+
 
 async def _get_or_create_settings(db: AsyncSession, user_id) -> UserSettings:
     """Get user settings, creating defaults if they don't exist."""
@@ -121,7 +126,6 @@ async def test_bot(
 
     await send_telegram_message(
         session.telegram_user_id,
-        "This is a test message from WAI Telegram AI. "
-        "If you see this, bot delivery is working!",
+        "This is a test message from WAI Telegram AI. If you see this, bot delivery is working!",
     )
     return TestBotResponse(success=True, message="Test message sent successfully")

@@ -84,7 +84,7 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
 
   const handleSyncMore = () => {
     if (!isSyncRunning) {
-      syncMutation.mutate(500)
+      syncMutation.mutate(undefined)
     }
   }
 

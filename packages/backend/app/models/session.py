@@ -11,7 +11,9 @@ class TelegramSession(Base):
     __tablename__ = "telegram_sessions"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     phone_number: Mapped[str] = mapped_column(String(20))
     session_string: Mapped[str] = mapped_column(Text)  # Encrypted with Fernet
     telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
