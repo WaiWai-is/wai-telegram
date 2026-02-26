@@ -211,8 +211,12 @@ async def sync_messages(
     # Always fetch newest-first with the requested limit.
     # When limit is None ("Sync All"): Telethon fetches entire chat history.
     # When limit is N ("Sync Latest N"): Telethon fetches the N newest messages.
-    # Deduplication is handled by the DB constraint (on_conflict_do_nothing),
-    # so re-fetching already-synced messages is safe.
+    # Deduplication is handled by the DB constraint + on_conflict_do_update:
+    #   - Truly new messages are inserted normally.
+    #   - Existing messages are updated ONLY when the incoming row carries a
+    #     transcription and the stored row does not (backfills voice/video_note
+    #     transcriptions added after the initial sync).
+    #   - All other duplicates are silently skipped (WHERE prevents a no-op UPDATE).
     iter_kwargs = {"limit": limit, "wait_time": 0.5}
 
     try:
@@ -254,11 +258,19 @@ async def sync_messages(
             if not last_id or message.id > last_id:
                 last_id = message.id
 
-            # Batch upsert using on_conflict_do_nothing for idempotency
+            # Batch upsert: insert new messages, backfill transcriptions on conflict
             if len(batch_values) >= settings.sync_batch_size:
                 stmt = pg_insert(TelegramMessage).values(batch_values)
-                stmt = stmt.on_conflict_do_nothing(
-                    constraint="uq_telegram_messages_chat_msg"
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_telegram_messages_chat_msg",
+                    set_={
+                        "text": stmt.excluded.text,
+                        "transcribed_at": stmt.excluded.transcribed_at,
+                    },
+                    where=(
+                        stmt.excluded.transcribed_at.isnot(None)
+                        & TelegramMessage.transcribed_at.is_(None)
+                    ),
                 ).returning(TelegramMessage.id)
                 result = await db.execute(stmt)
                 inserted_ids = [row[0] for row in result.fetchall()]
@@ -288,8 +300,16 @@ async def sync_messages(
         # Insert remaining batch
         if batch_values:
             stmt = pg_insert(TelegramMessage).values(batch_values)
-            stmt = stmt.on_conflict_do_nothing(
-                constraint="uq_telegram_messages_chat_msg"
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_telegram_messages_chat_msg",
+                set_={
+                    "text": stmt.excluded.text,
+                    "transcribed_at": stmt.excluded.transcribed_at,
+                },
+                where=(
+                    stmt.excluded.transcribed_at.isnot(None)
+                    & TelegramMessage.transcribed_at.is_(None)
+                ),
             ).returning(TelegramMessage.id)
             result = await db.execute(stmt)
             inserted_ids = [row[0] for row in result.fetchall()]
