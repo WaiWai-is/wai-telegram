@@ -237,6 +237,7 @@ async def sync_messages(
                 "sender_name": _get_sender_name(message),
                 "is_outgoing": message.out,
                 "sent_at": message.date,
+                "transcribed_at": None,
             }
 
             # Transcribe voice/video_note messages
@@ -250,6 +251,9 @@ async def sync_messages(
                     logger.warning(
                         f"Transcription failed for message {message.id}: {e}"
                     )
+                # Keep heartbeat alive during voice-heavy batches
+                if on_progress:
+                    on_progress(messages_seen)
 
             batch_values.append(msg_values)
             messages_synced += 1

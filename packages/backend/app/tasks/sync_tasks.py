@@ -27,7 +27,7 @@ LOCK_TTL = 180
 LOCK_REFRESH_INTERVAL = 30
 SYNC_PROGRESS_TTL = 3600  # 1h Redis key TTL for single-chat sync progress
 BULK_SYNC_TTL = 86400  # 24h Redis key TTL for bulk progress
-JOB_HEARTBEAT_TTL = 180
+JOB_HEARTBEAT_TTL = 600
 STALE_JOB_THRESHOLD = timedelta(minutes=15)
 
 
