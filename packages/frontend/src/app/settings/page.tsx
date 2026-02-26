@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
-import { api, UserSettings, UserSettingsUpdate } from '@/lib/api'
+import { api, UserSettings, UserSettingsUpdate, ApiKeyInfo, ApiKeyCreateResponse } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useRouter } from 'next/navigation'
@@ -206,6 +206,147 @@ function Toggle({
   )
 }
 
+// --- MCP Platform Configs ---
+
+interface PlatformConfig {
+  id: string
+  name: string
+  filePath: string
+  getConfig: (apiKey: string) => string
+}
+
+const PLATFORM_CONFIGS: PlatformConfig[] = [
+  {
+    id: 'claude-desktop',
+    name: 'Claude Desktop',
+    filePath: '~/Library/Application Support/Claude/claude_desktop_config.json',
+    getConfig: (apiKey) => JSON.stringify({
+      mcpServers: {
+        'telegram-ai': {
+          command: 'uvx',
+          args: ['telegram-ai-mcp'],
+          env: {
+            TELEGRAM_AI_URL: 'https://telegram.waiwai.is',
+            TELEGRAM_AI_KEY: apiKey,
+          },
+        },
+      },
+    }, null, 2),
+  },
+  {
+    id: 'claude-code',
+    name: 'Claude Code',
+    filePath: 'Run in terminal',
+    getConfig: (apiKey) =>
+      `claude mcp add telegram-ai -- uvx telegram-ai-mcp\n# Then set env vars:\nexport TELEGRAM_AI_URL="https://telegram.waiwai.is"\nexport TELEGRAM_AI_KEY="${apiKey}"`,
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    filePath: '.cursor/mcp.json',
+    getConfig: (apiKey) => JSON.stringify({
+      mcpServers: {
+        'telegram-ai': {
+          command: 'uvx',
+          args: ['telegram-ai-mcp'],
+          env: {
+            TELEGRAM_AI_URL: 'https://telegram.waiwai.is',
+            TELEGRAM_AI_KEY: apiKey,
+          },
+        },
+      },
+    }, null, 2),
+  },
+  {
+    id: 'windsurf',
+    name: 'Windsurf',
+    filePath: '~/.codeium/windsurf/mcp_config.json',
+    getConfig: (apiKey) => JSON.stringify({
+      mcpServers: {
+        'telegram-ai': {
+          command: 'uvx',
+          args: ['telegram-ai-mcp'],
+          env: {
+            TELEGRAM_AI_URL: 'https://telegram.waiwai.is',
+            TELEGRAM_AI_KEY: apiKey,
+          },
+        },
+      },
+    }, null, 2),
+  },
+  {
+    id: 'cline',
+    name: 'Cline',
+    filePath: 'Cline MCP settings in VS Code',
+    getConfig: (apiKey) => JSON.stringify({
+      mcpServers: {
+        'telegram-ai': {
+          command: 'uvx',
+          args: ['telegram-ai-mcp'],
+          env: {
+            TELEGRAM_AI_URL: 'https://telegram.waiwai.is',
+            TELEGRAM_AI_KEY: apiKey,
+          },
+        },
+      },
+    }, null, 2),
+  },
+]
+
+function PlatformAccordion({ selectedApiKey }: { selectedApiKey: string }) {
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
+
+  const handleCopy = async (id: string, text: string) => {
+    await navigator.clipboard.writeText(text)
+    setCopied(id)
+    setTimeout(() => setCopied(null), 2000)
+  }
+
+  const displayKey = selectedApiKey || 'YOUR_API_KEY'
+
+  return (
+    <div className="space-y-1">
+      {PLATFORM_CONFIGS.map((platform) => {
+        const isOpen = openId === platform.id
+        const config = platform.getConfig(displayKey)
+        return (
+          <div key={platform.id} className="border rounded-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setOpenId(isOpen ? null : platform.id)}
+              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-surface-hover transition-colors"
+            >
+              <span className="text-sm font-medium text-primary">{platform.name}</span>
+              <svg
+                className={`w-4 h-4 text-tertiary transition-transform ${isOpen ? 'rotate-180' : ''}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {isOpen && (
+              <div className="px-4 pb-4 border-t">
+                <p className="text-xs text-tertiary mt-3 mb-2">{platform.filePath}</p>
+                <pre className="text-xs overflow-x-auto bg-surface-hover rounded-lg p-3 text-primary">{config}</pre>
+                <button
+                  type="button"
+                  onClick={() => handleCopy(platform.id, config)}
+                  className="mt-2 px-3 py-1.5 text-xs border rounded-lg text-secondary hover:bg-surface-hover transition-colors"
+                >
+                  {copied === platform.id ? 'Copied!' : 'Copy to Clipboard'}
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const router = useRouter()
   const { user, isLoading: authLoading } = useAuth()
@@ -221,7 +362,13 @@ export default function SettingsPage() {
   const [authError, setAuthError] = useState('')
 
   // API key state
-  const [apiKey, setApiKey] = useState('')
+  const [newKeyName, setNewKeyName] = useState('')
+  const [newlyCreatedKey, setNewlyCreatedKey] = useState<ApiKeyCreateResponse | null>(null)
+  const [selectedKeyForConfig, setSelectedKeyForConfig] = useState('')
+  const [keyCopied, setKeyCopied] = useState(false)
+
+  // Test connection state
+  const [testStatus, setTestStatus] = useState<{ success?: boolean; message?: string; chat_count?: number; message_count?: number } | null>(null)
 
   // Bot test state
   const [testBotStatus, setTestBotStatus] = useState<{ success?: boolean; message?: string } | null>(null)
@@ -244,6 +391,12 @@ export default function SettingsPage() {
   const { data: settings, isLoading: settingsLoading } = useQuery({
     queryKey: ['user-settings'],
     queryFn: () => api.getSettings(),
+    enabled: !!user,
+  })
+
+  const { data: apiKeys, isLoading: keysLoading } = useQuery({
+    queryKey: ['api-keys'],
+    queryFn: () => api.listApiKeys(),
     enabled: !!user,
   })
 
@@ -297,11 +450,35 @@ export default function SettingsPage() {
     },
   })
 
-  const generateApiKeyMutation = useMutation({
-    mutationFn: () => api.generateApiKey(),
+  const createKeyMutation = useMutation({
+    mutationFn: (name: string) => api.createApiKey(name),
     onSuccess: (data) => {
-      setApiKey(data.api_key)
+      setNewlyCreatedKey(data)
+      setNewKeyName('')
+      setSelectedKeyForConfig(data.api_key)
+      queryClient.invalidateQueries({ queryKey: ['api-keys'] })
     },
+  })
+
+  const revokeKeyMutation = useMutation({
+    mutationFn: (keyId: string) => api.revokeApiKey(keyId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['api-keys'] })
+    },
+  })
+
+  const toggleKeyMutation = useMutation({
+    mutationFn: ({ keyId, isActive }: { keyId: string; isActive: boolean }) =>
+      api.toggleApiKey(keyId, isActive),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['api-keys'] })
+    },
+  })
+
+  const testConnectionMutation = useMutation({
+    mutationFn: () => api.testMcpConnection(),
+    onSuccess: (data) => setTestStatus(data),
+    onError: (err: Error) => setTestStatus({ success: false, message: err.message }),
   })
 
   // Auto-detect timezone on first visit
@@ -649,60 +826,175 @@ export default function SettingsPage() {
           ) : null}
         </section>
 
-        {/* API Key */}
-        <section className="border rounded-xl p-6">
+        {/* API Keys */}
+        <section className="border rounded-xl p-6 mb-6">
           <h2 className="text-lg font-medium mb-4 text-primary">
-            MCP API Key
+            API Keys
           </h2>
           <p className="text-sm text-secondary mb-4">
-            Generate an API key to use with Claude Code MCP integration.
+            Create API keys to connect MCP clients like Claude Desktop, Claude Code, Cursor, and more.
           </p>
 
-          {apiKey ? (
-            <div className="space-y-4">
-              <div className="p-3 border rounded-lg">
-                <p className="text-sm text-secondary mb-2">
-                  Copy this key now. It won&apos;t be shown again.
-                </p>
-                <code className="block p-2 bg-surface-hover rounded text-sm break-all text-primary">
-                  {apiKey}
-                </code>
-              </div>
-              <div className="p-3 bg-surface-hover rounded-lg">
-                <p className="text-sm text-secondary mb-2">
-                  Add this to your Claude Code settings:
-                </p>
-                <pre className="text-xs overflow-x-auto text-primary">
-{`{
-  "mcpServers": {
-    "telegram-ai": {
-      "command": "uvx",
-      "args": ["telegram-ai-mcp"],
-      "env": {
-        "TELEGRAM_AI_URL": "http://localhost:8000",
-        "TELEGRAM_AI_KEY": "${apiKey}"
-      }
-    }
-  }
-}`}
-                </pre>
-              </div>
+          {/* Existing keys table */}
+          {keysLoading ? (
+            <div className="animate-pulse h-20 bg-surface-hover rounded mb-4" />
+          ) : apiKeys && apiKeys.length > 0 ? (
+            <div className="border rounded-lg overflow-hidden mb-4">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-surface-hover">
+                    <th className="text-left px-4 py-2.5 font-medium text-secondary">Name</th>
+                    <th className="text-left px-4 py-2.5 font-medium text-secondary">Key</th>
+                    <th className="text-left px-4 py-2.5 font-medium text-secondary">Status</th>
+                    <th className="text-right px-4 py-2.5 font-medium text-secondary">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {apiKeys.map((key) => (
+                    <tr key={key.id} className="border-t">
+                      <td className="px-4 py-2.5 text-primary">{key.name}</td>
+                      <td className="px-4 py-2.5">
+                        <code className="text-xs text-tertiary">{key.key_hint}</code>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                          key.is_active
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                            : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+                        }`}>
+                          {key.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => toggleKeyMutation.mutate({ keyId: key.id, isActive: !key.is_active })}
+                            disabled={toggleKeyMutation.isPending}
+                            className="p-1.5 rounded hover:bg-surface-hover transition-colors text-tertiary hover:text-primary"
+                            title={key.is_active ? 'Disable' : 'Enable'}
+                          >
+                            {key.is_active ? (
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                            ) : (
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm(`Revoke API key "${key.name}"? This cannot be undone.`)) {
+                                revokeKeyMutation.mutate(key.id)
+                              }
+                            }}
+                            disabled={revokeKeyMutation.isPending}
+                            className="p-1.5 rounded hover:bg-surface-hover transition-colors text-tertiary hover:text-red-500"
+                            title="Revoke"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           ) : (
-            <button
-              onClick={() => generateApiKeyMutation.mutate()}
-              disabled={generateApiKeyMutation.isPending}
-              className="px-4 py-2 bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity"
-            >
-              {generateApiKeyMutation.isPending ? 'Generating...' : 'Generate API Key'}
-            </button>
+            <p className="text-sm text-tertiary mb-4">No API keys yet. Create one to get started.</p>
           )}
 
-          {user.has_api_key && !apiKey && (
-            <p className="mt-2 text-sm text-tertiary">
-              You already have an API key. Generating a new one will replace it.
-            </p>
+          {/* Newly created key display */}
+          {newlyCreatedKey && (
+            <div className="p-4 border border-green-300 dark:border-green-700 rounded-lg mb-4 bg-green-50 dark:bg-green-900/10">
+              <p className="text-sm font-medium text-primary mb-2">
+                API key &quot;{newlyCreatedKey.name}&quot; created successfully
+              </p>
+              <p className="text-sm text-secondary mb-2">
+                Copy this key now. It won&apos;t be shown again.
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 p-2 bg-surface-hover rounded text-sm break-all text-primary">
+                  {newlyCreatedKey.api_key}
+                </code>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(newlyCreatedKey.api_key)
+                    setKeyCopied(true)
+                    setTimeout(() => setKeyCopied(false), 2000)
+                  }}
+                  className="shrink-0 px-3 py-2 text-sm border rounded-lg hover:bg-surface-hover transition-colors text-secondary"
+                >
+                  {keyCopied ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+            </div>
           )}
+
+          {/* Create new key form */}
+          <div className="flex items-center gap-3">
+            <input
+              type="text"
+              value={newKeyName}
+              onChange={(e) => setNewKeyName(e.target.value)}
+              placeholder="Key name (e.g. Claude Desktop)"
+              className="flex-1 px-3 py-2.5 border rounded-lg bg-transparent text-primary text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                if (newKeyName.trim()) {
+                  setNewlyCreatedKey(null)
+                  createKeyMutation.mutate(newKeyName.trim())
+                }
+              }}
+              disabled={createKeyMutation.isPending || !newKeyName.trim()}
+              className="shrink-0 px-4 py-2.5 bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity text-sm"
+            >
+              {createKeyMutation.isPending ? 'Creating...' : 'Create Key'}
+            </button>
+          </div>
+
+          {/* Test connection */}
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setTestStatus(null)
+                testConnectionMutation.mutate()
+              }}
+              disabled={testConnectionMutation.isPending}
+              className="px-4 py-2 border text-primary rounded-lg hover:bg-surface-hover transition-colors disabled:opacity-50 text-sm"
+            >
+              {testConnectionMutation.isPending ? 'Testing...' : 'Test MCP Connection'}
+            </button>
+            {testStatus && (
+              <p className={`text-sm ${testStatus.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                {testStatus.message}
+                {testStatus.chat_count !== undefined && ` (${testStatus.chat_count} chats, ${testStatus.message_count} messages)`}
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* MCP Setup Instructions */}
+        <section className="border rounded-xl p-6">
+          <h2 className="text-lg font-medium mb-2 text-primary">
+            MCP Setup
+          </h2>
+          <p className="text-sm text-secondary mb-4">
+            Configure your MCP client to connect to WAI Telegram. Select a platform below for setup instructions.
+          </p>
+
+          <PlatformAccordion selectedApiKey={selectedKeyForConfig || newlyCreatedKey?.api_key || ''} />
         </section>
       </div>
     </main>

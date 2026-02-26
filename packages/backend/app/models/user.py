@@ -13,8 +13,6 @@ class User(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
-    api_key_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    api_key_prefix: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -35,9 +33,13 @@ class User(Base):
     settings: Mapped["UserSettings | None"] = relationship(
         "UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    api_keys: Mapped[list["ApiKey"]] = relationship(
+        "ApiKey", back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 # Import for type hints
+from app.models.api_key import ApiKey  # noqa: E402
 from app.models.chat import TelegramChat  # noqa: E402
 from app.models.digest import DailyDigest  # noqa: E402
 from app.models.session import TelegramSession  # noqa: E402

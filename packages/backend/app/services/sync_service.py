@@ -24,6 +24,7 @@ from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
 from app.services.rate_limiter import record_request
 from app.services.telegram_client import get_client
+from app.services.transcription_service import TRANSCRIBABLE_MEDIA_TYPES, download_and_transcribe
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -218,17 +219,30 @@ async def sync_messages(
             if not message.text and not message.media:
                 continue
 
-            batch_values.append({
+            media_type = _get_media_type(message)
+            msg_values = {
                 "chat_id": chat_id,
                 "telegram_message_id": message.id,
                 "text": message.text,
                 "has_media": bool(message.media),
-                "media_type": _get_media_type(message),
+                "media_type": media_type,
                 "sender_id": message.sender_id,
                 "sender_name": _get_sender_name(message),
                 "is_outgoing": message.out,
                 "sent_at": message.date,
-            })
+            }
+
+            # Transcribe voice/video_note messages
+            if media_type in TRANSCRIBABLE_MEDIA_TYPES:
+                try:
+                    transcript = await download_and_transcribe(client, message)
+                    if transcript:
+                        msg_values["text"] = transcript
+                        msg_values["transcribed_at"] = datetime.now(UTC)
+                except Exception as e:
+                    logger.warning(f"Transcription failed for message {message.id}: {e}")
+
+            batch_values.append(msg_values)
             messages_synced += 1
 
             # Update last_id

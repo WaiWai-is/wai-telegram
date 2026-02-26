@@ -15,6 +15,7 @@ class MessageResponse(BaseModel):
     is_outgoing: bool
     sent_at: datetime
     has_embedding: bool
+    transcribed_at: datetime | None = None
 
     class Config:
         from_attributes = True

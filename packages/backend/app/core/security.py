@@ -51,6 +51,11 @@ def compute_api_key_prefix(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()[:16]
 
 
+def get_key_hint(api_key: str) -> str:
+    """Extract last 4 chars for display: wai_****abcd."""
+    return f"wai_****{api_key[-4:]}"
+
+
 def generate_api_key() -> str:
     return f"wai_{secrets.token_urlsafe(32)}"
 

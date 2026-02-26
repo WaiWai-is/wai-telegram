@@ -28,6 +28,7 @@ from app.models.settings import UserSettings
 from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
 from app.services.sync_service import sync_messages
+from app.services.transcription_service import TRANSCRIBABLE_MEDIA_TYPES, download_and_transcribe
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -244,17 +245,31 @@ class TelegramListener:
                     await asyncio.sleep(e.seconds)
                     sender = await event.get_sender()
 
+                media_type = _get_media_type(message.media)
                 values = {
                     "chat_id": chat.id,
                     "telegram_message_id": message.id,
                     "text": message.text,
                     "has_media": bool(message.media),
-                    "media_type": _get_media_type(message.media),
+                    "media_type": media_type,
                     "sender_id": message.sender_id,
                     "sender_name": _get_sender_name(sender),
                     "is_outgoing": message.out,
                     "sent_at": message.date,
                 }
+
+                # Transcribe voice/video_note messages
+                if media_type in TRANSCRIBABLE_MEDIA_TYPES:
+                    try:
+                        transcript = await download_and_transcribe(
+                            self.clients[user_id], message
+                        )
+                        if transcript:
+                            values["text"] = transcript
+                            values["transcribed_at"] = datetime.now(UTC)
+                    except Exception as e:
+                        logger.warning(f"Transcription failed for message {message.id}: {e}")
+
                 stmt = pg_insert(TelegramMessage).values(**values)
                 stmt = stmt.on_conflict_do_nothing(
                     constraint="uq_telegram_messages_chat_msg"
@@ -267,10 +282,10 @@ class TelegramListener:
                 # Update chat's last_message_id and preview
                 if not chat.last_message_id or message.id > chat.last_message_id:
                     chat.last_message_id = message.id
-                    preview = message.text[:200] if message.text else None
+                    text = values.get("text")
+                    preview = text[:200] if text else None
                     if not preview and message.media:
-                        media_label = _get_media_type(message.media)
-                        preview = f"[{media_label}]" if media_label else "[media]"
+                        preview = f"[{media_type}]" if media_type else "[media]"
                     chat.last_message_text = preview
                     chat.last_message_sender_name = _get_sender_name(sender)
                     chat.last_activity_at = message.date

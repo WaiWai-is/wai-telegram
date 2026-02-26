@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import compute_api_key_prefix, decode_token, verify_api_key
+from app.models.api_key import ApiKey
 from app.models.user import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
@@ -36,16 +38,24 @@ async def get_current_user(
                 if user:
                     return user
 
-    # Try API key
+    # Try API key via api_keys table
     if api_key and api_key.credentials.startswith("wai_"):
-        # O(1) lookup via indexed prefix, then single bcrypt verify
         prefix = compute_api_key_prefix(api_key.credentials)
         result = await db.execute(
-            select(User).where(User.api_key_prefix == prefix)
+            select(ApiKey).where(
+                ApiKey.key_prefix == prefix,
+                ApiKey.is_active == True,
+            )
         )
-        user = result.scalar_one_or_none()
-        if user and user.api_key_hash and verify_api_key(api_key.credentials, user.api_key_hash):
-            return user
+        # Iterate candidates to handle (unlikely) prefix collisions
+        for api_key_record in result.scalars().all():
+            if verify_api_key(api_key.credentials, api_key_record.key_hash):
+                api_key_record.last_used_at = datetime.now(UTC)
+                await db.flush()
+                result = await db.execute(select(User).where(User.id == api_key_record.user_id))
+                user = result.scalar_one_or_none()
+                if user:
+                    return user
 
     raise credentials_exception
 

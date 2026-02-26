@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import get_settings
 from app.core.database import Base
-from app.models import *  # noqa: F401, F403
+try:
+    from app.models import *  # noqa: F401, F403
+except ModuleNotFoundError as exc:
+    # Allow running explicit migrations in constrained environments where
+    # optional runtime deps (e.g. pgvector) are unavailable.
+    if exc.name != "pgvector":
+        raise
 
 config = context.config
 settings = get_settings()

@@ -11,9 +11,18 @@ from telegram_ai_mcp.client import TelegramAIClient
 # Initialize MCP server
 server = Server("telegram-ai-mcp")
 client: TelegramAIClient | None = None
-MAX_LIMIT = 100
-MAX_LOOKBACK_HOURS = 24 * 30
+MAX_LIMIT = 200
 MAX_LOOKBACK_DAYS = 180
+
+# Media type display labels
+MEDIA_LABELS = {
+    "photo": "Photo",
+    "video": "Video",
+    "audio": "Audio",
+    "document": "Document",
+    "voice": "Voice message",
+    "video_note": "Video note",
+}
 
 
 def get_client() -> TelegramAIClient:
@@ -83,6 +92,30 @@ def _format_date(value: Any) -> str:
     return "unknown"
 
 
+def _format_media_label(msg: dict) -> str:
+    """Format a media label based on media_type, text, and transcribed_at."""
+    media_type = msg.get("media_type")
+    text = msg.get("text")
+    transcribed_at = msg.get("transcribed_at")
+
+    if media_type in ("voice", "video_note") and text and transcribed_at:
+        label = "Voice transcript" if media_type == "voice" else "Video note transcript"
+        return f"[{label}]: {text}"
+
+    if media_type and text:
+        # Has both media and text (e.g. photo with caption)
+        return text
+
+    if text:
+        return text
+
+    if media_type:
+        label = MEDIA_LABELS.get(media_type, "Media")
+        return f"[{label}]"
+
+    return "[Media]"
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available MCP tools."""
@@ -133,21 +166,26 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="get_recent_messages",
-            description="Get recent messages from a specific chat or all chats.",
+            name="get_chat_messages",
+            description="Read messages from a specific chat with pagination. Use the 'before' cursor to page through history.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "chat_id": {
                         "type": "string",
-                        "description": "Optional: Chat ID to get messages from",
+                        "description": "The chat ID to read messages from",
                     },
-                    "hours": {
+                    "limit": {
                         "type": "integer",
-                        "description": "How many hours back to look (default: 24)",
-                        "default": 24,
+                        "description": "Number of messages to return (default: 50, max: 200)",
+                        "default": 50,
+                    },
+                    "before": {
+                        "type": "string",
+                        "description": "Pagination cursor - pass next_cursor from a previous response to get older messages",
                     },
                 },
+                "required": ["chat_id"],
             },
         ),
         Tool(
@@ -182,6 +220,39 @@ async def list_tools() -> list[Tool]:
                 "required": ["chat_id"],
             },
         ),
+        Tool(
+            name="sync_chat",
+            description="Trigger a message sync from Telegram for a specific chat. Use when you need the latest messages or when a chat has incomplete data.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chat_id": {
+                        "type": "string",
+                        "description": "The chat ID to sync",
+                    },
+                    "message_limit": {
+                        "type": "integer",
+                        "description": "Maximum messages to sync (default: 500)",
+                        "default": 500,
+                    },
+                },
+                "required": ["chat_id"],
+            },
+        ),
+        Tool(
+            name="get_sync_status",
+            description="Check the progress of a sync job started with sync_chat.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "The job ID returned by sync_chat",
+                    },
+                },
+                "required": ["job_id"],
+            },
+        ),
     ]
 
 
@@ -194,7 +265,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
         if name == "search_messages":
             query = _require_str(args, "query")
-            limit = _optional_int(args, "limit", default=20, minimum=1, maximum=MAX_LIMIT)
+            limit = _optional_int(args, "limit", default=20, minimum=1, maximum=100)
             date_from = _optional_iso_datetime(args, "date_from")
             date_to = _optional_iso_datetime(args, "date_to")
             chat_id = args.get("chat_id")
@@ -213,27 +284,21 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             chat_type = args.get("chat_type")
             if chat_type is not None and not isinstance(chat_type, str):
                 raise ValueError('"chat_type" must be a string')
-            result = await api.list_chats(
-                chat_type=chat_type,
-            )
+            result = await api.list_chats(chat_type=chat_type)
             return format_chat_list(result)
 
-        elif name == "get_recent_messages":
-            chat_id = args.get("chat_id")
-            if chat_id is not None and not isinstance(chat_id, str):
-                raise ValueError('"chat_id" must be a string UUID')
-            hours = _optional_int(
-                args,
-                "hours",
-                default=24,
-                minimum=1,
-                maximum=MAX_LOOKBACK_HOURS,
-            )
-            result = await api.get_recent_messages(
+        elif name == "get_chat_messages":
+            chat_id = _require_str(args, "chat_id")
+            limit = _optional_int(args, "limit", default=50, minimum=1, maximum=MAX_LIMIT)
+            before = args.get("before")
+            if before is not None and not isinstance(before, str):
+                raise ValueError('"before" must be a string cursor')
+            result = await api.get_messages(
                 chat_id=chat_id,
-                hours=hours,
+                limit=limit,
+                before=before,
             )
-            return format_messages(result)
+            return format_chat_messages(result)
 
         elif name == "get_daily_digest":
             digest_date = _optional_iso_date(args, "date")
@@ -255,6 +320,22 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )
             return format_chat_summary(result)
 
+        elif name == "sync_chat":
+            chat_id = _require_str(args, "chat_id")
+            message_limit = _optional_int(
+                args, "message_limit", default=500, minimum=1, maximum=10000
+            )
+            result = await api.sync_chat(
+                chat_id=chat_id,
+                message_limit=message_limit,
+            )
+            return format_sync_started(result)
+
+        elif name == "get_sync_status":
+            job_id = _require_str(args, "job_id")
+            result = await api.get_sync_status(job_id)
+            return format_sync_status(result)
+
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -274,7 +355,7 @@ def format_search_results(result: dict) -> list[TextContent]:
     lines = [f"Found {total} messages for query: \"{query}\"\n"]
     for r in result.get("results", []):
         sender = r.get("sender_name") or ("You" if r.get("is_outgoing") else "Unknown")
-        text = (r.get("text") or "")[:200]
+        text = _format_media_label(r)[:200]
         similarity = r.get("similarity", 0) * 100
         sent_at = _format_date(r.get("sent_at"))
         chat_title = r.get("chat_title") or "Unknown"
@@ -303,16 +384,26 @@ def format_chat_list(result: dict) -> list[TextContent]:
     return [TextContent(type="text", text="\n".join(lines))]
 
 
-def format_messages(messages: list) -> list[TextContent]:
-    """Format message list for display."""
+def format_chat_messages(result: dict) -> list[TextContent]:
+    """Format paginated chat messages for display."""
+    messages = result.get("messages", [])
     if not messages:
-        return [TextContent(type="text", text="No recent messages found.")]
+        return [TextContent(type="text", text="No messages found in this chat.")]
 
-    lines = ["Recent Messages:\n"]
+    lines = [f"Messages ({len(messages)} returned):\n"]
     for msg in messages:
-        sender = msg.get("sender_name", "You" if msg.get("is_outgoing") else "Unknown")
-        text = (msg.get("text") or "[media]")[:200]
-        lines.append(f"[{msg.get('chat_title', 'Unknown')}] {sender}: {text}\n")
+        sender = msg.get("sender_name") or ("You" if msg.get("is_outgoing") else "Unknown")
+        text = _format_media_label(msg)[:200]
+        sent_at = _format_date(msg.get("sent_at"))
+        lines.append(f"[{sent_at}] {sender}: {text}\n")
+
+    has_more = result.get("has_more", False)
+    next_cursor = result.get("next_cursor")
+    if has_more and next_cursor:
+        lines.append(f"\n--- More messages available. Use before=\"{next_cursor}\" to continue ---")
+    elif not has_more:
+        lines.append("\n--- End of messages ---")
+
     return [TextContent(type="text", text="\n".join(lines))]
 
 
@@ -339,8 +430,46 @@ def format_chat_summary(result: dict) -> list[TextContent]:
     ]
     for msg in result.get("messages", [])[:10]:
         sender = msg.get("sender_name", "Unknown")
-        text = (msg.get("text") or "[media]")[:100]
+        text = _format_media_label(msg)[:100]
         lines.append(f"• {sender}: {text}\n")
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+def format_sync_started(result: dict) -> list[TextContent]:
+    """Format sync started response."""
+    job_id = result.get("id") or result.get("job_id", "unknown")
+    status = result.get("status", "unknown")
+    lines = [
+        f"Sync started successfully.\n",
+        f"Job ID: {job_id}\n",
+        f"Status: {status}\n",
+        f"\nUse get_sync_status with job_id=\"{job_id}\" to check progress.",
+    ]
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+def format_sync_status(result: dict) -> list[TextContent]:
+    """Format sync status response."""
+    job_id = result.get("job_id", "unknown")
+    status = result.get("status", "unknown")
+    messages_processed = result.get("messages_processed", 0)
+    progress = result.get("progress_percent")
+    error = result.get("error_message")
+
+    lines = [
+        f"Sync Job: {job_id}\n",
+        f"Status: {status}\n",
+        f"Messages processed: {messages_processed}\n",
+    ]
+    if progress is not None:
+        lines.append(f"Progress: {progress}%\n")
+    if error:
+        lines.append(f"Error: {error}\n")
+    if status == "in_progress":
+        lines.append(f"\nSync is still running. Check again in a few seconds.")
+    elif status == "completed":
+        lines.append(f"\nSync completed. You can now read the messages with get_chat_messages.")
+
     return [TextContent(type="text", text="\n".join(lines))]
 
 

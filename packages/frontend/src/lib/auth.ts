@@ -5,7 +5,6 @@ import { api } from './api'
 interface User {
   id: string
   email: string
-  has_api_key: boolean
 }
 
 interface AuthState {

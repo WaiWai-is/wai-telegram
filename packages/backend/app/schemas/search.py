@@ -22,6 +22,9 @@ class SearchResultItem(BaseModel):
     is_outgoing: bool
     sent_at: datetime
     similarity: float
+    has_media: bool = False
+    media_type: str | None = None
+    transcribed_at: datetime | None = None
 
     class Config:
         from_attributes = True

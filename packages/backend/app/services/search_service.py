@@ -38,7 +38,10 @@ async def semantic_search(
             m.sender_name,
             m.is_outgoing,
             m.sent_at,
-            1 - (m.embedding <=> cast(:embedding as vector({dimensions}))) as similarity
+            1 - (m.embedding <=> cast(:embedding as vector({dimensions}))) as similarity,
+            m.has_media,
+            m.media_type,
+            m.transcribed_at
         FROM telegram_messages m
         JOIN telegram_chats c ON m.chat_id = c.id
         WHERE c.user_id = :user_id
@@ -81,6 +84,9 @@ async def semantic_search(
             is_outgoing=row.is_outgoing,
             sent_at=row.sent_at,
             similarity=row.similarity,
+            has_media=row.has_media,
+            media_type=row.media_type,
+            transcribed_at=row.transcribed_at,
         )
         for row in rows
     ]

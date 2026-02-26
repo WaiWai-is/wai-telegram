@@ -243,6 +243,7 @@ async def get_chat_messages(
                 is_outgoing=msg.is_outgoing,
                 sent_at=msg.sent_at,
                 has_embedding=msg.embedding is not None,
+                transcribed_at=msg.transcribed_at,
             )
             for msg in messages
         ],

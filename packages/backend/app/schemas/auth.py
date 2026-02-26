@@ -3,7 +3,7 @@ from uuid import UUID
 
 import re
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class RegisterRequest(BaseModel):
@@ -41,12 +41,37 @@ class UserResponse(BaseModel):
     id: UUID
     email: str
     created_at: datetime
-    has_api_key: bool
 
     class Config:
         from_attributes = True
 
 
+# --- API Key schemas ---
+
+
+class ApiKeyCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
 class ApiKeyResponse(BaseModel):
+    id: UUID
+    name: str
+    key_hint: str
+    is_active: bool
+    created_at: datetime
+    last_used_at: datetime | None
+
+    class Config:
+        from_attributes = True
+
+
+class ApiKeyCreateResponse(BaseModel):
+    id: UUID
+    name: str
     api_key: str
+    key_hint: str
     message: str = "Store this API key securely. It won't be shown again."
+
+
+class ApiKeyUpdateRequest(BaseModel):
+    is_active: bool

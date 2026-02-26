@@ -97,36 +97,32 @@ class TelegramAIClient:
         """Get details for a specific chat."""
         return await self._request("GET", f"/api/v1/chats/{chat_id}")
 
-    async def get_chat_messages(
+    async def get_messages(
         self,
         chat_id: str,
         limit: int = 50,
-        offset: int = 0,
+        before: str | None = None,
     ) -> dict[str, Any]:
-        """Get messages from a specific chat."""
-        params = {"limit": limit, "offset": offset}
+        """Get messages from a specific chat with cursor pagination."""
+        params: dict[str, Any] = {"limit": limit}
+        if before:
+            params["before"] = before
         return await self._request("GET", f"/api/v1/chats/{chat_id}/messages", params=params)
 
-    async def get_recent_messages(
+    async def sync_chat(
         self,
-        chat_id: str | None = None,
-        hours: int = 24,
-        limit: int = 100,
-    ) -> list[dict[str, Any]]:
-        """Get recent messages."""
-        # Use search with time filter
-        from datetime import timedelta, UTC
+        chat_id: str,
+        message_limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Trigger message sync for a chat."""
+        params: dict[str, Any] = {}
+        if message_limit is not None:
+            params["limit"] = message_limit
+        return await self._request("POST", f"/api/v1/sync/chats/{chat_id}", params=params)
 
-        hours = self._clamp(hours, 1, MAX_LOOKBACK_HOURS)
-        limit = self._clamp(limit, 1, MAX_LIMIT)
-        date_from = datetime.now(UTC) - timedelta(hours=hours)
-        result = await self.search_messages(
-            query="*",  # Match all
-            chat_ids=[chat_id] if chat_id else None,
-            date_from=date_from,
-            limit=limit,
-        )
-        return result.get("results", [])
+    async def get_sync_status(self, job_id: str) -> dict[str, Any]:
+        """Get sync job status."""
+        return await self._request("GET", f"/api/v1/sync/jobs/{job_id}")
 
     async def get_daily_digest(
         self,

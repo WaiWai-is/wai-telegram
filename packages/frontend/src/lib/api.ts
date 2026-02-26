@@ -105,6 +105,10 @@ class ApiClient {
       throw new Error(error.detail || 'Request failed')
     }
 
+    if (response.status === 204) {
+      return undefined as T
+    }
+
     return response.json()
   }
 
@@ -137,14 +141,38 @@ class ApiClient {
   }
 
   async getMe() {
-    return this.request<{ id: string; email: string; has_api_key: boolean }>(
+    return this.request<{ id: string; email: string }>(
       'GET',
       '/api/v1/auth/me'
     )
   }
 
-  async generateApiKey() {
-    return this.request<{ api_key: string }>('POST', '/api/v1/auth/api-key')
+  // API Key Management
+  async listApiKeys() {
+    return this.request<ApiKeyInfo[]>('GET', '/api/v1/auth/api-keys')
+  }
+
+  async createApiKey(name: string) {
+    return this.request<ApiKeyCreateResponse>('POST', '/api/v1/auth/api-keys', {
+      body: { name },
+    })
+  }
+
+  async revokeApiKey(keyId: string) {
+    return this.request<void>('DELETE', `/api/v1/auth/api-keys/${keyId}`)
+  }
+
+  async toggleApiKey(keyId: string, isActive: boolean) {
+    return this.request<ApiKeyInfo>('PATCH', `/api/v1/auth/api-keys/${keyId}`, {
+      body: { is_active: isActive },
+    })
+  }
+
+  async testMcpConnection() {
+    return this.request<{ success: boolean; message: string; chat_count?: number; message_count?: number }>(
+      'POST',
+      '/api/v1/auth/api-keys/test'
+    )
   }
 
   // Telegram
@@ -301,6 +329,7 @@ export interface Message {
   sender_name: string | null
   is_outgoing: boolean
   sent_at: string
+  transcribed_at: string | null
 }
 
 export interface SearchResult {
@@ -370,4 +399,21 @@ export interface UserSettingsUpdate {
   digest_timezone?: string
   digest_telegram_enabled?: boolean
   realtime_sync_enabled?: boolean
+}
+
+export interface ApiKeyInfo {
+  id: string
+  name: string
+  key_hint: string
+  is_active: boolean
+  created_at: string
+  last_used_at: string | null
+}
+
+export interface ApiKeyCreateResponse {
+  id: string
+  name: string
+  api_key: string
+  key_hint: string
+  message: string
 }

@@ -48,7 +48,11 @@ class Settings(BaseSettings):
 
     # Anthropic (digests)
     anthropic_api_key: str = Field(default="")
-    digest_model: str = "claude-sonnet-4-20250514"
+    digest_model: str = "claude-sonnet-4-6"
+
+    # DeepGram (voice transcription)
+    deepgram_api_key: str = Field(default="")
+    deepgram_model: str = "nova-3"
 
     # Sync settings
     sync_batch_size: int = 100
