@@ -88,7 +88,8 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies
-        run: uv sync --all-extras
+        working-directory: packages/backend
+        run: uv sync --extra dev
       - name: Create pgvector extension
         run: |
           PGPASSWORD=telegram_test psql -h localhost -U telegram -d telegram_ai_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
@@ -142,7 +143,8 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies
-        run: uv sync --all-extras
+        working-directory: packages/mcp-server
+        run: uv sync --extra dev
       - name: Run tests
         working-directory: packages/mcp-server
         run: uv run pytest tests/ -v
