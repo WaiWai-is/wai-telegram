@@ -268,6 +268,9 @@ async def _run_sync(
     job_id: UUID | None = None,
 ) -> dict:
     """Run single chat sync operation."""
+    from app.core.database import dispose_engine
+
+    await dispose_engine()  # Clear stale pool connections from parent process
     async with get_db_context() as db:
         if job_id:
             result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
@@ -336,8 +339,10 @@ def sync_all_chats_task(self, user_id: str, job_id: str, limit_per_chat: int = 5
 
 async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> None:
     """Run bulk sync for all user chats sequentially."""
+    from app.core.database import dispose_engine
     from app.models.chat import TelegramChat
 
+    await dispose_engine()
     async with get_db_context() as db:
         result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
         job = result.scalar_one()
@@ -447,8 +452,10 @@ def listener_health_check():
 
 async def _listener_health_check() -> dict:
     """Ensure listener heartbeats exist for users with realtime sync enabled."""
+    from app.core.database import dispose_engine
     from app.models.settings import UserSettings
 
+    await dispose_engine()
     checked = 0
     restarted = 0
 
@@ -480,6 +487,9 @@ def reap_stale_sync_jobs() -> dict:
 
 
 async def _reap_stale_sync_jobs() -> dict:
+    from app.core.database import dispose_engine
+
+    await dispose_engine()
     stale_cutoff = datetime.now(UTC) - STALE_JOB_THRESHOLD
     scanned = 0
     expired = 0
@@ -532,6 +542,9 @@ async def _mark_job_state(
     if not job_id:
         return
 
+    from app.core.database import dispose_engine
+
+    await dispose_engine()
     terminal = {SyncStatus.COMPLETED, SyncStatus.FAILED, SyncStatus.CANCELLED}
 
     async with get_db_context() as db:

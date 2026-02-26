@@ -28,6 +28,16 @@ class Base(DeclarativeBase):
     pass
 
 
+async def dispose_engine() -> None:
+    """Dispose the engine's connection pool.
+
+    Call this inside a fresh asyncio.run() before using the DB
+    (e.g. in Celery forked workers) to clear stale connections
+    that were inherited from the parent process.
+    """
+    await engine.dispose()
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         try:
