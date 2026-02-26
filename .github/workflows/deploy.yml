@@ -23,7 +23,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --all-extras
       - name: Lint backend
         run: uv run ruff check packages/backend
       - name: Format check backend
@@ -90,7 +90,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --all-extras
       - name: Create pgvector extension
         run: |
           PGPASSWORD=telegram_test psql -h localhost -U telegram -d telegram_ai_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
@@ -144,7 +144,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --all-extras
       - name: Run tests
         working-directory: packages/mcp-server
         run: uv run pytest tests/ -v
