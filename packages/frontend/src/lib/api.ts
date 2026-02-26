@@ -152,9 +152,9 @@ class ApiClient {
     return this.request<ApiKeyInfo[]>('GET', '/api/v1/auth/api-keys')
   }
 
-  async createApiKey(name: string) {
+  async createApiKey(name: string, expiresInDays: number | null = 365) {
     return this.request<ApiKeyCreateResponse>('POST', '/api/v1/auth/api-keys', {
-      body: { name },
+      body: { name, expires_in_days: expiresInDays },
     })
   }
 

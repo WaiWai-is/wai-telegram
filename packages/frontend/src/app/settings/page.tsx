@@ -370,6 +370,7 @@ export default function SettingsPage() {
 
   // API key state
   const [newKeyName, setNewKeyName] = useState('')
+  const [newKeyExpiration, setNewKeyExpiration] = useState<number | null>(365)
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<ApiKeyCreateResponse | null>(null)
   const [selectedKeyForConfig, setSelectedKeyForConfig] = useState('')
   const [keyCopied, setKeyCopied] = useState(false)
@@ -458,10 +459,12 @@ export default function SettingsPage() {
   })
 
   const createKeyMutation = useMutation({
-    mutationFn: (name: string) => api.createApiKey(name),
+    mutationFn: ({ name, expiresInDays }: { name: string; expiresInDays: number | null }) =>
+      api.createApiKey(name, expiresInDays),
     onSuccess: (data) => {
       setNewlyCreatedKey(data)
       setNewKeyName('')
+      setNewKeyExpiration(365)
       setSelectedKeyForConfig(data.api_key)
       queryClient.invalidateQueries({ queryKey: ['api-keys'] })
     },
@@ -859,7 +862,31 @@ export default function SettingsPage() {
                 </thead>
                 <tbody>
                   {apiKeys.map((key) => {
-                    const isExpired = key.expires_at && new Date(key.expires_at) < new Date()
+                    const now = new Date()
+                    const expiresAt = key.expires_at ? new Date(key.expires_at) : null
+                    const isExpired = expiresAt && expiresAt < now
+                    const daysUntilExpiry = expiresAt ? Math.ceil((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null
+                    const isExpiringSoon = daysUntilExpiry !== null && daysUntilExpiry > 0 && daysUntilExpiry <= 30
+
+                    let expiryLabel: string
+                    let expiryClass: string
+                    if (!expiresAt) {
+                      expiryLabel = 'Never'
+                      expiryClass = 'text-tertiary'
+                    } else if (isExpired) {
+                      expiryLabel = `Expired ${expiresAt.toLocaleDateString()}`
+                      expiryClass = 'text-red-600 dark:text-red-400'
+                    } else if (daysUntilExpiry !== null && daysUntilExpiry <= 1) {
+                      expiryLabel = 'Expires today'
+                      expiryClass = 'text-red-600 dark:text-red-400 font-medium'
+                    } else if (isExpiringSoon) {
+                      expiryLabel = `${daysUntilExpiry} days left`
+                      expiryClass = 'text-yellow-600 dark:text-yellow-400'
+                    } else {
+                      expiryLabel = expiresAt.toLocaleDateString()
+                      expiryClass = 'text-tertiary'
+                    }
+
                     return (
                     <tr key={key.id} className="border-t">
                       <td className="px-4 py-2.5 text-primary">{key.name}</td>
@@ -877,10 +904,8 @@ export default function SettingsPage() {
                           {isExpired ? 'Expired' : key.is_active ? 'Active' : 'Inactive'}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-tertiary">
-                        {key.expires_at
-                          ? new Date(key.expires_at).toLocaleDateString()
-                          : 'Never'}
+                      <td className={`px-4 py-2.5 text-xs ${expiryClass}`}>
+                        {expiryLabel}
                       </td>
                       <td className="px-4 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -937,6 +962,9 @@ export default function SettingsPage() {
               </p>
               <p className="text-sm text-secondary mb-2">
                 Copy this key now. It won&apos;t be shown again.
+                {newlyCreatedKey.expires_at
+                  ? ` Expires ${new Date(newlyCreatedKey.expires_at).toLocaleDateString()}.`
+                  : ' This key has no expiration.'}
               </p>
               <div className="flex items-center gap-2">
                 <code className="flex-1 p-2 bg-surface-hover rounded text-sm break-all text-primary">
@@ -958,27 +986,48 @@ export default function SettingsPage() {
           )}
 
           {/* Create new key form */}
-          <div className="flex items-center gap-3">
-            <input
-              type="text"
-              value={newKeyName}
-              onChange={(e) => setNewKeyName(e.target.value)}
-              placeholder="Key name (e.g. Claude Desktop)"
-              className="flex-1 px-3 py-2.5 border rounded-lg bg-transparent text-primary text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                if (newKeyName.trim()) {
-                  setNewlyCreatedKey(null)
-                  createKeyMutation.mutate(newKeyName.trim())
-                }
-              }}
-              disabled={createKeyMutation.isPending || !newKeyName.trim()}
-              className="shrink-0 px-4 py-2.5 bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity text-sm"
-            >
-              {createKeyMutation.isPending ? 'Creating...' : 'Create Key'}
-            </button>
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <input
+                type="text"
+                value={newKeyName}
+                onChange={(e) => setNewKeyName(e.target.value)}
+                placeholder="Key name (e.g. Claude Desktop)"
+                className="flex-1 px-3 py-2.5 border rounded-lg bg-transparent text-primary text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <select
+                value={newKeyExpiration === null ? 'never' : String(newKeyExpiration)}
+                onChange={(e) => {
+                  const val = e.target.value
+                  setNewKeyExpiration(val === 'never' ? null : parseInt(val, 10))
+                }}
+                className="shrink-0 px-3 py-2.5 border rounded-lg bg-transparent text-primary text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="365">1 year</option>
+                <option value="730">2 years</option>
+                <option value="never">No expiration</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  if (newKeyName.trim()) {
+                    setNewlyCreatedKey(null)
+                    createKeyMutation.mutate({ name: newKeyName.trim(), expiresInDays: newKeyExpiration })
+                  }
+                }}
+                disabled={createKeyMutation.isPending || !newKeyName.trim()}
+                className="shrink-0 px-4 py-2.5 bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity text-sm"
+              >
+                {createKeyMutation.isPending ? 'Creating...' : 'Create Key'}
+              </button>
+            </div>
+            {newKeyExpiration === null && (
+              <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                Keys without expiration are less secure. Consider setting an expiration and rotating keys periodically.
+              </p>
+            )}
           </div>
 
           {/* Test connection */}
