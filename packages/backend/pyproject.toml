@@ -32,7 +32,11 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
     "httpx>=0.28.0",
+    "aiosqlite>=0.20.0",
+    "fakeredis[lua]>=2.26.0",
+    "time-machine>=2.16.0",
 ]
 
 [build-system]
@@ -45,3 +49,14 @@ packages = ["app"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "--strict-markers -v"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/listener/*", "app/tasks/celery_app.py"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80

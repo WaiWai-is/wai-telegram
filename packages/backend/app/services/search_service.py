@@ -27,7 +27,36 @@ async def semantic_search(
         return SearchResponse(results=[], query=request.query, total=0)
 
     dimensions = settings.embedding_dimensions
-    # Build query with configured pgvector dimensions to avoid model-dimension drift.
+
+    # Build query dynamically to avoid asyncpg AmbiguousParameterError
+    # when optional filters are None.
+    where_clauses = [
+        "c.user_id = :user_id",
+        "m.embedding IS NOT NULL",
+    ]
+    params: dict = {
+        "user_id": str(user_id),
+        "limit": request.limit,
+    }
+
+    # Format embedding as pgvector string literal for parameterized query
+    embedding_literal = "[" + ",".join(str(x) for x in query_embedding) + "]"
+    params["embedding"] = embedding_literal
+
+    if request.chat_ids:
+        where_clauses.append("m.chat_id = ANY(:chat_ids)")
+        params["chat_ids"] = [str(cid) for cid in request.chat_ids]
+
+    if request.date_from:
+        where_clauses.append("m.sent_at >= :date_from")
+        params["date_from"] = request.date_from
+
+    if request.date_to:
+        where_clauses.append("m.sent_at <= :date_to")
+        params["date_to"] = request.date_to
+
+    where_sql = " AND ".join(where_clauses)
+
     sql = text(f"""
         SELECT
             m.id,
@@ -44,33 +73,12 @@ async def semantic_search(
             m.transcribed_at
         FROM telegram_messages m
         JOIN telegram_chats c ON m.chat_id = c.id
-        WHERE c.user_id = :user_id
-        AND m.embedding IS NOT NULL
-        AND (:chat_ids IS NULL OR m.chat_id = ANY(:chat_ids))
-        AND (:date_from IS NULL OR m.sent_at >= :date_from)
-        AND (:date_to IS NULL OR m.sent_at <= :date_to)
+        WHERE {where_sql}
         ORDER BY similarity DESC
         LIMIT :limit
     """)
 
-    chat_ids_array = (
-        [str(cid) for cid in request.chat_ids] if request.chat_ids else None
-    )
-
-    # Format embedding as pgvector string literal for parameterized query
-    embedding_literal = "[" + ",".join(str(x) for x in query_embedding) + "]"
-
-    result = await db.execute(
-        sql,
-        {
-            "embedding": embedding_literal,
-            "user_id": str(user_id),
-            "chat_ids": chat_ids_array,
-            "date_from": request.date_from,
-            "date_to": request.date_to,
-            "limit": request.limit,
-        },
-    )
+    result = await db.execute(sql, params)
     rows = result.fetchall()
 
     results = [

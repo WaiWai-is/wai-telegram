@@ -1,11 +1,13 @@
-name: Deploy
+name: CI / Deploy
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 concurrency:
-  group: deploy
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -13,8 +15,148 @@ env:
   DEPLOY_DIR: /opt/wai-telegram
 
 jobs:
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Lint backend
+        working-directory: packages/backend
+        run: |
+          uv sync --dev
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Lint MCP server
+        working-directory: packages/mcp-server
+        run: |
+          uv sync --dev
+          uv run ruff check .
+          uv run ruff format --check .
+
+  typescript-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: packages/frontend
+        run: npm ci
+      - name: Lint
+        working-directory: packages/frontend
+        run: npx next lint
+      - name: Type check
+        working-directory: packages/frontend
+        run: npx tsc --noEmit
+
+  backend-tests:
+    runs-on: ubuntu-latest
+    needs: [python-lint]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: telegram
+          POSTGRES_PASSWORD: telegram_test
+          POSTGRES_DB: telegram_ai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://telegram:telegram_test@localhost:5432/telegram_ai_test
+      REDIS_URL: redis://localhost:6379
+      ENVIRONMENT: development
+      SECRET_KEY: ci-test-secret-key
+      ENCRYPTION_KEY: ZHVtbXktZW5jcnlwdGlvbi1rZXktZm9yLWNp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        working-directory: packages/backend
+        run: uv sync --dev
+      - name: Create pgvector extension
+        run: |
+          PGPASSWORD=telegram_test psql -h localhost -U telegram -d telegram_ai_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
+      - name: Run migrations
+        working-directory: packages/backend
+        run: uv run alembic upgrade head
+      - name: Run tests
+        working-directory: packages/backend
+        run: |
+          uv run pytest tests/ -v \
+            --cov=app \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --junitxml=test-results/backend.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: packages/backend/test-results/
+
+  frontend-tests:
+    runs-on: ubuntu-latest
+    needs: [typescript-lint]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: packages/frontend
+        run: npm ci
+      - name: Run tests
+        working-directory: packages/frontend
+        run: npx vitest run --reporter=junit --outputFile=test-results/frontend.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-test-results
+          path: packages/frontend/test-results/
+
+  mcp-tests:
+    runs-on: ubuntu-latest
+    needs: [python-lint]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        working-directory: packages/mcp-server
+        run: uv sync --dev
+      - name: Run tests
+        working-directory: packages/mcp-server
+        run: uv run pytest tests/ -v
+
   deploy:
     runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-tests, mcp-tests]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
 
