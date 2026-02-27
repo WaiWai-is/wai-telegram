@@ -370,8 +370,9 @@ def format_search_results(result: dict) -> list[TextContent]:
         similarity = r.get("similarity", 0) * 100
         sent_at = _format_date(r.get("sent_at"))
         chat_title = r.get("chat_title") or "Unknown"
+        chat_id = r.get("chat_id", "")
         lines.append(
-            f"[{chat_title}] {sender}: {text}\n  - Sent: {sent_at} | Relevance: {similarity:.0f}%\n"
+            f"[{chat_title}] {sender}: {text}\n  - Sent: {sent_at} | Relevance: {similarity:.0f}% | Chat ID: {chat_id}\n"
         )
     return [TextContent(type="text", text="\n".join(lines))]
 
@@ -544,7 +545,7 @@ def format_sync_status(result: dict) -> list[TextContent]:
         lines.append(f"Progress: {messages_seen:,} messages fetched\n")
     elif progress is not None:
         lines.append(f"Progress: {progress}%\n")
-    lines.append(f"Messages saved: {messages_processed}\n")
+    lines.append(f"Messages saved: {messages_processed:,}\n")
     if error:
         lines.append(f"Error: {error}\n")
     if status == "in_progress":
