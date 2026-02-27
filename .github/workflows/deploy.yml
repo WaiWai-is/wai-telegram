@@ -369,16 +369,15 @@ jobs:
           USER: ${{ secrets.DEPLOY_USER }}
         run: |
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
           SERVICES="wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse"
 
-          # Wait for all systemd services with retries (2GB server is slow to start)
+          # Wait for all systemd services (2GB server is slow to start)
           for attempt in 1 2 3 4 5 6; do
             if systemctl is-active --quiet $SERVICES 2>/dev/null; then
-              echo "All services active"
+              echo "All systemd services active"
               break
             fi
-            if [ $attempt -eq 6 ]; then
+            if [ "$attempt" -eq 6 ]; then
               echo "Services not active after 60s"
               systemctl --no-pager status $SERVICES || true
               exit 1
@@ -389,17 +388,29 @@ jobs:
 
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-db$'
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-redis$'
-          curl -sf --max-time 10 http://127.0.0.1:8000/health/live > /dev/null
-          curl -sf --max-time 10 http://127.0.0.1:8000/health/ready > /dev/null
+
+          # Wait for backend HTTP to be ready
+          for attempt in 1 2 3 4 5 6; do
+            if curl -sf --max-time 10 http://127.0.0.1:8000/health/ready > /dev/null 2>&1; then
+              echo "Backend health check passed"
+              break
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "Backend health check failed after 60s"
+              exit 1
+            fi
+            echo "Waiting for backend... (attempt $attempt/6)"
+            sleep 10
+          done
 
           # Celery ping with retries (worker may still be starting)
           cd /opt/wai-telegram/packages/backend
-          for i in 1 2 3; do
+          for i in 1 2 3 4 5; do
             if /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app inspect ping --timeout=15 2>/dev/null | grep -q pong; then
               echo "Celery worker responding"
               exit 0
             fi
-            echo "Celery not ready yet, attempt $i/3..."
+            echo "Celery not ready yet, attempt $i/5..."
             sleep 10
           done
           echo "Celery worker failed to respond"
