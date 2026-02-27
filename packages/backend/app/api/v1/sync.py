@@ -206,7 +206,9 @@ async def get_sync_progress(
         if seen_raw:
             messages_seen = int(seen_raw.decode())
         if messages_total and messages_seen and messages_total > 0:
-            progress_percent = min(round(messages_seen / messages_total * 100, 1), 100.0)
+            progress_percent = min(
+                round(messages_seen / messages_total * 100, 1), 100.0
+            )
 
     return SyncProgressResponse(
         job_id=job.id,
