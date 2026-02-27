@@ -111,6 +111,7 @@ sleep 10
 echo "Running database migrations..."
 cd packages/backend
 su - wai -c 'cd /opt/wai-telegram/packages/backend && /home/wai/.local/bin/uv sync'
+su - wai -c 'cd /opt/wai-telegram/packages/mcp-server && /home/wai/.local/bin/uv sync'
 su - wai -c 'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /home/wai/.local/bin/uv run alembic upgrade head'
 cd ../..
 

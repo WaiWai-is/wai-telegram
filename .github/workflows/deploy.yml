@@ -294,7 +294,7 @@ jobs:
           sleep 2
           EOF
 
-      - name: Install backend dependencies
+      - name: Install Python dependencies
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
@@ -302,8 +302,8 @@ jobs:
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
           export PATH="/home/wai/.local/bin:$PATH"
-          cd /opt/wai-telegram/packages/backend
           su - wai -c 'cd /opt/wai-telegram/packages/backend && /home/wai/.local/bin/uv sync'
+          su - wai -c 'cd /opt/wai-telegram/packages/mcp-server && /home/wai/.local/bin/uv sync'
           EOF
 
       - name: Run database migrations
