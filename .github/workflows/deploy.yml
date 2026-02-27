@@ -370,13 +370,28 @@ jobs:
         run: |
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
-          # Wait for services to initialize (celery needs ~30s on 2GB server)
-          sleep 30
-          systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
+          SERVICES="wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse"
+
+          # Wait for all systemd services with retries (2GB server is slow to start)
+          for attempt in 1 2 3 4 5 6; do
+            if systemctl is-active --quiet $SERVICES 2>/dev/null; then
+              echo "All services active"
+              break
+            fi
+            if [ $attempt -eq 6 ]; then
+              echo "Services not active after 60s"
+              systemctl --no-pager status $SERVICES || true
+              exit 1
+            fi
+            echo "Waiting for services... (attempt $attempt/6)"
+            sleep 10
+          done
+
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-db$'
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-redis$'
           curl -sf --max-time 10 http://127.0.0.1:8000/health/live > /dev/null
           curl -sf --max-time 10 http://127.0.0.1:8000/health/ready > /dev/null
+
           # Celery ping with retries (worker may still be starting)
           cd /opt/wai-telegram/packages/backend
           for i in 1 2 3; do
