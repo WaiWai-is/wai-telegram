@@ -290,7 +290,7 @@ jobs:
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
           # Stop services that hold DB connections so migrations can run
-          systemctl stop wai-backend wai-celery wai-celery-beat wai-listener || true
+          systemctl stop wai-backend wai-celery wai-celery-beat wai-listener wai-mcp-sse || true
           sleep 2
           EOF
 
@@ -341,6 +341,7 @@ jobs:
           cp systemd/wai-celery-beat.service /etc/systemd/system/
           cp systemd/wai-frontend.service /etc/systemd/system/
           cp systemd/wai-listener.service /etc/systemd/system/
+          cp systemd/wai-mcp-sse.service /etc/systemd/system/
           systemctl daemon-reload
           EOF
 
@@ -352,7 +353,7 @@ jobs:
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
           systemctl restart wai-backend
-          systemctl restart wai-celery wai-celery-beat wai-frontend wai-listener
+          systemctl restart wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
 
           # Reload nginx config
           cd /opt/wai-telegram
@@ -371,7 +372,7 @@ jobs:
           set -e
           # Wait for services to initialize (celery needs ~30s on 2GB server)
           sleep 30
-          systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend wai-listener
+          systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-db$'
           docker ps --format '{{.Names}}' | grep -q '^wai-telegram-redis$'
           curl -sf --max-time 10 http://127.0.0.1:8000/health/live > /dev/null

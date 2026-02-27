@@ -1,0 +1,36 @@
+[Unit]
+Description=WAI Telegram MCP SSE Server
+After=network.target wai-backend.service
+
+[Service]
+Type=simple
+User=wai
+Group=wai
+WorkingDirectory=/opt/wai-telegram/packages/mcp-server
+Environment="PATH=/home/wai/.local/bin:/usr/local/bin:/usr/bin"
+EnvironmentFile=/opt/wai-telegram/.env.production
+Environment="TELEGRAM_AI_URL=http://127.0.0.1:8000"
+Environment="MCP_ROOT_PATH=/mcp"
+
+ExecStart=/opt/wai-telegram/.venv/bin/telegram-wai-mcp-sse --host 127.0.0.1 --port 8808
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wai-mcp-sse
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/opt/wai-telegram /tmp
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+
+[Install]
+WantedBy=multi-user.target

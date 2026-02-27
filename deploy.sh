@@ -125,15 +125,16 @@ cp systemd/wai-celery.service /etc/systemd/system/
 cp systemd/wai-celery-beat.service /etc/systemd/system/
 cp systemd/wai-frontend.service /etc/systemd/system/
 cp systemd/wai-listener.service /etc/systemd/system/
+cp systemd/wai-mcp-sse.service /etc/systemd/system/
 
 systemctl daemon-reload
 
 # Start services
 echo "Starting services..."
-systemctl enable wai-backend wai-celery wai-celery-beat wai-frontend wai-listener
+systemctl enable wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
 systemctl restart wai-backend
 sleep 5
-systemctl restart wai-celery wai-celery-beat wai-frontend wai-listener
+systemctl restart wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
 
 # Setup Nginx
 echo "Configuring Nginx..."
@@ -148,7 +149,7 @@ fi
 
 # Service and endpoint verification
 echo "Verifying service health..."
-systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend wai-listener
+systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
 curl -sf --max-time 10 http://127.0.0.1:8000/health/live > /dev/null
 curl -sf --max-time 10 http://127.0.0.1:8000/health/ready > /dev/null
 curl -sf --max-time 10 https://telegram.waiwai.is/health/ready > /dev/null
