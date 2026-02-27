@@ -285,11 +285,11 @@ async def _run_sync(
         job.completed_at = None
         await db.commit()
 
-        if limit:
-            redis_client.setex(f"sync:{job.id}:total", SYNC_PROGRESS_TTL, limit)
         _touch_single_heartbeat(job.id)
 
-        def _on_progress(seen: int) -> None:
+        def _on_progress(seen: int, total: int | None = None) -> None:
+            if total is not None:
+                redis_client.setex(f"sync:{job.id}:total", SYNC_PROGRESS_TTL, total)
             redis_client.setex(f"sync:{job.id}:seen", SYNC_PROGRESS_TTL, seen)
             _touch_single_heartbeat(job.id)
 
@@ -377,15 +377,19 @@ async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> No
                 sub_job = await create_sync_job(db, user_id, chat.id)
                 sub_job.status = SyncStatus.IN_PROGRESS
                 await db.commit()
-                if effective_limit is not None:
-                    redis_client.setex(
-                        f"sync:{sub_job.id}:total", SYNC_PROGRESS_TTL, effective_limit
-                    )
                 _touch_single_heartbeat(sub_job.id)
 
                 def _on_sub_progress(
-                    seen: int, current_sub_job_id: UUID = sub_job.id
+                    seen: int,
+                    total: int | None = None,
+                    current_sub_job_id: UUID = sub_job.id,
                 ) -> None:
+                    if total is not None:
+                        redis_client.setex(
+                            f"sync:{current_sub_job_id}:total",
+                            SYNC_PROGRESS_TTL,
+                            total,
+                        )
                     redis_client.setex(
                         f"sync:{current_sub_job_id}:seen", SYNC_PROGRESS_TTL, seen
                     )

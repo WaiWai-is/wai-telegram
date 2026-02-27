@@ -183,13 +183,16 @@ async def get_sync_progress(
     total_chats = None
     current_chat_title = chat_title
 
+    messages_total = None
+    messages_seen = None
+
     if job.chat_id is None:
-        total_raw = redis_client.get(f"bulk:{job_id}:total")
+        bulk_total_raw = redis_client.get(f"bulk:{job_id}:total")
         completed_raw = redis_client.get(f"bulk:{job_id}:completed")
         current_raw = redis_client.get(f"bulk:{job_id}:current_chat")
 
-        if total_raw:
-            total_chats = int(total_raw.decode())
+        if bulk_total_raw:
+            total_chats = int(bulk_total_raw.decode())
             chats_completed = int(completed_raw.decode()) if completed_raw else 0
             current_chat_title = current_raw.decode() if current_raw else None
             if total_chats > 0:
@@ -198,11 +201,12 @@ async def get_sync_progress(
         # Single-chat sync progress from Redis
         total_raw = redis_client.get(f"sync:{job_id}:total")
         seen_raw = redis_client.get(f"sync:{job_id}:seen")
-        if total_raw and seen_raw:
-            total = int(total_raw.decode())
-            seen = int(seen_raw.decode())
-            if total > 0:
-                progress_percent = min(round(seen / total * 100, 1), 100.0)
+        if total_raw:
+            messages_total = int(total_raw.decode())
+        if seen_raw:
+            messages_seen = int(seen_raw.decode())
+        if messages_total and messages_seen and messages_total > 0:
+            progress_percent = min(round(messages_seen / messages_total * 100, 1), 100.0)
 
     return SyncProgressResponse(
         job_id=job.id,
@@ -214,6 +218,8 @@ async def get_sync_progress(
         retry_after_seconds=_parse_retry_after_seconds(job.error_message),
         chats_completed=chats_completed,
         total_chats=total_chats,
+        messages_total=messages_total,
+        messages_seen=messages_seen,
     )
 
 

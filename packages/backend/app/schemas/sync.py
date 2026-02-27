@@ -29,3 +29,5 @@ class SyncProgressResponse(BaseModel):
     retry_after_seconds: int | None = None
     chats_completed: int | None = None
     total_chats: int | None = None
+    messages_total: int | None = None
+    messages_seen: int | None = None

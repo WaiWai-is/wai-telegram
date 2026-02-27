@@ -8,13 +8,13 @@ class TestToolList:
         tools = await server.list_tools()
         tool_names = {t.name for t in tools}
         expected_tools = {
+            "get_data_status",
             "search_messages",
             "list_chats",
             "get_chat_messages",
             "sync_chat",
             "get_sync_status",
             "get_daily_digest",
-            "get_chat_summary",
         }
         assert expected_tools.issubset(tool_names)
 

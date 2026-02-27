@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useTheme } from 'next-themes'
 import { api, type Message } from '@/lib/api'
@@ -10,25 +10,25 @@ import { MessageBubble } from './MessageBubble'
 import { DateSeparator } from './DateSeparator'
 
 type ProcessedItem =
-  | { type: 'sync-button' }
+  | { type: 'end-of-history' }
   | { type: 'date'; date: string; key: string }
   | { type: 'message'; message: Message; isFirstInGroup: boolean; isLastInGroup: boolean }
 
 interface MessageListProps {
   chatId: string
-  onSyncMore: () => void
-  isSyncing: boolean
 }
 
-const PAGE_SIZE = 50
+const PAGE_SIZE = 100
 
-export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps) {
+export function MessageList({ chatId }: MessageListProps) {
   const parentRef = useRef<HTMLDivElement>(null)
   const { resolvedTheme } = useTheme()
   const isDark = resolvedTheme === 'dark'
   const [initialScrollDone, setInitialScrollDone] = useState(false)
+  const [showNewMessagesPill, setShowNewMessagesPill] = useState(false)
   const prevItemCountRef = useRef(0)
   const prevScrollHeightRef = useRef(0)
+  const isNearBottomRef = useRef(true)
 
   const {
     data,
@@ -48,7 +48,17 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
       return lastPage.next_cursor ?? undefined
     },
     initialPageParam: null as string | null,
-    refetchOnMount: 'always',
+    refetchOnMount: false,
+    staleTime: Infinity,
+  })
+
+  // Poll for new messages using the newest cursor from the first page
+  const newestCursor = data?.pages[0]?.newest_cursor
+  const { data: newMsgsData } = useQuery({
+    queryKey: ['messages-new', chatId, newestCursor],
+    queryFn: () => api.getChatMessages(chatId, 100, undefined, newestCursor!),
+    enabled: !!newestCursor,
+    refetchInterval: 5000,
   })
 
   // Flatten all pages into a single array in chronological order (oldest first)
@@ -57,16 +67,27 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
     // Pages come newest-first from API. Flatten and reverse to get chronological.
     const flat = data.pages.flatMap((p) => p.messages)
     // Messages within each page are newest-first, so reverse entire array
-    return [...flat].reverse()
-  }, [data])
+    const chronological = [...flat].reverse()
+
+    // Append any new messages from polling (they arrive newest-first, so reverse)
+    if (newMsgsData?.messages?.length) {
+      const existingIds = new Set(chronological.map((m) => m.id))
+      const newMsgs = [...newMsgsData.messages].reverse().filter((m) => !existingIds.has(m.id))
+      if (newMsgs.length > 0) {
+        return [...chronological, ...newMsgs]
+      }
+    }
+
+    return chronological
+  }, [data, newMsgsData])
 
   // Build processed items: sync button + date separators interleaved with messages
   const items: ProcessedItem[] = useMemo(() => {
     const result: ProcessedItem[] = []
 
-    // Show sync button at top when we've exhausted all API pages
+    // Show end-of-history label at top when we've exhausted all API pages
     if (!hasNextPage && allMessages.length > 0) {
-      result.push({ type: 'sync-button' })
+      result.push({ type: 'end-of-history' })
     }
 
     for (let i = 0; i < allMessages.length; i++) {
@@ -101,11 +122,11 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
     getScrollElement: () => parentRef.current,
     estimateSize: (index) => {
       const item = items[index]
-      if (item.type === 'sync-button') return 56
+      if (item.type === 'end-of-history') return 40
       if (item.type === 'date') return 36
       return 52
     },
-    overscan: 15,
+    overscan: 25,
   })
 
   // Initial scroll to bottom
@@ -159,16 +180,44 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
     }
   }, [initialScrollDone, hasNextPage, isFetchingNextPage, items.length, fetchNextPage, virtualizer])
 
-  // Load older messages when scrolling near top
+  // Load older messages when scrolling near top + track near-bottom state
   const handleScroll = useCallback(() => {
     const el = parentRef.current
     if (!el) return
 
-    if (el.scrollTop < 300 && hasNextPage && !isFetchingNextPage) {
+    if (el.scrollTop < 800 && hasNextPage && !isFetchingNextPage) {
       prevScrollHeightRef.current = virtualizer.getTotalSize()
       fetchNextPage()
     }
+
+    // Track whether user is near the bottom (within 100px)
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    isNearBottomRef.current = distanceFromBottom < 100
+    if (isNearBottomRef.current) {
+      setShowNewMessagesPill(false)
+    }
   }, [hasNextPage, isFetchingNextPage, fetchNextPage, virtualizer])
+
+  // Auto-scroll to bottom when new messages arrive (or show pill)
+  const prevMessageCountRef = useRef(0)
+  useEffect(() => {
+    const currentCount = allMessages.length
+    if (prevMessageCountRef.current > 0 && currentCount > prevMessageCountRef.current && initialScrollDone) {
+      if (isNearBottomRef.current) {
+        requestAnimationFrame(() => {
+          virtualizer.scrollToIndex(items.length - 1, { align: 'end' })
+        })
+      } else {
+        setShowNewMessagesPill(true)
+      }
+    }
+    prevMessageCountRef.current = currentCount
+  }, [allMessages.length, initialScrollDone, virtualizer, items.length])
+
+  const scrollToBottom = useCallback(() => {
+    virtualizer.scrollToIndex(items.length - 1, { align: 'end' })
+    setShowNewMessagesPill(false)
+  }, [virtualizer, items.length])
 
   // Floating date pill — find topmost visible message's date
   const virtualItems = virtualizer.getVirtualItems()
@@ -223,7 +272,10 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
       {/* Loading indicator for older messages */}
       {isFetchingNextPage && (
         <div className="absolute top-2 left-0 right-0 z-20 flex justify-center pointer-events-none">
-          <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent" />
+          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-surface shadow-sm">
+            <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
+            <span className="text-[12px] text-secondary">Loading older messages...</span>
+          </div>
         </div>
       )}
 
@@ -258,15 +310,11 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
                   transform: `translateY(${virtualItem.start}px)`,
                 }}
               >
-                {item.type === 'sync-button' && (
+                {item.type === 'end-of-history' && (
                   <div className="flex justify-center py-3">
-                    <button
-                      onClick={onSyncMore}
-                      disabled={isSyncing}
-                      className="px-4 py-2 rounded-full bg-tg-blue text-white text-[13px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
-                    >
-                      {isSyncing ? 'Syncing...' : 'Sync More Messages'}
-                    </button>
+                    <span className="px-3 py-1 rounded-full bg-date-pill-bg text-date-pill-text text-[12px] select-none">
+                      Beginning of synced history
+                    </span>
                   </div>
                 )}
 
@@ -285,6 +333,18 @@ export function MessageList({ chatId, onSyncMore, isSyncing }: MessageListProps)
           })}
         </div>
       </div>
+
+      {/* New messages pill */}
+      {showNewMessagesPill && (
+        <div className="absolute bottom-4 left-0 right-0 z-10 flex justify-center">
+          <button
+            onClick={scrollToBottom}
+            className="px-4 py-2 rounded-full bg-tg-blue text-white text-[13px] font-medium shadow-lg hover:opacity-90 transition-opacity"
+          >
+            New messages
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -192,8 +192,9 @@ async def get_chat_messages(
     chat_id: UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=500),
     before: str | None = Query(default=None),
+    after: str | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
 ) -> MessageListResponse:
     """Get messages for a chat (cursor pagination, offset fallback)."""
@@ -210,41 +211,78 @@ async def get_chat_messages(
             status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found"
         )
 
-    # Get messages
-    query = (
-        select(TelegramMessage)
-        .where(TelegramMessage.chat_id == chat_id)
-        .order_by(
-            TelegramMessage.sent_at.desc(),
-            TelegramMessage.telegram_message_id.desc(),
-            TelegramMessage.id.desc(),
-        )
-        .limit(limit + 1)  # Fetch one extra to check if there are more
-    )
-
-    if before:
-        c = _decode_message_cursor(before)
-        query = query.where(
-            tuple_(
-                TelegramMessage.sent_at,
-                TelegramMessage.telegram_message_id,
-                TelegramMessage.id,
+    if after:
+        # Fetch messages NEWER than the cursor (ascending, then reverse)
+        c = _decode_message_cursor(after)
+        query = (
+            select(TelegramMessage)
+            .where(TelegramMessage.chat_id == chat_id)
+            .where(
+                tuple_(
+                    TelegramMessage.sent_at,
+                    TelegramMessage.telegram_message_id,
+                    TelegramMessage.id,
+                )
+                > (c["sent_at"], c["telegram_message_id"], c["id"])
             )
-            < (c["sent_at"], c["telegram_message_id"], c["id"])
+            .order_by(
+                TelegramMessage.sent_at.asc(),
+                TelegramMessage.telegram_message_id.asc(),
+                TelegramMessage.id.asc(),
+            )
+            .limit(limit + 1)
         )
-    elif offset:
-        # Backward compatibility fallback for clients still using offset.
-        query = query.offset(offset)
+        result = await db.execute(query)
+        messages = list(result.scalars().all())
 
-    result = await db.execute(query)
-    messages = result.scalars().all()
+        has_more = len(messages) > limit
+        if has_more:
+            messages = messages[:limit]
+        # Reverse back to newest-first for consistent response format
+        messages.reverse()
+        next_cursor = None  # after-based queries don't paginate backwards
+        newest_cursor = _encode_message_cursor(messages[0]) if messages else None
+    else:
+        # Standard newest-first pagination
+        query = (
+            select(TelegramMessage)
+            .where(TelegramMessage.chat_id == chat_id)
+            .order_by(
+                TelegramMessage.sent_at.desc(),
+                TelegramMessage.telegram_message_id.desc(),
+                TelegramMessage.id.desc(),
+            )
+            .limit(limit + 1)
+        )
 
-    has_more = len(messages) > limit
-    if has_more:
-        messages = messages[:limit]
-    next_cursor = (
-        _encode_message_cursor(messages[-1]) if has_more and messages else None
-    )
+        if before:
+            c = _decode_message_cursor(before)
+            query = query.where(
+                tuple_(
+                    TelegramMessage.sent_at,
+                    TelegramMessage.telegram_message_id,
+                    TelegramMessage.id,
+                )
+                < (c["sent_at"], c["telegram_message_id"], c["id"])
+            )
+        elif offset:
+            query = query.offset(offset)
+
+        result = await db.execute(query)
+        messages = list(result.scalars().all())
+
+        has_more = len(messages) > limit
+        if has_more:
+            messages = messages[:limit]
+        next_cursor = (
+            _encode_message_cursor(messages[-1]) if has_more and messages else None
+        )
+        # newest_cursor is the cursor of the first (newest) message on the first page
+        newest_cursor = (
+            _encode_message_cursor(messages[0])
+            if messages and not before and not offset
+            else None
+        )
 
     return MessageListResponse(
         messages=[
@@ -266,6 +304,7 @@ async def get_chat_messages(
         total=None,
         has_more=has_more,
         next_cursor=next_cursor,
+        newest_cursor=newest_cursor,
         total_messages_synced=chat.total_messages_synced,
         last_sync_at=chat.last_sync_at,
     )

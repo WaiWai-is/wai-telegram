@@ -228,9 +228,10 @@ class ApiClient {
     )
   }
 
-  async getChatMessages(chatId: string, limit = 50, before?: string) {
+  async getChatMessages(chatId: string, limit = 50, before?: string, after?: string) {
     const params: Record<string, string> = { limit: String(limit) }
     if (before) params.before = before
+    if (after) params.after = after
     return this.request<MessageListPage>(
       'GET',
       `/api/v1/chats/${chatId}/messages`,
@@ -358,6 +359,7 @@ export interface MessageListPage {
   total: number | null
   has_more: boolean
   next_cursor: string | null
+  newest_cursor: string | null
   total_messages_synced: number | null
   last_sync_at: string | null
 }
@@ -380,6 +382,8 @@ export interface SyncJobProgress {
   retry_after_seconds: number | null
   chats_completed: number | null
   total_chats: number | null
+  messages_total: number | null
+  messages_seen: number | null
 }
 
 export interface Digest {

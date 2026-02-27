@@ -22,7 +22,7 @@ class UserSettings(Base):
     digest_telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Real-time
-    realtime_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    realtime_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

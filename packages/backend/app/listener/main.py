@@ -357,15 +357,17 @@ class TelegramListener:
                 job.completed_at = None
                 await db.commit()
 
-                if limit:
-                    await self.redis.setex(
-                        f"sync:{job_id}:total", SYNC_PROGRESS_TTL, limit
-                    )
                 await self.redis.setex(
                     f"sync:{job_id}:heartbeat", SYNC_HEARTBEAT_TTL, "1"
                 )
 
-                def _on_progress(seen: int) -> None:
+                def _on_progress(seen: int, total: int | None = None) -> None:
+                    if total is not None:
+                        asyncio.create_task(
+                            self.redis.setex(
+                                f"sync:{job_id}:total", SYNC_PROGRESS_TTL, total
+                            )
+                        )
                     asyncio.create_task(
                         self.redis.setex(f"sync:{job_id}:seen", SYNC_PROGRESS_TTL, seen)
                     )

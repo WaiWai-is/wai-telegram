@@ -21,11 +21,6 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
   const [lastSyncResult, setLastSyncResult] = useState<SyncJobProgress | null>(null)
 
   useEffect(() => {
-    // Always rehydrate from newest page when entering a chat.
-    queryClient.resetQueries({ queryKey: ['messages', id], exact: true })
-  }, [id, queryClient])
-
-  useEffect(() => {
     if (!authLoading && !user) {
       router.push('/login')
     }
@@ -123,6 +118,25 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
           )}
         </div>
 
+        <button
+          onClick={handleSyncMore}
+          disabled={isSyncRunning}
+          className="flex items-center justify-center w-8 h-8 text-tg-blue hover:opacity-70 disabled:opacity-50 transition-opacity"
+          aria-label="Sync messages"
+          title="Sync full history"
+        >
+          {isSyncRunning ? (
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-tg-blue border-t-transparent" />
+          ) : (
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+              <path d="M21 21v-5h-5" />
+            </svg>
+          )}
+        </button>
+
         <ThemeToggle />
       </header>
 
@@ -132,8 +146,14 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
           <div className="flex items-center gap-2 mb-1">
             <div className="animate-spin rounded-full h-3 w-3 border-2 border-tg-blue border-t-transparent" />
             <span className="text-[12px] text-secondary">
-              Syncing...
-              {syncProgress.messages_processed > 0 && ` ${syncProgress.messages_processed.toLocaleString()} messages`}
+              Syncing...{' '}
+              {syncProgress.messages_seen != null && syncProgress.messages_total != null
+                ? `${syncProgress.messages_seen.toLocaleString()} of ${syncProgress.messages_total.toLocaleString()} messages (${Math.round(syncProgress.progress_percent ?? 0)}%)`
+                : syncProgress.messages_seen != null
+                  ? `${syncProgress.messages_seen.toLocaleString()} messages`
+                  : syncProgress.messages_processed > 0
+                    ? `${syncProgress.messages_processed.toLocaleString()} messages`
+                    : ''}
             </span>
           </div>
           {syncProgress.progress_percent != null && (
@@ -166,7 +186,7 @@ export default function ChatPage({ params }: { params: Promise<{ id: string }> }
 
       {/* Message area */}
       <div className="flex-1 min-h-0">
-        <MessageList chatId={id} onSyncMore={handleSyncMore} isSyncing={isSyncRunning} />
+        <MessageList chatId={id} />
       </div>
     </div>
   )

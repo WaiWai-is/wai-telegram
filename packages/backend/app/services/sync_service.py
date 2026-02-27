@@ -171,7 +171,7 @@ async def sync_messages(
     chat_id: UUID,
     job_id: UUID,
     limit: int | None = None,
-    on_progress: Callable[[int], None] | None = None,
+    on_progress: Callable[[int, int | None], None] | None = None,
     client: "TelegramClient | None" = None,
 ) -> int:
     """Sync messages for a specific chat. Returns count of messages synced.
@@ -235,10 +235,18 @@ async def sync_messages(
     #     transcriptions added after the initial sync).
     #   - All other duplicates are silently skipped (WHERE prevents a no-op UPDATE).
     iter_kwargs = {"limit": limit, "wait_time": 0.5}
+    total_reported = False
 
     try:
-        async for message in client.iter_messages(chat.telegram_chat_id, **iter_kwargs):
+        iterator = client.iter_messages(chat.telegram_chat_id, **iter_kwargs)
+        async for message in iterator:
             messages_seen += 1
+
+            # Report total from Telegram after first batch (Telethon populates iterator.total)
+            if not total_reported and on_progress:
+                iter_total = getattr(iterator, "total", None)
+                on_progress(messages_seen, iter_total)
+                total_reported = True
 
             if not message.text and not message.media:
                 continue
@@ -274,7 +282,7 @@ async def sync_messages(
                     )
                 # Keep heartbeat alive during voice-heavy batches
                 if on_progress:
-                    on_progress(messages_seen)
+                    on_progress(messages_seen, None)
 
             batch_values.append(msg_values)
             messages_synced += 1
@@ -308,7 +316,7 @@ async def sync_messages(
                 record_request()  # Track batch API call
 
                 if on_progress:
-                    on_progress(messages_seen)
+                    on_progress(messages_seen, None)
 
                 # Commit batch so progress is visible and work survives interruptions
                 job.messages_processed = messages_synced
@@ -343,7 +351,7 @@ async def sync_messages(
             messages_synced -= skipped
 
         if on_progress:
-            on_progress(messages_seen)
+            on_progress(messages_seen, None)
 
         # Best-effort embedding generation for newly inserted text messages.
         # Embedding failures should not fail message sync.
