@@ -11,7 +11,7 @@ Telegram message syncing and AI-powered search/digest platform. Syncs Telegram c
 - **MCP Server**: `packages/mcp-server/` — exposes search/digest tools for Claude
 
 ## Infrastructure
-- **Server**: DigitalOcean (Ubuntu 24.04, 2GB RAM) — IP and SSH configured via `DEPLOY_HOST` env var
+- **Server**: Hetzner (Ubuntu 24.04, 4GB RAM) — IP and SSH configured via `DEPLOY_HOST` env var
 - **Domain**: `telegram.waiwai.is`
 - **SSL**: Let's Encrypt (auto-renew via certbot)
 - **Deploy**: GitHub Actions → SSH → rsync + restart services (auto on push to main)

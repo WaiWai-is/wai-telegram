@@ -1,6 +1,6 @@
 #!/bin/bash
 # WAI Telegram AI - Deployment Script
-# Target: root@178.62.255.184
+# Target: root@89.167.125.46
 # Domain: telegram.waiwai.is
 
 set -e
@@ -16,7 +16,7 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # Configuration
-SERVER="root@178.62.255.184"
+SERVER="root@89.167.125.46"
 DEPLOY_DIR="/opt/wai-telegram"
 DOMAIN="telegram.waiwai.is"
 BACKUP_ROOT="/opt/wai-telegram-backups"
