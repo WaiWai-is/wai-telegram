@@ -260,7 +260,7 @@ jobs:
           set -e
           cd /opt/wai-telegram
           set -a && source .env.production && set +a
-          docker-compose -f docker-compose.prod.yml up -d
+          docker compose -f docker-compose.prod.yml up -d
           EOF
 
       - name: Wait for PostgreSQL

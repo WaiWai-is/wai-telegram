@@ -54,7 +54,7 @@ BACKUP_ROOT="/opt/wai-telegram-backups"
 # Install system dependencies if not present
 if ! command -v docker &> /dev/null; then
     echo "Installing Docker..."
-    apt update && apt install -y docker.io docker-compose
+    apt update && apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
     systemctl enable docker && systemctl start docker
 fi
 
@@ -101,7 +101,7 @@ chown -R wai:wai /opt/wai-telegram
 # Start PostgreSQL and Redis
 echo "Starting database services..."
 set -a && source .env.production && set +a
-docker-compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml up -d
 
 # Wait for PostgreSQL to be ready
 echo "Waiting for PostgreSQL..."
