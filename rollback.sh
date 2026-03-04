@@ -42,7 +42,7 @@ if [ -z "$BACKUP_DIR" ] || [ ! -d "$BACKUP_DIR" ]; then
 fi
 
 echo "Stopping services..."
-systemctl stop wai-backend wai-celery wai-celery-beat wai-frontend || true
+systemctl stop wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse || true
 
 echo "Restoring from backup: $BACKUP_DIR"
 # Preserve .env.production (not in backup)
@@ -63,12 +63,14 @@ cp "$DEPLOY_DIR/systemd/wai-backend.service" /etc/systemd/system/
 cp "$DEPLOY_DIR/systemd/wai-celery.service" /etc/systemd/system/
 cp "$DEPLOY_DIR/systemd/wai-celery-beat.service" /etc/systemd/system/
 cp "$DEPLOY_DIR/systemd/wai-frontend.service" /etc/systemd/system/
+cp "$DEPLOY_DIR/systemd/wai-listener.service" /etc/systemd/system/
+cp "$DEPLOY_DIR/systemd/wai-mcp-sse.service" /etc/systemd/system/
 systemctl daemon-reload
 
 echo "Restarting services..."
 systemctl start wai-backend
 sleep 3
-systemctl start wai-celery wai-celery-beat wai-frontend
+systemctl start wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
 
 # Restore nginx config
 cp "$DEPLOY_DIR/nginx/telegram-ai.conf" /etc/nginx/sites-available/

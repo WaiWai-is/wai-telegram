@@ -371,7 +371,7 @@ jobs:
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           SERVICES="wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse"
 
-          # Wait for all systemd services (2GB server is slow to start)
+          # Wait for all systemd services
           for attempt in 1 2 3 4 5 6; do
             if systemctl is-active --quiet $SERVICES 2>/dev/null; then
               echo "All systemd services active"

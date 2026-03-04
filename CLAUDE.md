@@ -51,7 +51,7 @@ deploy.sh                  # Manual deploy script
 ```
 
 ## Server Services
-- `wai-backend` — FastAPI on port 8000 (2 workers)
+- `wai-backend` — FastAPI on port 8000 (1 worker)
 - `wai-frontend` — Next.js on port 3000
 - `wai-celery` — Celery worker (1 concurrency)
 - `wai-celery-beat` — Celery scheduler
