@@ -83,7 +83,7 @@ class TelegramAIClient:
     async def list_chats(
         self,
         chat_type: str | None = None,
-        limit: int = 100,
+        limit: int = 1000,
     ) -> dict[str, Any]:
         """List synced Telegram chats."""
         params = {"limit": limit}

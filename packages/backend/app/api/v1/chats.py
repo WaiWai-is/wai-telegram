@@ -88,7 +88,7 @@ async def list_chats(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     chat_type: ChatType | None = None,
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=1000),
     cursor: str | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
 ) -> ChatListResponse:
