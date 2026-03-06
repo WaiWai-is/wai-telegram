@@ -27,8 +27,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Mount
 
-from telegram_wai_mcp.client import TelegramAIClient
 from telegram_wai_mcp import server as srv
+from telegram_wai_mcp.client import TelegramAIClient
 from telegram_wai_mcp.server import server
 
 logger = logging.getLogger(__name__)
