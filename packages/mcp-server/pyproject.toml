@@ -4,12 +4,11 @@ version = "0.2.0"
 description = "MCP Server for Telegram AI Message Manager"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.25.0",
     "httpx>=0.28.0",
     "pydantic>=2.10.0",
     "uvicorn>=0.34.0",
     "starlette>=0.45.0",
-    "sse-starlette>=2.0.0",
 ]
 
 [project.optional-dependencies]
