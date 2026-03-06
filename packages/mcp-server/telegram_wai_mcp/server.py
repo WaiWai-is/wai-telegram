@@ -170,9 +170,10 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="list_chats",
             description=(
-                "List all synced Telegram chats with message counts, sync status, and freshness. "
-                "Use to discover chat IDs. If a chat shows 0 messages or STALE/NEVER status, "
-                "sync it first with sync_chat."
+                "List synced Telegram chats with message counts, sync status, and freshness. "
+                "Returns paginated results — use the cursor from the response to load more pages. "
+                "Use to discover chat IDs. If you're looking for a specific chat, prefer "
+                "search_messages which searches across all chats at once."
             ),
             inputSchema={
                 "type": "object",
@@ -181,6 +182,15 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Filter by chat type: private, group, supergroup, channel",
                         "enum": ["private", "group", "supergroup", "channel"],
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of chats per page (1-200, default: 50)",
+                        "default": 50,
+                    },
+                    "cursor": {
+                        "type": "string",
+                        "description": "Pagination cursor from previous response — pass to load the next page",
                     },
                 },
             },
@@ -286,7 +296,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
         if name == "get_data_status":
             settings = await api.get_settings()
-            chats_result = await api.list_chats()
+            chats_result = await api.list_chats(limit=100)
             return format_data_status(settings, chats_result)
 
         elif name == "search_messages":
@@ -310,7 +320,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             chat_type = args.get("chat_type")
             if chat_type is not None and not isinstance(chat_type, str):
                 raise ValueError('"chat_type" must be a string')
-            result = await api.list_chats(chat_type=chat_type)
+            limit = _optional_int(args, "limit", default=50, minimum=1, maximum=200)
+            cursor = args.get("cursor")
+            if cursor is not None and not isinstance(cursor, str):
+                raise ValueError('"cursor" must be a string')
+            result = await api.list_chats(chat_type=chat_type, limit=limit, cursor=cursor)
             return format_chat_list(result)
 
         elif name == "get_chat_messages":
@@ -409,8 +423,10 @@ def format_chat_list(result: dict, listener_active: bool = False) -> list[TextCo
     if not result.get("chats"):
         return [TextContent(type="text", text="No chats synced yet.")]
 
-    lines = [f"Your Telegram Chats ({result.get('total', 0)} total):\n"]
-    for chat in result.get("chats", []):
+    chats = result.get("chats", [])
+    total = result.get("total", len(chats))
+    lines = [f"Showing {len(chats)} of {total} total chats:\n"]
+    for chat in chats:
         synced = chat.get("total_messages_synced", 0)
         title = chat.get("title", "Unknown")
         chat_type = chat.get("chat_type", "unknown")
@@ -421,6 +437,14 @@ def format_chat_list(result: dict, listener_active: bool = False) -> list[TextCo
         lines.append(
             f"- {title} ({chat_type}) [{freshness}]\n  ID: {chat_id} | Messages synced: {synced} | {sync_info}\n"
         )
+
+    has_more = result.get("has_more", False)
+    next_cursor = result.get("next_cursor")
+    if has_more and next_cursor:
+        lines.append(
+            f'\n--- More chats available. Use cursor="{next_cursor}" to load the next page ---'
+        )
+
     return [TextContent(type="text", text="\n".join(lines))]
 
 
@@ -476,7 +500,7 @@ def format_digest(result: dict) -> list[TextContent]:
 
 
 def format_data_status(settings: dict, chats_result: dict) -> list[TextContent]:
-    """Format data status overview for display."""
+    """Format compact data status overview for display."""
     listener_active = settings.get("listener_active", False)
     realtime_sync = settings.get("realtime_sync_enabled", False)
 
@@ -488,22 +512,56 @@ def format_data_status(settings: dict, chats_result: dict) -> list[TextContent]:
     ]
 
     chats = chats_result.get("chats", [])
+    total_chats = chats_result.get("total", len(chats))
     if not chats:
         lines.append("No chats synced yet. Use sync_chat to download messages.")
     else:
-        lines.append(f"Synced Chats ({len(chats)}):\n")
+        # Summary stats
+        total_messages = sum(c.get("total_messages_synced", 0) for c in chats)
+        type_counts: dict[str, int] = {}
+        freshness_counts: dict[str, int] = {"LIVE": 0, "FRESH": 0, "STALE": 0, "NEVER": 0}
         for chat in chats:
+            ct = chat.get("chat_type", "unknown")
+            type_counts[ct] = type_counts.get(ct, 0) + 1
+            freshness = _freshness_label(chat.get("last_sync_at"), listener_active)
+            freshness_counts[freshness] = freshness_counts.get(freshness, 0) + 1
+
+        lines.append(f"Total chats: {total_chats}")
+        lines.append(f"Total messages synced: {total_messages:,}\n")
+
+        # Type breakdown
+        type_parts = [f"{v} {k}" for k, v in sorted(type_counts.items(), key=lambda x: -x[1])]
+        lines.append(f"Chat types: {', '.join(type_parts)}\n")
+
+        # Freshness distribution
+        freshness_parts = []
+        for label in ("LIVE", "FRESH", "STALE", "NEVER"):
+            count = freshness_counts.get(label, 0)
+            if count > 0:
+                freshness_parts.append(f"{count} {label}")
+        lines.append(f"Data freshness: {', '.join(freshness_parts)}\n")
+
+        # Top 10 most recently active chats
+        sorted_chats = sorted(
+            chats,
+            key=lambda c: c.get("last_sync_at") or "",
+            reverse=True,
+        )
+        top_chats = sorted_chats[:10]
+        lines.append(f"Top {len(top_chats)} most recently active chats:\n")
+        for chat in top_chats:
             title = chat.get("title", "Unknown")
             chat_type = chat.get("chat_type", "unknown")
             chat_id = chat.get("id", "unknown")
             synced = chat.get("total_messages_synced", 0)
-            last_sync = chat.get("last_sync_at")
-            freshness = _freshness_label(last_sync, listener_active)
-            sync_info = f"Last synced: {_format_date(last_sync)}" if last_sync else "Never synced"
+            freshness = _freshness_label(chat.get("last_sync_at"), listener_active)
             lines.append(
-                f"- {title} ({chat_type}) [{freshness}]\n"
-                f"  ID: {chat_id} | Messages: {synced} | {sync_info}\n"
+                f"- {title} ({chat_type}) [{freshness}] | ID: {chat_id} | Messages: {synced}"
             )
+
+        lines.append(
+            "\nUse list_chats to browse all chats, or search_messages to find specific content."
+        )
 
     return [TextContent(type="text", text="\n".join(lines))]
 

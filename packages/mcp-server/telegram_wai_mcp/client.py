@@ -83,12 +83,15 @@ class TelegramAIClient:
     async def list_chats(
         self,
         chat_type: str | None = None,
-        limit: int = 1000,
+        limit: int = 100,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
-        """List synced Telegram chats."""
-        params = {"limit": limit}
+        """List synced Telegram chats with cursor pagination."""
+        params: dict[str, Any] = {"limit": limit}
         if chat_type:
             params["chat_type"] = chat_type
+        if cursor:
+            params["cursor"] = cursor
         return await self._request("GET", "/api/v1/chats", params=params)
 
     async def get_chat(self, chat_id: str) -> dict[str, Any]:

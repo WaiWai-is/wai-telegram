@@ -75,3 +75,92 @@ class TestFormatHelpers:
         result = {"results": [{"text": "hello"}]}
         content = server.format_search_results(result)
         assert len(content) >= 1
+
+
+class TestFormatChatList:
+    def test_shows_count_header(self):
+        result = {
+            "chats": [{"title": "Chat A", "id": "1", "chat_type": "private"}],
+            "total": 50,
+            "has_more": True,
+            "next_cursor": "cursor_abc",
+        }
+        content = server.format_chat_list(result)
+        assert "Showing 1 of 50" in content[0].text
+
+    def test_pagination_footer_when_has_more(self):
+        result = {
+            "chats": [{"title": "Chat A", "id": "1", "chat_type": "private"}],
+            "total": 100,
+            "has_more": True,
+            "next_cursor": "cursor_xyz",
+        }
+        content = server.format_chat_list(result)
+        text = content[0].text
+        assert 'cursor="cursor_xyz"' in text
+        assert "More chats available" in text
+
+    def test_no_pagination_footer_when_no_more(self):
+        result = {
+            "chats": [{"title": "Chat A", "id": "1", "chat_type": "private"}],
+            "total": 1,
+            "has_more": False,
+        }
+        content = server.format_chat_list(result)
+        assert "More chats available" not in content[0].text
+
+    def test_empty_chats(self):
+        result = {"chats": [], "total": 0}
+        content = server.format_chat_list(result)
+        assert "No chats synced" in content[0].text
+
+
+class TestFormatDataStatus:
+    def _make_chats(self, n: int) -> list[dict]:
+        return [
+            {
+                "title": f"Chat {i}",
+                "id": f"id-{i}",
+                "chat_type": "private" if i % 2 == 0 else "group",
+                "total_messages_synced": i * 10,
+                "last_sync_at": f"2026-03-0{min(i, 9)}T12:00:00+00:00",
+            }
+            for i in range(1, n + 1)
+        ]
+
+    def test_shows_summary_not_full_list(self):
+        chats = self._make_chats(20)
+        result = {"chats": chats, "total": 20}
+        settings = {"listener_active": False, "realtime_sync_enabled": True}
+        content = server.format_data_status(settings, result)
+        text = content[0].text
+        # Should have summary stats
+        assert "Total chats: 20" in text
+        assert "Total messages synced:" in text
+        assert "Chat types:" in text
+        assert "Data freshness:" in text
+        # Should only show 10 chats in the preview, not all 20
+        assert text.count("ID: id-") == 10
+
+    def test_top_10_cap(self):
+        chats = self._make_chats(15)
+        result = {"chats": chats, "total": 15}
+        settings = {"listener_active": False, "realtime_sync_enabled": False}
+        content = server.format_data_status(settings, result)
+        text = content[0].text
+        assert "Top 10" in text
+
+    def test_footer_guidance(self):
+        chats = self._make_chats(5)
+        result = {"chats": chats, "total": 5}
+        settings = {"listener_active": False, "realtime_sync_enabled": False}
+        content = server.format_data_status(settings, result)
+        text = content[0].text
+        assert "list_chats" in text
+        assert "search_messages" in text
+
+    def test_empty_chats(self):
+        result = {"chats": [], "total": 0}
+        settings = {"listener_active": False, "realtime_sync_enabled": False}
+        content = server.format_data_status(settings, result)
+        assert "No chats synced" in content[0].text
