@@ -123,9 +123,10 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_data_status",
             description=(
-                "Check the status of your Telegram data. Shows whether real-time sync is active, "
-                "which chats are available, how many messages are synced per chat, and data freshness. "
-                "**Call this first** to understand what data is available before reading messages or searching."
+                "Check the status of your Telegram data. Returns a compact summary: total chats/messages, "
+                "chat type breakdown, data freshness distribution, and top 10 most recently active chats. "
+                "**Call this first** to understand what data is available. "
+                "Use list_chats to browse all chats, or search_messages to find specific content."
             ),
             inputSchema={
                 "type": "object",
