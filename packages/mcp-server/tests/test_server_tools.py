@@ -77,6 +77,7 @@ class TestFormatHelpers:
                 {
                     "text": "hello world",
                     "chat_title": "Test Chat",
+                    "chat_username": "test_chat",
                     "sender_name": "John",
                     "sent_at": "2024-01-01T12:00:00Z",
                     "similarity": 0.95,
@@ -90,6 +91,8 @@ class TestFormatHelpers:
         content = server.format_search_results(result)
         assert len(content) >= 1
         assert "Found" in content[0].text
+        assert "@test_chat" in content[0].text
+        assert "https://t.me/test_chat" in content[0].text
 
     def test_format_search_results_empty(self):
         result = {"results": [], "total": 0, "query": "nothing"}
@@ -105,13 +108,22 @@ class TestFormatHelpers:
 class TestFormatChatList:
     def test_shows_count_header(self):
         result = {
-            "chats": [{"title": "Chat A", "id": "1", "chat_type": "private"}],
+            "chats": [
+                {
+                    "title": "Chat A",
+                    "id": "1",
+                    "chat_type": "private",
+                    "username": "chat_a",
+                }
+            ],
             "total": 50,
             "has_more": True,
             "next_cursor": "cursor_abc",
         }
         content = server.format_chat_list(result)
         assert "Showing 1 of 50" in content[0].text
+        assert "@chat_a" in content[0].text
+        assert "https://t.me/chat_a" in content[0].text
 
     def test_pagination_footer_when_has_more(self):
         result = {

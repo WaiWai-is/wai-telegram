@@ -16,6 +16,7 @@ class SearchResultItem(BaseModel):
     id: UUID
     chat_id: UUID
     chat_title: str
+    chat_username: str | None = None
     telegram_message_id: int
     text: str | None
     sender_name: str | None

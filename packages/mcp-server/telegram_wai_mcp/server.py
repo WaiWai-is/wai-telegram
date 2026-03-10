@@ -179,6 +179,15 @@ def _format_media_label(msg: dict) -> str:
     return "[Media]"
 
 
+def _format_username_ref(username: Any) -> str:
+    if not isinstance(username, str):
+        return ""
+    normalized = username.strip().removeprefix("@")
+    if not normalized:
+        return ""
+    return f"@{normalized} | https://t.me/{normalized}"
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available MCP tools."""
@@ -598,12 +607,18 @@ def format_search_results(result: dict) -> list[TextContent]:
         similarity = r.get("similarity", 0) * 100
         sent_at = _format_date(r.get("sent_at"))
         chat_title = r.get("chat_title") or "Unknown"
+        username_ref = _format_username_ref(r.get("chat_username"))
         chat_id = r.get("chat_id", "")
         msg_id = r.get("telegram_message_id", "")
-        lines.append(
-            f"[{chat_title}] {sender}: {text}\n"
-            f"  - Sent: {sent_at} | Relevance: {similarity:.0f}% | Chat ID: {chat_id} | msg#{msg_id}\n"
-        )
+        details = [
+            f"Sent: {sent_at}",
+            f"Relevance: {similarity:.0f}%",
+            f"Chat ID: {chat_id}",
+            f"msg#{msg_id}",
+        ]
+        if username_ref:
+            details.append(f"Username: {username_ref}")
+        lines.append(f"[{chat_title}] {sender}: {text}\n  - {' | '.join(details)}\n")
     return [TextContent(type="text", text="\n".join(lines))]
 
 
@@ -647,12 +662,14 @@ def format_chat_list(result: dict, listener_active: bool = False) -> list[TextCo
         title = chat.get("title", "Unknown")
         chat_type = chat.get("chat_type", "unknown")
         chat_id = chat.get("id", "unknown")
+        username_ref = _format_username_ref(chat.get("username"))
         last_sync = chat.get("last_sync_at")
         freshness = _freshness_label(last_sync, listener_active)
         sync_info = f"Last synced: {_format_date(last_sync)}" if last_sync else "Never synced"
-        lines.append(
-            f"- {title} ({chat_type}) [{freshness}]\n  ID: {chat_id} | Messages synced: {synced} | {sync_info}\n"
-        )
+        details = [f"ID: {chat_id}", f"Messages synced: {synced}", sync_info]
+        if username_ref:
+            details.append(f"Username: {username_ref}")
+        lines.append(f"- {title} ({chat_type}) [{freshness}]\n  {' | '.join(details)}\n")
 
     has_more = result.get("has_more", False)
     next_cursor = result.get("next_cursor")

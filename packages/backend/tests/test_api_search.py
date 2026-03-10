@@ -1,14 +1,28 @@
 from unittest.mock import AsyncMock, patch
 
-from app.schemas.search import SearchResponse
+from app.schemas.search import SearchResponse, SearchResultItem
 
 
 class TestSearchEndpoint:
     async def test_search_success(self, auth_client):
         mock_response = SearchResponse(
-            results=[],
+            results=[
+                SearchResultItem(
+                    id="00000000-0000-0000-0000-000000000001",
+                    chat_id="00000000-0000-0000-0000-000000000002",
+                    chat_title="Test Chat",
+                    chat_username="test_chat",
+                    telegram_message_id=42,
+                    text="hello",
+                    sender_name="John",
+                    is_outgoing=False,
+                    sent_at="2026-03-10T12:00:00Z",
+                    similarity=0.91,
+                    has_media=False,
+                )
+            ],
             query="test query",
-            total=0,
+            total=1,
         )
         with patch(
             "app.api.v1.search.semantic_search",
@@ -22,8 +36,8 @@ class TestSearchEndpoint:
             assert response.status_code == 200
             data = response.json()
             assert data["query"] == "test query"
-            assert data["results"] == []
-            assert data["total"] == 0
+            assert data["results"][0]["chat_username"] == "test_chat"
+            assert data["total"] == 1
 
     async def test_search_unauthenticated(self, client):
         response = await client.post(
