@@ -12,6 +12,7 @@ class ChatResponse(BaseModel):
     chat_type: ChatType
     title: str
     username: str | None
+    last_message_id: int | None = None
     last_sync_at: datetime | None
     last_activity_at: datetime | None
     total_messages_synced: int

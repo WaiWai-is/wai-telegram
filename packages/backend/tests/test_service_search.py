@@ -27,6 +27,8 @@ class TestSemanticSearch:
             id=uuid4(),
             chat_id=uuid4(),
             chat_title="Test Chat",
+            chat_type="supergroup",
+            chat_telegram_id=-1001234567890,
             chat_username="test_chat",
             telegram_message_id=42,
             text="hello",
@@ -50,4 +52,6 @@ class TestSemanticSearch:
             result = await semantic_search(mock_db, test_user.id, request)
 
         assert result.total == 1
+        assert result.results[0].chat_type == "supergroup"
+        assert result.results[0].chat_telegram_id == -1001234567890
         assert result.results[0].chat_username == "test_chat"

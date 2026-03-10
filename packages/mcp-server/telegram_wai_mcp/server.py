@@ -188,6 +188,21 @@ def _format_username_ref(username: Any) -> str:
     return f"@{normalized} | https://t.me/{normalized}"
 
 
+def _private_chat_link(chat_type: Any, telegram_chat_id: Any, message_id: Any) -> str:
+    if chat_type not in {"supergroup", "channel"}:
+        return ""
+    if not isinstance(telegram_chat_id, int) or not isinstance(message_id, int):
+        return ""
+    if message_id <= 0:
+        return ""
+    channel_id = abs(telegram_chat_id)
+    if channel_id >= 10**12:
+        channel_id -= 10**12
+    if channel_id <= 0:
+        return ""
+    return f"https://t.me/c/{channel_id}/{message_id}"
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available MCP tools."""
@@ -608,6 +623,11 @@ def format_search_results(result: dict) -> list[TextContent]:
         sent_at = _format_date(r.get("sent_at"))
         chat_title = r.get("chat_title") or "Unknown"
         username_ref = _format_username_ref(r.get("chat_username"))
+        private_link = _private_chat_link(
+            r.get("chat_type"),
+            r.get("chat_telegram_id"),
+            r.get("telegram_message_id"),
+        )
         chat_id = r.get("chat_id", "")
         msg_id = r.get("telegram_message_id", "")
         details = [
@@ -618,6 +638,8 @@ def format_search_results(result: dict) -> list[TextContent]:
         ]
         if username_ref:
             details.append(f"Username: {username_ref}")
+        elif private_link:
+            details.append(f"Open: {private_link}")
         lines.append(f"[{chat_title}] {sender}: {text}\n  - {' | '.join(details)}\n")
     return [TextContent(type="text", text="\n".join(lines))]
 
@@ -663,12 +685,19 @@ def format_chat_list(result: dict, listener_active: bool = False) -> list[TextCo
         chat_type = chat.get("chat_type", "unknown")
         chat_id = chat.get("id", "unknown")
         username_ref = _format_username_ref(chat.get("username"))
+        private_link = _private_chat_link(
+            chat_type,
+            chat.get("telegram_chat_id"),
+            chat.get("last_message_id"),
+        )
         last_sync = chat.get("last_sync_at")
         freshness = _freshness_label(last_sync, listener_active)
         sync_info = f"Last synced: {_format_date(last_sync)}" if last_sync else "Never synced"
         details = [f"ID: {chat_id}", f"Messages synced: {synced}", sync_info]
         if username_ref:
             details.append(f"Username: {username_ref}")
+        elif private_link:
+            details.append(f"Open: {private_link}")
         lines.append(f"- {title} ({chat_type}) [{freshness}]\n  {' | '.join(details)}\n")
 
     has_more = result.get("has_more", False)

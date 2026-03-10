@@ -11,6 +11,8 @@ class TestSearchEndpoint:
                     id="00000000-0000-0000-0000-000000000001",
                     chat_id="00000000-0000-0000-0000-000000000002",
                     chat_title="Test Chat",
+                    chat_type="supergroup",
+                    chat_telegram_id=-1001234567890,
                     chat_username="test_chat",
                     telegram_message_id=42,
                     text="hello",
@@ -36,6 +38,8 @@ class TestSearchEndpoint:
             assert response.status_code == 200
             data = response.json()
             assert data["query"] == "test query"
+            assert data["results"][0]["chat_type"] == "supergroup"
+            assert data["results"][0]["chat_telegram_id"] == -1001234567890
             assert data["results"][0]["chat_username"] == "test_chat"
             assert data["total"] == 1
 

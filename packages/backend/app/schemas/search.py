@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.models.chat import ChatType
+
 
 class SearchRequest(BaseModel):
     query: str
@@ -16,6 +18,8 @@ class SearchResultItem(BaseModel):
     id: UUID
     chat_id: UUID
     chat_title: str
+    chat_type: ChatType | None = None
+    chat_telegram_id: int | None = None
     chat_username: str | None = None
     telegram_message_id: int
     text: str | None

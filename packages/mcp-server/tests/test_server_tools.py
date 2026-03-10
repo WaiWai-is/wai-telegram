@@ -94,6 +94,28 @@ class TestFormatHelpers:
         assert "@test_chat" in content[0].text
         assert "https://t.me/test_chat" in content[0].text
 
+    def test_format_search_results_private_supergroup_link_fallback(self):
+        result = {
+            "results": [
+                {
+                    "text": "hello world",
+                    "chat_title": "Private Team",
+                    "chat_type": "supergroup",
+                    "chat_telegram_id": -1001234567890,
+                    "telegram_message_id": 321,
+                    "sender_name": "John",
+                    "sent_at": "2024-01-01T12:00:00Z",
+                    "similarity": 0.95,
+                    "is_outgoing": False,
+                    "has_media": False,
+                }
+            ],
+            "total": 1,
+            "query": "hello",
+        }
+        content = server.format_search_results(result)
+        assert "Open: https://t.me/c/1234567890/321" in content[0].text
+
     def test_format_search_results_empty(self):
         result = {"results": [], "total": 0, "query": "nothing"}
         content = server.format_search_results(result)
@@ -124,6 +146,23 @@ class TestFormatChatList:
         assert "Showing 1 of 50" in content[0].text
         assert "@chat_a" in content[0].text
         assert "https://t.me/chat_a" in content[0].text
+
+    def test_shows_private_supergroup_link_when_username_missing(self):
+        result = {
+            "chats": [
+                {
+                    "title": "Private Team",
+                    "id": "1",
+                    "chat_type": "supergroup",
+                    "telegram_chat_id": -1001234567890,
+                    "last_message_id": 654,
+                }
+            ],
+            "total": 1,
+            "has_more": False,
+        }
+        content = server.format_chat_list(result)
+        assert "Open: https://t.me/c/1234567890/654" in content[0].text
 
     def test_pagination_footer_when_has_more(self):
         result = {
