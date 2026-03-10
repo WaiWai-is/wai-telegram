@@ -48,6 +48,9 @@ class UserResponse(BaseModel):
 # --- API Key schemas ---
 
 
+VALID_SCOPES = {"read", "write"}
+
+
 class ApiKeyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     expires_in_days: int | None = Field(
@@ -56,6 +59,20 @@ class ApiKeyCreateRequest(BaseModel):
         le=3650,
         description="Key expiration in days (1-3650). Null for no expiration.",
     )
+    scopes: list[str] = Field(
+        default=["read", "write"],
+        description="Permission scopes: 'read' and/or 'write'.",
+    )
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("At least one scope is required")
+        invalid = set(v) - VALID_SCOPES
+        if invalid:
+            raise ValueError(f"Invalid scopes: {invalid}. Valid scopes: {VALID_SCOPES}")
+        return sorted(set(v))
 
 
 class ApiKeyResponse(BaseModel):
@@ -66,6 +83,7 @@ class ApiKeyResponse(BaseModel):
     created_at: datetime
     last_used_at: datetime | None
     expires_at: datetime | None
+    scopes: list[str]
 
     class Config:
         from_attributes = True
@@ -77,6 +95,7 @@ class ApiKeyCreateResponse(BaseModel):
     api_key: str
     key_hint: str
     expires_at: datetime | None
+    scopes: list[str]
     message: str = "Store this API key securely. It won't be shown again."
 
 

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser
+from app.core.auth import CurrentUser, RequireWrite
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.session import TelegramSession
@@ -59,10 +59,11 @@ async def get_settings_endpoint(
 @router.put("", response_model=UserSettingsResponse)
 async def update_settings(
     body: UserSettingsUpdate,
-    user: CurrentUser,
+    ctx: RequireWrite,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UserSettingsResponse:
     """Update user settings (partial update)."""
+    user = ctx.user
     settings = await _get_or_create_settings(db, user.id)
 
     updates = body.model_dump(exclude_unset=True)
@@ -100,7 +101,7 @@ async def update_settings(
 
 @router.post("/test-bot", response_model=TestBotResponse)
 async def test_bot(
-    user: CurrentUser,
+    ctx: RequireWrite,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TestBotResponse:
     """Send a test message via the Telegram bot."""
@@ -113,7 +114,7 @@ async def test_bot(
     # Get user's Telegram user ID
     result = await db.execute(
         select(TelegramSession).where(
-            TelegramSession.user_id == user.id,
+            TelegramSession.user_id == ctx.user.id,
             TelegramSession.is_active == True,  # noqa: E712
         )
     )

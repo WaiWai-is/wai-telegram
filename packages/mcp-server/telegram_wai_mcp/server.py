@@ -498,11 +498,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         elif name == "search_today_requests":
             query = _require_str(args, "query")
             limit = _optional_int(args, "limit", default=20, minimum=1, maximum=100)
-            today = date.today()
+            from datetime import UTC
+
+            today = datetime.now(UTC).date()
             result = await api.search_messages(
                 query=query,
                 limit=limit,
-                date_from=datetime.combine(today, datetime.min.time()),
+                date_from=datetime(today.year, today.month, today.day, tzinfo=UTC),
             )
             return format_search_results(result)
 

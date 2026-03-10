@@ -371,6 +371,7 @@ export default function SettingsPage() {
   // API key state
   const [newKeyName, setNewKeyName] = useState('')
   const [newKeyExpiration, setNewKeyExpiration] = useState<number | null>(365)
+  const [newKeyScopes, setNewKeyScopes] = useState<string[]>(['read', 'write'])
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<ApiKeyCreateResponse | null>(null)
   const [selectedKeyForConfig, setSelectedKeyForConfig] = useState('')
   const [keyCopied, setKeyCopied] = useState(false)
@@ -459,12 +460,13 @@ export default function SettingsPage() {
   })
 
   const createKeyMutation = useMutation({
-    mutationFn: ({ name, expiresInDays }: { name: string; expiresInDays: number | null }) =>
-      api.createApiKey(name, expiresInDays),
+    mutationFn: ({ name, expiresInDays, scopes }: { name: string; expiresInDays: number | null; scopes: string[] }) =>
+      api.createApiKey(name, expiresInDays, scopes),
     onSuccess: (data) => {
       setNewlyCreatedKey(data)
       setNewKeyName('')
       setNewKeyExpiration(365)
+      setNewKeyScopes(['read', 'write'])
       setSelectedKeyForConfig(data.api_key)
       queryClient.invalidateQueries({ queryKey: ['api-keys'] })
     },
@@ -856,6 +858,7 @@ export default function SettingsPage() {
                     <th className="text-left px-4 py-2.5 font-medium text-secondary">Name</th>
                     <th className="text-left px-4 py-2.5 font-medium text-secondary">Key</th>
                     <th className="text-left px-4 py-2.5 font-medium text-secondary">Status</th>
+                    <th className="text-left px-4 py-2.5 font-medium text-secondary">Scopes</th>
                     <th className="text-left px-4 py-2.5 font-medium text-secondary">Expires</th>
                     <th className="text-right px-4 py-2.5 font-medium text-secondary">Actions</th>
                   </tr>
@@ -903,6 +906,16 @@ export default function SettingsPage() {
                         }`}>
                           {isExpired ? 'Expired' : key.is_active ? 'Active' : 'Inactive'}
                         </span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex gap-1">
+                          {key.scopes?.includes('read') && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">R</span>
+                          )}
+                          {key.scopes?.includes('write') && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400">W</span>
+                          )}
+                        </div>
                       </td>
                       <td className={`px-4 py-2.5 text-xs ${expiryClass}`}>
                         {expiryLabel}
@@ -1014,14 +1027,43 @@ export default function SettingsPage() {
                 onClick={() => {
                   if (newKeyName.trim()) {
                     setNewlyCreatedKey(null)
-                    createKeyMutation.mutate({ name: newKeyName.trim(), expiresInDays: newKeyExpiration })
+                    createKeyMutation.mutate({ name: newKeyName.trim(), expiresInDays: newKeyExpiration, scopes: newKeyScopes })
                   }
                 }}
-                disabled={createKeyMutation.isPending || !newKeyName.trim()}
+                disabled={createKeyMutation.isPending || !newKeyName.trim() || newKeyScopes.length === 0}
                 className="shrink-0 px-4 py-2.5 bg-primary text-surface rounded-lg hover:opacity-80 disabled:opacity-50 transition-opacity text-sm"
               >
                 {createKeyMutation.isPending ? 'Creating...' : 'Create Key'}
               </button>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-secondary">Permissions:</span>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newKeyScopes.includes('read')}
+                  onChange={(e) => {
+                    setNewKeyScopes(prev =>
+                      e.target.checked ? [...prev, 'read'] : prev.filter(s => s !== 'read')
+                    )
+                  }}
+                  className="rounded"
+                />
+                Read
+              </label>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newKeyScopes.includes('write')}
+                  onChange={(e) => {
+                    setNewKeyScopes(prev =>
+                      e.target.checked ? [...prev, 'write'] : prev.filter(s => s !== 'write')
+                    )
+                  }}
+                  className="rounded"
+                />
+                Write
+              </label>
             </div>
             {newKeyExpiration === null && (
               <p className="text-xs text-yellow-600 dark:text-yellow-400">

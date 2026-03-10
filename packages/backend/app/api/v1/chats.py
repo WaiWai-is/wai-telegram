@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser
+from app.core.auth import CurrentUser, RequireWrite
 from app.core.cursor import (
     CursorError,
     decode_cursor,
@@ -153,11 +153,11 @@ async def list_chats(
 @limiter.limit("10/minute")
 async def refresh_chats(
     request: Request,
-    user: CurrentUser,
+    ctx: RequireWrite,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ChatListResponse:
     """Refresh chat list from Telegram."""
-    chats = await sync_chats(db, user.id)
+    chats = await sync_chats(db, ctx.user.id)
     return ChatListResponse(
         chats=[ChatResponse.model_validate(chat) for chat in chats],
         has_more=False,

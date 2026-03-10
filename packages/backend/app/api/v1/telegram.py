@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
 
-from app.core.auth import CurrentUser
+from app.core.auth import CurrentUser, RequireWrite
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.models.session import TelegramSession
@@ -73,7 +73,7 @@ async def _cleanup_expired_auth_clients() -> None:
 async def request_code(
     request: Request,
     body: RequestCodeRequest,
-    user: CurrentUser,
+    ctx: RequireWrite,
 ) -> RequestCodeResponse:
     """Request verification code for Telegram authentication."""
     await _cleanup_expired_auth_clients()
@@ -81,7 +81,7 @@ async def request_code(
         client, phone_code_hash, code_type = await telegram_client.request_code(
             body.phone_number
         )
-        await _replace_auth_client(f"{user.id}:{body.phone_number}", client)
+        await _replace_auth_client(f"{ctx.user.id}:{body.phone_number}", client)
         return RequestCodeResponse(
             phone_code_hash=phone_code_hash,
             code_type=code_type,
@@ -97,10 +97,11 @@ async def request_code(
 @router.post("/verify-code", response_model=VerifyCodeResponse)
 async def verify_code(
     body: VerifyCodeRequest,
-    user: CurrentUser,
+    ctx: RequireWrite,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> VerifyCodeResponse:
     """Verify code and complete Telegram authentication."""
+    user = ctx.user
     await _cleanup_expired_auth_clients()
     client_key = f"{user.id}:{body.phone_number}"
     entry = _auth_clients.get(client_key)
@@ -162,9 +163,9 @@ async def get_session(
 
 @router.delete("/session")
 async def delete_session(
-    user: CurrentUser,
+    ctx: RequireWrite,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
     """Delete Telegram session (logout)."""
-    await telegram_client.delete_session(db, user.id)
+    await telegram_client.delete_session(db, ctx.user.id)
     return {"message": "Session deleted successfully"}

@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser
+from app.core.auth import CurrentUser, RequireWrite
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.schemas.digest import DigestGenerateRequest, DigestResponse
@@ -44,11 +44,11 @@ async def get_digest_by_date(
 @limiter.limit("5/hour")
 async def generate_daily_digest(
     request: Request,
-    user: CurrentUser,
+    ctx: RequireWrite,
     db: Annotated[AsyncSession, Depends(get_db)],
     body: DigestGenerateRequest | None = None,
 ) -> DigestResponse:
     """Generate digest for a specific date (defaults to yesterday)."""
     digest_date = body.date if body else None
-    digest = await generate_digest(db, user.id, digest_date)
+    digest = await generate_digest(db, ctx.user.id, digest_date)
     return DigestResponse.model_validate(digest)

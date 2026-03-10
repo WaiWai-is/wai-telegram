@@ -7,7 +7,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser
+from app.core.auth import CurrentUser, RequireWrite
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.security import (
@@ -160,6 +160,7 @@ async def list_api_keys(
             created_at=k.created_at,
             last_used_at=k.last_used_at,
             expires_at=k.expires_at,
+            scopes=k.scopes.split(","),
         )
         for k in keys
     ]
@@ -170,10 +171,11 @@ async def list_api_keys(
 async def create_api_key(
     request: Request,
     body: ApiKeyCreateRequest,
-    user: CurrentUser,
+    ctx: RequireWrite,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ApiKeyCreateResponse:
     """Create a new named API key."""
+    user = ctx.user
     count = (
         await db.execute(
             select(func.count()).select_from(ApiKey).where(ApiKey.user_id == user.id)
@@ -191,6 +193,8 @@ async def create_api_key(
     if body.expires_in_days is not None:
         expires_at = datetime.now(UTC) + timedelta(days=body.expires_in_days)
 
+    scopes_str = ",".join(body.scopes)
+
     api_key = ApiKey(
         user_id=user.id,
         name=body.name,
@@ -198,6 +202,7 @@ async def create_api_key(
         key_prefix=compute_api_key_prefix(raw_key),
         key_hint=get_key_hint(raw_key),
         expires_at=expires_at,
+        scopes=scopes_str,
     )
     db.add(api_key)
     await db.flush()
@@ -208,6 +213,7 @@ async def create_api_key(
         api_key=raw_key,
         key_hint=api_key.key_hint,
         expires_at=api_key.expires_at,
+        scopes=body.scopes,
     )
 
 
@@ -294,4 +300,5 @@ async def toggle_api_key(
         created_at=api_key.created_at,
         last_used_at=api_key.last_used_at,
         expires_at=api_key.expires_at,
+        scopes=api_key.scopes.split(","),
     )

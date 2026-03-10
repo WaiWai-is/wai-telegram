@@ -28,6 +28,7 @@ class ApiKey(Base):
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    scopes: Mapped[str] = mapped_column(String(50), default="read,write")
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="api_keys")
