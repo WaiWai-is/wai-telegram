@@ -206,9 +206,7 @@ class TestErrorHandling:
             client._client,
             "request",
             new_callable=AsyncMock,
-            side_effect=httpx.ReadTimeout(
-                "Timed out", request=httpx.Request("GET", "http://test")
-            ),
+            side_effect=httpx.ReadTimeout("Timed out", request=httpx.Request("GET", "http://test")),
         ):
             with pytest.raises(RuntimeError, match="timed out"):
                 await client.list_chats()

@@ -1,7 +1,6 @@
 import json
 
 from starlette.testclient import TestClient
-
 from telegram_wai_mcp.sse_server import create_app
 
 BASE_HEADERS = {

@@ -267,7 +267,9 @@ class TestSendFile:
 
         observed = {}
 
-        async def fake_telethon_send_file(chat_id, file_path, caption=None, file_name=None):
+        async def fake_telethon_send_file(
+            chat_id, file_path, caption=None, file_name=None
+        ):
             observed["chat_id"] = chat_id
             observed["caption"] = caption
             observed["file_name"] = file_name
@@ -282,8 +284,13 @@ class TestSendFile:
 
         with (
             patch("app.services.messaging_service._validate_url", return_value=None),
-            patch("app.services.messaging_service.httpx.AsyncClient", return_value=fake_http_client),
-            patch("app.services.messaging_service.get_client", return_value=mock_client),
+            patch(
+                "app.services.messaging_service.httpx.AsyncClient",
+                return_value=fake_http_client,
+            ),
+            patch(
+                "app.services.messaging_service.get_client", return_value=mock_client
+            ),
         ):
             result = await send_file(
                 db_session,

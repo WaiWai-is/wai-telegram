@@ -1,5 +1,4 @@
 from starlette.testclient import TestClient
-
 from telegram_wai_mcp import server as srv
 from telegram_wai_mcp.sse_server import create_app
 
