@@ -151,3 +151,50 @@ class TelegramAIClient:
     async def get_sync_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
         """Get recent sync jobs."""
         return await self._request("GET", "/api/v1/sync/jobs", params={"limit": limit})
+
+    async def send_message(
+        self,
+        chat_id: str,
+        text: str,
+    ) -> dict[str, Any]:
+        """Send a text message to a Telegram chat."""
+        return await self._request(
+            "POST",
+            f"/api/v1/messages/{chat_id}/send",
+            json={"text": text},
+        )
+
+    async def send_file(
+        self,
+        chat_id: str,
+        file_url: str,
+        caption: str | None = None,
+        file_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a file to a Telegram chat."""
+        payload: dict[str, Any] = {"file_url": file_url}
+        if caption:
+            payload["caption"] = caption
+        if file_name:
+            payload["file_name"] = file_name
+        return await self._request(
+            "POST",
+            f"/api/v1/messages/{chat_id}/send-file",
+            json=payload,
+        )
+
+    async def reply_to_message(
+        self,
+        chat_id: str,
+        telegram_message_id: int,
+        text: str,
+    ) -> dict[str, Any]:
+        """Reply to a specific message in a Telegram chat."""
+        return await self._request(
+            "POST",
+            f"/api/v1/messages/{chat_id}/reply",
+            json={
+                "telegram_message_id": telegram_message_id,
+                "text": text,
+            },
+        )

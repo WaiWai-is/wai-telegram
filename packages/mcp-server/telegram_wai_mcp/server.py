@@ -285,6 +285,107 @@ async def list_tools() -> list[Tool]:
                 "required": ["job_id"],
             },
         ),
+        Tool(
+            name="send_message",
+            description=(
+                "Send a text message to a Telegram chat as the connected user account. "
+                "Requires a chat_id — get it from list_chats or search_messages results."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chat_id": {
+                        "type": "string",
+                        "description": "The chat ID to send the message to",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "The message text to send",
+                    },
+                },
+                "required": ["chat_id", "text"],
+            },
+        ),
+        Tool(
+            name="send_file",
+            description=(
+                "Download a file from a URL and send it to a Telegram chat as the connected user account. "
+                "Supports any file type (PDF, images, documents, etc.). "
+                "The file is downloaded server-side and sent via Telegram."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chat_id": {
+                        "type": "string",
+                        "description": "The chat ID to send the file to",
+                    },
+                    "file_url": {
+                        "type": "string",
+                        "description": "URL of the file to download and send",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": "Optional caption text for the file",
+                    },
+                    "file_name": {
+                        "type": "string",
+                        "description": "Optional file name override (auto-detected from URL if omitted)",
+                    },
+                },
+                "required": ["chat_id", "file_url"],
+            },
+        ),
+        Tool(
+            name="reply_to_message",
+            description=(
+                "Reply to a specific message in a Telegram chat. "
+                "Requires telegram_message_id — the numeric Telegram message ID shown in "
+                "search_messages and get_chat_messages results as 'msg#'. "
+                "The reply appears as a quoted reply in the chat."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chat_id": {
+                        "type": "string",
+                        "description": "The chat ID containing the message to reply to",
+                    },
+                    "telegram_message_id": {
+                        "type": "integer",
+                        "description": "The Telegram message ID to reply to (from search/chat message results)",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "The reply text",
+                    },
+                },
+                "required": ["chat_id", "telegram_message_id", "text"],
+            },
+        ),
+        Tool(
+            name="search_today_requests",
+            description=(
+                "Search today's messages for specific requests or topics. "
+                "Automatically filters to today only. "
+                "Useful for finding who asked for something today (e.g., 'who asked for the presentation')."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for in today's messages",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results (1-100, default: 20)",
+                        "default": 20,
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
     ]
 
 
@@ -362,6 +463,49 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             result = await api.get_sync_status(job_id)
             return format_sync_status(result)
 
+        elif name == "send_message":
+            chat_id = _require_str(args, "chat_id")
+            text = _require_str(args, "text")
+            result = await api.send_message(chat_id=chat_id, text=text)
+            return format_send_result(result, "Message sent")
+
+        elif name == "send_file":
+            chat_id = _require_str(args, "chat_id")
+            file_url = _require_str(args, "file_url")
+            caption = args.get("caption")
+            file_name = args.get("file_name")
+            result = await api.send_file(
+                chat_id=chat_id,
+                file_url=file_url,
+                caption=caption,
+                file_name=file_name,
+            )
+            return format_send_result(result, "File sent")
+
+        elif name == "reply_to_message":
+            chat_id = _require_str(args, "chat_id")
+            telegram_message_id = args.get("telegram_message_id")
+            if not isinstance(telegram_message_id, int):
+                raise ValueError('"telegram_message_id" must be an integer')
+            text = _require_str(args, "text")
+            result = await api.reply_to_message(
+                chat_id=chat_id,
+                telegram_message_id=telegram_message_id,
+                text=text,
+            )
+            return format_send_result(result, "Reply sent")
+
+        elif name == "search_today_requests":
+            query = _require_str(args, "query")
+            limit = _optional_int(args, "limit", default=20, minimum=1, maximum=100)
+            today = date.today()
+            result = await api.search_messages(
+                query=query,
+                limit=limit,
+                date_from=datetime.combine(today, datetime.min.time()),
+            )
+            return format_search_results(result)
+
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -386,8 +530,10 @@ def format_search_results(result: dict) -> list[TextContent]:
         sent_at = _format_date(r.get("sent_at"))
         chat_title = r.get("chat_title") or "Unknown"
         chat_id = r.get("chat_id", "")
+        msg_id = r.get("telegram_message_id", "")
         lines.append(
-            f"[{chat_title}] {sender}: {text}\n  - Sent: {sent_at} | Relevance: {similarity:.0f}% | Chat ID: {chat_id}\n"
+            f"[{chat_title}] {sender}: {text}\n"
+            f"  - Sent: {sent_at} | Relevance: {similarity:.0f}% | Chat ID: {chat_id} | msg#{msg_id}\n"
         )
     return [TextContent(type="text", text="\n".join(lines))]
 
@@ -463,7 +609,8 @@ def format_chat_messages(result: dict) -> list[TextContent]:
         sender = msg.get("sender_name") or ("You" if msg.get("is_outgoing") else "Unknown")
         text = _format_media_label(msg)[:200]
         sent_at = _format_date(msg.get("sent_at"))
-        lines.append(f"[{sent_at}] {sender}: {text}\n")
+        msg_id = msg.get("telegram_message_id", "")
+        lines.append(f"[{sent_at}] {sender} (msg#{msg_id}): {text}\n")
 
     has_more = result.get("has_more", False)
     next_cursor = result.get("next_cursor")
@@ -564,6 +711,24 @@ def format_data_status(settings: dict, chats_result: dict) -> list[TextContent]:
             "\nUse list_chats to browse all chats, or search_messages to find specific content."
         )
 
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+def format_send_result(result: dict, action: str) -> list[TextContent]:
+    """Format send/reply result for display."""
+    msg_id = result.get("telegram_message_id", "unknown")
+    chat_id = result.get("chat_id", "unknown")
+    lines = [
+        f"{action} successfully.\n",
+        f"Message ID: {msg_id}",
+        f"Chat ID: {chat_id}",
+    ]
+    file_name = result.get("file_name")
+    if file_name:
+        lines.append(f"File: {file_name}")
+    text = result.get("text")
+    if text:
+        lines.append(f"Text: {text[:200]}")
     return [TextContent(type="text", text="\n".join(lines))]
 
 
