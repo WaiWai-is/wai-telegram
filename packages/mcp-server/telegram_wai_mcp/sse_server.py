@@ -23,7 +23,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from telegram_wai_mcp import server as srv
 from telegram_wai_mcp.server import server
@@ -74,8 +74,12 @@ def _extract_api_key(request: Request) -> str | None:
 class SessionAuthMiddleware:
     """Bind MCP sessions to an API key without using process-global request state."""
 
-    def __init__(self, app):
+    def __init__(self, app, mcp: FastMCP):
         self.app = app
+        self.mcp = mcp
+
+    def _session_exists(self, session_id: str) -> bool:
+        return session_id in self.mcp.session_manager._server_instances
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -85,6 +89,18 @@ class SessionAuthMiddleware:
         request = Request(scope)
         request_session_id = request.headers.get("mcp-session-id", "").strip()
         api_key = _extract_api_key(request)
+
+        if request_session_id and not self._session_exists(request_session_id):
+            response = JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "server-error",
+                    "error": {"code": -32600, "message": "Session not found"},
+                },
+                status_code=404,
+            )
+            await response(scope, receive, send)
+            return
 
         if not api_key and request_session_id:
             api_key = srv.get_session_api_key(request_session_id)
@@ -117,7 +133,8 @@ class SessionAuthMiddleware:
 
 
 def create_app():
-    return SessionAuthMiddleware(_build_mcp().streamable_http_app())
+    mcp = _build_mcp()
+    return SessionAuthMiddleware(mcp.streamable_http_app(), mcp)
 
 
 app = create_app()
