@@ -214,6 +214,94 @@ class TestSendMessage:
 
 
 # ---------------------------------------------------------------------------
+# send_file (streaming download to temp file)
+# ---------------------------------------------------------------------------
+
+
+class _FakeStreamResponse:
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = chunks
+        self.headers = {"content-length": str(sum(len(chunk) for chunk in chunks))}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def raise_for_status(self) -> None:
+        return None
+
+    async def aiter_bytes(self, chunk_size: int = 64 * 1024):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FakeHTTPClient:
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = chunks
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def stream(self, method: str, url: str):
+        assert method == "GET"
+        assert url == "https://example.com/doc.pdf"
+        return _FakeStreamResponse(self._chunks)
+
+
+class TestSendFile:
+    async def test_send_file_streams_to_temp_file(self, db_session, test_user):
+        from app.services.messaging_service import send_file
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(user_id=test_user.id)
+        db_session.add(chat)
+        await db_session.flush()
+
+        mock_result = MagicMock()
+        mock_result.id = 456
+
+        observed = {}
+
+        async def fake_telethon_send_file(chat_id, file_path, caption=None, file_name=None):
+            observed["chat_id"] = chat_id
+            observed["caption"] = caption
+            observed["file_name"] = file_name
+            observed["file_bytes"] = open(file_path, "rb").read()
+            return mock_result
+
+        mock_client = AsyncMock()
+        mock_client.send_file.side_effect = fake_telethon_send_file
+        mock_client.disconnect = AsyncMock()
+
+        fake_http_client = _FakeHTTPClient([b"hello ", b"world"])
+
+        with (
+            patch("app.services.messaging_service._validate_url", return_value=None),
+            patch("app.services.messaging_service.httpx.AsyncClient", return_value=fake_http_client),
+            patch("app.services.messaging_service.get_client", return_value=mock_client),
+        ):
+            result = await send_file(
+                db_session,
+                test_user.id,
+                chat.id,
+                "https://example.com/doc.pdf",
+                caption="Report",
+            )
+
+        assert result["telegram_message_id"] == 456
+        assert result["file_name"] == "doc.pdf"
+        assert observed["caption"] == "Report"
+        assert observed["file_name"] == "doc.pdf"
+        assert observed["file_bytes"] == b"hello world"
+        mock_client.disconnect.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # reply_to_message (mock Telethon)
 # ---------------------------------------------------------------------------
 

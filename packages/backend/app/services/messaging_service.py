@@ -134,43 +134,35 @@ async def send_file(
     _validate_url(file_url)
     telegram_chat_id = await _get_telegram_chat_id(db, user_id, chat_id)
 
-    # Download file with size limit
-    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as http:
-        async with http.stream("GET", file_url) as response:
-            response.raise_for_status()
-
-            # Check Content-Length if available
-            content_length = response.headers.get("content-length")
-            if content_length and int(content_length) > MAX_FILE_SIZE:
-                raise ValueError(
-                    f"File too large: {int(content_length)} bytes "
-                    f"(max {MAX_FILE_SIZE // 1024 // 1024} MB)"
-                )
-
-            # Stream download with size check
-            chunks = []
-            total_size = 0
-            async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                total_size += len(chunk)
-                if total_size > MAX_FILE_SIZE:
-                    raise ValueError(
-                        f"File exceeds maximum size of "
-                        f"{MAX_FILE_SIZE // 1024 // 1024} MB"
-                    )
-                chunks.append(chunk)
-            file_content = b"".join(chunks)
-
-    # Determine and sanitize file name
     if not file_name:
         path = urlparse(file_url).path
         file_name = Path(path).name or "file"
     file_name = _sanitize_file_name(file_name)
-
-    # Write to temp file and send via Telethon
     suffix = Path(file_name).suffix or ""
+
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
-        tmp.write(file_content)
-        tmp.flush()
+        # Stream download directly to disk to avoid buffering large files in memory.
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as http:
+            async with http.stream("GET", file_url) as response:
+                response.raise_for_status()
+
+                content_length = response.headers.get("content-length")
+                if content_length and int(content_length) > MAX_FILE_SIZE:
+                    raise ValueError(
+                        f"File too large: {int(content_length)} bytes "
+                        f"(max {MAX_FILE_SIZE // 1024 // 1024} MB)"
+                    )
+
+                total_size = 0
+                async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                    total_size += len(chunk)
+                    if total_size > MAX_FILE_SIZE:
+                        raise ValueError(
+                            f"File exceeds maximum size of "
+                            f"{MAX_FILE_SIZE // 1024 // 1024} MB"
+                        )
+                    tmp.write(chunk)
+                tmp.flush()
 
         client = await get_client(user_id, db)
         try:

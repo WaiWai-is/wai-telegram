@@ -20,7 +20,7 @@ dev = [
 
 [project.scripts]
 telegram-wai-mcp = "telegram_wai_mcp.server:main"
-telegram-wai-mcp-sse = "telegram_wai_mcp.sse_server:main"
+telegram-wai-mcp-http = "telegram_wai_mcp.sse_server:main"
 
 [build-system]
 requires = ["hatchling"]

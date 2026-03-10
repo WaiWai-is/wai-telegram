@@ -1,18 +1,20 @@
 import asyncio
+import os
 from datetime import date, datetime
 from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
+from starlette.requests import Request
 
 from telegram_wai_mcp.client import TelegramAIClient
 
 # Initialize MCP server
 server = Server("telegram-wai-mcp")
-client: TelegramAIClient | None = None
 MAX_LIMIT = 500
 MAX_LOOKBACK_DAYS = 180
+_session_api_keys: dict[str, str] = {}
 
 # Media type display labels
 MEDIA_LABELS = {
@@ -25,11 +27,68 @@ MEDIA_LABELS = {
 }
 
 
+def remember_session_api_key(session_id: str, api_key: str) -> None:
+    if session_id and api_key:
+        _session_api_keys[session_id] = api_key
+
+
+def forget_session_api_key(session_id: str) -> None:
+    _session_api_keys.pop(session_id, None)
+
+
+def get_session_api_key(session_id: str) -> str | None:
+    return _session_api_keys.get(session_id)
+
+
+def _current_request() -> Request | None:
+    try:
+        request = server.request_context.request
+    except LookupError:
+        return None
+    return request if isinstance(request, Request) else None
+
+
+def _extract_bearer_token(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    token = token.strip()
+    return token or None
+
+
+def _resolve_api_key(request: Request | None) -> str | None:
+    if request is not None:
+        scope_api_key = request.scope.get("telegram_ai_api_key")
+        if isinstance(scope_api_key, str) and scope_api_key:
+            return scope_api_key
+
+        bearer = _extract_bearer_token(request.headers.get("authorization"))
+        if bearer:
+            return bearer
+
+        query_key = request.query_params.get("key", "").strip()
+        if query_key:
+            return query_key
+
+        session_id = request.headers.get("mcp-session-id", "").strip()
+        if session_id:
+            return get_session_api_key(session_id)
+
+    env_api_key = os.environ.get("TELEGRAM_AI_KEY", "").strip()
+    return env_api_key or None
+
+
 def get_client() -> TelegramAIClient:
-    global client
-    if client is None:
-        client = TelegramAIClient()
-    return client
+    request = _current_request()
+    api_key = _resolve_api_key(request)
+    if request is not None and not api_key:
+        raise RuntimeError(
+            "Missing API key. Use Authorization: Bearer <key> or ?key=... when initializing the MCP session."
+        )
+    base_url = os.environ.get("TELEGRAM_AI_URL", "http://localhost:8000")
+    return TelegramAIClient(base_url=base_url, api_key=api_key)
 
 
 def _error(message: str) -> list[TextContent]:
@@ -392,10 +451,11 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle tool calls."""
-    api = get_client()
     args = _as_dict(arguments)
+    api: TelegramAIClient | None = None
 
     try:
+        api = get_client()
         if name == "get_data_status":
             settings = await api.get_settings()
             chats_result = await api.list_chats(limit=100)
@@ -515,6 +575,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return _error(str(e))
     except Exception as e:
         return _error(str(e))
+    finally:
+        if api is not None:
+            await api.close()
 
 
 def format_search_results(result: dict) -> list[TextContent]:

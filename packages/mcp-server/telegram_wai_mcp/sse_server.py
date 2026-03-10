@@ -1,34 +1,31 @@
 """
-Streamable HTTP Server for remote MCP connections (Claude.ai, etc.).
-
-Runs the MCP server over Streamable HTTP transport so it can be used
-as a remote connector from Claude.ai web interface. Also supports
-legacy SSE transport for backward compatibility.
+Streamable HTTP MCP server for remote clients.
 
 Usage:
     TELEGRAM_AI_URL=https://telegram.waiwai.is \
-    telegram-wai-mcp-sse --port 8808 --host 127.0.0.1
+    telegram-wai-mcp-http --port 8808 --host 127.0.0.1
 
-The API key is passed via query parameter:
-    POST /sse?key=wai_xxx  (Streamable HTTP)
-    GET  /sse?key=wai_xxx  (Legacy SSE)
+Authentication:
+    - Authorization: Bearer wai_xxx
+    - or ?key=wai_xxx on the initialize request
+
+Public endpoint:
+    POST /mcp
+    GET  /mcp
 """
 
 import argparse
-import contextlib
 import logging
 import os
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from starlette.applications import Starlette
+from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.responses import Response
-from starlette.routing import Mount
 
 from telegram_wai_mcp import server as srv
-from telegram_wai_mcp.client import TelegramAIClient
 from telegram_wai_mcp.server import server
 
 logger = logging.getLogger(__name__)
@@ -36,51 +33,94 @@ logger = logging.getLogger(__name__)
 # Domain used for DNS rebinding protection when behind reverse proxy
 DOMAIN = os.environ.get("MCP_ALLOWED_HOST", "telegram.waiwai.is")
 
-# Create FastMCP wrapper and inject our existing low-level server
-mcp = FastMCP(
-    "telegram-wai-mcp",
-    streamable_http_path="/sse",
-    transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=[DOMAIN, "127.0.0.1:8808", "localhost:8808"],
-    ),
-)
-mcp._mcp_server = server
+
+def _allowed_origins() -> list[str]:
+    configured = os.environ.get("MCP_ALLOWED_ORIGINS", "").strip()
+    if configured:
+        return [origin.strip() for origin in configured.split(",") if origin.strip()]
+    return [
+        f"https://{DOMAIN}",
+        "http://127.0.0.1:8808",
+        "http://localhost:8808",
+    ]
 
 
-class ApiKeyMiddleware:
-    """ASGI middleware to extract API key and inject per-session client."""
+def _build_mcp() -> FastMCP:
+    mcp = FastMCP(
+        "telegram-wai-mcp",
+        streamable_http_path="/mcp",
+        json_response=True,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[DOMAIN, "127.0.0.1:8808", "localhost:8808"],
+            allowed_origins=_allowed_origins(),
+        ),
+    )
+    mcp._mcp_server = server
+    return mcp
+
+
+def _extract_api_key(request: Request) -> str | None:
+    authorization = request.headers.get("authorization")
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token.strip():
+            return token.strip()
+
+    query_key = request.query_params.get("key", "").strip()
+    return query_key or None
+
+
+class SessionAuthMiddleware:
+    """Bind MCP sessions to an API key without using process-global request state."""
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            request = Request(scope)
-            api_key = request.query_params.get("key", "")
-            if not api_key:
-                response = Response("Missing 'key' query parameter", status_code=401)
-                await response(scope, receive, send)
-                return
-            base_url = os.environ.get("TELEGRAM_AI_URL", "http://localhost:8000")
-            srv.client = TelegramAIClient(base_url=base_url, api_key=api_key)
-        await self.app(scope, receive, send)
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
+        request_session_id = request.headers.get("mcp-session-id", "").strip()
+        api_key = _extract_api_key(request)
+
+        if not api_key and request_session_id:
+            api_key = srv.get_session_api_key(request_session_id)
+
+        if api_key:
+            scope["telegram_ai_api_key"] = api_key
+        elif not request_session_id and not os.environ.get("TELEGRAM_AI_KEY", "").strip():
+            response = Response(
+                "Missing API key. Use Authorization: Bearer <key> or ?key=... when initializing the MCP session.",
+                status_code=401,
+            )
+            await response(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(raw=message.setdefault("headers", []))
+                response_session_id = headers.get("mcp-session-id", "").strip()
+                if api_key and response_session_id:
+                    srv.remember_session_api_key(response_session_id, api_key)
+                if (
+                    request.method == "DELETE"
+                    and request_session_id
+                    and 200 <= message["status"] < 300
+                ):
+                    srv.forget_session_api_key(request_session_id)
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 
-@contextlib.asynccontextmanager
-async def lifespan(app: Starlette):
-    async with mcp.session_manager.run():
-        yield
+def create_app():
+    return SessionAuthMiddleware(_build_mcp().streamable_http_app())
 
 
-inner_app = Starlette(
-    routes=[
-        Mount("/", app=mcp.streamable_http_app()),
-    ],
-    lifespan=lifespan,
-)
-
-app = ApiKeyMiddleware(inner_app)
+app = create_app()
 
 
 def main():
@@ -89,8 +129,7 @@ def main():
     parser.add_argument("--port", type=int, default=8808, help="Port to listen on")
     args = parser.parse_args()
 
-    root_path = os.environ.get("MCP_ROOT_PATH", "")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info", root_path=root_path)
+    uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
 
 
 if __name__ == "__main__":

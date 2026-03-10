@@ -186,7 +186,7 @@ class TestErrorHandling:
     async def test_http_error_raises_runtime_error(self, client):
         mock_response = httpx.Response(
             404,
-            text="Not found",
+            json={"detail": "Chat not found"},
             request=httpx.Request("GET", "http://test:8000/api/v1/chats/bad"),
         )
         mock_response.raise_for_status = MagicMock(
@@ -197,8 +197,21 @@ class TestErrorHandling:
         with patch.object(
             client._client, "request", new_callable=AsyncMock, return_value=mock_response
         ):
-            with pytest.raises(RuntimeError, match="HTTP 404"):
+            with pytest.raises(RuntimeError, match="Chat not found"):
                 await client.get_chat("bad")
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_raises_runtime_error(self, client):
+        with patch.object(
+            client._client,
+            "request",
+            new_callable=AsyncMock,
+            side_effect=httpx.ReadTimeout(
+                "Timed out", request=httpx.Request("GET", "http://test")
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="timed out"):
+                await client.list_chats()
 
     @pytest.mark.asyncio
     async def test_request_error_raises_runtime_error(self, client):

@@ -221,7 +221,7 @@ const PLATFORM_CONFIGS: PlatformConfig[] = [
     name: 'Claude.ai',
     filePath: 'Settings → Connectors → Add custom connector',
     getConfig: (apiKey) =>
-      `Name: Telegram WAI\nRemote MCP server URL:\nhttps://telegram.waiwai.is/mcp/sse?key=${apiKey}`,
+      `Name: Telegram WAI\nRemote MCP server URL:\nhttps://telegram.waiwai.is/mcp?key=${apiKey}`,
   },
   {
     id: 'claude-desktop',

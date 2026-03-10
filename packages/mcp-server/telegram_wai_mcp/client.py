@@ -34,6 +34,22 @@ class TelegramAIClient:
     async def close(self):
         await self._client.aclose()
 
+    @staticmethod
+    def _response_detail(response: httpx.Response) -> str:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+
+        if isinstance(payload, dict):
+            detail = payload.get("detail")
+            if isinstance(detail, str) and detail.strip():
+                return detail.strip()[:400]
+
+        if response.text:
+            return response.text[:400]
+        return "no response body"
+
     async def _request(
         self,
         method: str,
@@ -45,10 +61,13 @@ class TelegramAIClient:
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
-            detail = e.response.text[:400] if e.response.text else "no response body"
+            detail = self._response_detail(e.response)
             raise RuntimeError(
                 f"Backend returned HTTP {e.response.status_code} for {method} {path}: {detail}"
             ) from e
+        except httpx.TimeoutException as e:
+            logger.error("Backend timeout on %s %s: %s", method, path, e)
+            raise RuntimeError(f"Backend timed out for {method} {path}") from e
         except httpx.RequestError as e:
             logger.error("Backend request error on %s %s: %s", method, path, e)
             raise RuntimeError(f"Backend request failed for {method} {path}: {e}") from e
