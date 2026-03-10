@@ -14,9 +14,7 @@ from app.services.telegram_client import get_client
 logger = logging.getLogger(__name__)
 
 
-async def _get_telegram_chat_id(
-    db: AsyncSession, user_id: UUID, chat_id: UUID
-) -> int:
+async def _get_telegram_chat_id(db: AsyncSession, user_id: UUID, chat_id: UUID) -> int:
     """Look up the Telegram numeric chat ID from our internal UUID."""
     result = await db.execute(
         select(TelegramChat).where(
