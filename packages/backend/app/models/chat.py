@@ -37,6 +37,7 @@ class TelegramChat(Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     telegram_chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    access_hash: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     chat_type: Mapped[ChatType] = mapped_column(Enum(ChatType))
     title: Mapped[str] = mapped_column(String(255))
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)

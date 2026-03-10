@@ -1,4 +1,7 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
+from mcp.types import CallToolResult
 from telegram_wai_mcp import server
 
 
@@ -34,15 +37,37 @@ class TestToolList:
 class TestCallTool:
     @pytest.mark.asyncio
     async def test_unknown_tool_returns_error(self):
-        content = await server.call_tool("nonexistent_tool", {})
-        assert len(content) == 1
-        assert "Unknown tool" in content[0].text
+        result = await server.call_tool("nonexistent_tool", {})
+        assert isinstance(result, CallToolResult)
+        assert result.isError is True
+        assert len(result.content) == 1
+        assert "Unknown tool" in result.content[0].text
 
     @pytest.mark.asyncio
     async def test_search_messages_requires_query(self):
-        content = await server.call_tool("search_messages", {"query": ""})
-        assert len(content) == 1
-        assert "non-empty" in content[0].text.lower()
+        result = await server.call_tool("search_messages", {"query": ""})
+        assert isinstance(result, CallToolResult)
+        assert result.isError is True
+        assert len(result.content) == 1
+        assert "non-empty" in result.content[0].text.lower()
+
+    @pytest.mark.asyncio
+    async def test_send_message_surfaces_backend_errors_as_mcp_errors(self):
+        mock_api = AsyncMock()
+        mock_api.send_message.side_effect = RuntimeError(
+            "Backend returned HTTP 400 for POST /api/v1/messages/chat/send: Telegram error"
+        )
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "send_message",
+                {"chat_id": "chat-123", "text": "hello"},
+            )
+
+        assert isinstance(result, CallToolResult)
+        assert result.isError is True
+        assert "Backend returned HTTP 400" in result.content[0].text
+        mock_api.close.assert_awaited_once()
 
 
 class TestFormatHelpers:

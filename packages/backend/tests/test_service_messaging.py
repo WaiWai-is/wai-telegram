@@ -1,6 +1,7 @@
 """Tests for app.services.messaging_service — pure unit tests (no Telegram calls)."""
 
 import socket
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -196,14 +197,23 @@ class TestSendMessage:
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock(return_value=mock_result)
         mock_client.disconnect = AsyncMock()
+        resolved_entity = object()
 
-        with patch(
-            "app.services.messaging_service.get_client", return_value=mock_client
+        with (
+            patch(
+                "app.services.messaging_service.get_client", return_value=mock_client
+            ),
+            patch(
+                "app.services.messaging_service._resolve_chat_entity",
+                new_callable=AsyncMock,
+                return_value=resolved_entity,
+            ),
         ):
             result = await send_message(db_session, test_user.id, chat.id, "Hello")
 
         assert result["telegram_message_id"] == 999
         assert result["text"] == "Hello"
+        mock_client.send_message.assert_awaited_once_with(resolved_entity, "Hello")
         mock_client.disconnect.assert_awaited_once()
 
     async def test_send_message_chat_not_found(self, db_session, test_user):
@@ -211,6 +221,127 @@ class TestSendMessage:
 
         with pytest.raises(ValueError, match="not found"):
             await send_message(db_session, test_user.id, uuid4(), "Hello")
+
+
+# ---------------------------------------------------------------------------
+# _resolve_chat_entity
+# ---------------------------------------------------------------------------
+
+
+class TestResolveChatEntity:
+    def test_dialog_match_tolerates_marked_chat_ids(self):
+        from app.services.messaging_service import _dialog_matches_chat
+        from tests.factories import TelegramChatFactory
+
+        entity = SimpleNamespace(id=123)
+        dialog = SimpleNamespace(entity=entity)
+        chat = TelegramChatFactory.create(telegram_chat_id=-1000000000123)
+
+        with (
+            patch(
+                "app.services.messaging_service._entity_chat_type",
+                return_value=chat.chat_type,
+            ),
+            patch(
+                "app.services.messaging_service.get_peer_id",
+                return_value=-1000000000123,
+            ),
+        ):
+            assert _dialog_matches_chat(dialog, chat) is True
+
+    async def test_prefers_stored_input_peer_for_private_chat(self, db_session):
+        from app.services.messaging_service import _resolve_chat_entity
+        from telethon.tl.types import InputPeerUser
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(telegram_chat_id=123, access_hash=999)
+        mock_client = AsyncMock()
+
+        entity = await _resolve_chat_entity(mock_client, db_session, chat)
+
+        assert isinstance(entity, InputPeerUser)
+        assert entity.user_id == 123
+        assert entity.access_hash == 999
+        mock_client.get_input_entity.assert_not_called()
+
+    async def test_persists_access_hash_from_cached_entity(self, db_session):
+        from app.services.messaging_service import _resolve_chat_entity
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(access_hash=None)
+        cached_entity = SimpleNamespace(access_hash=777)
+        mock_client = AsyncMock()
+        mock_client.get_input_entity = AsyncMock(return_value=cached_entity)
+
+        entity = await _resolve_chat_entity(mock_client, db_session, chat)
+
+        assert entity is cached_entity
+        assert chat.access_hash == 777
+
+    async def test_falls_back_to_dialog_warmup(self, db_session):
+        from app.services.messaging_service import _resolve_chat_entity
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(username="alice")
+        resolved_entity = object()
+        dialog = SimpleNamespace(entity=object(), input_entity=resolved_entity)
+
+        mock_client = AsyncMock()
+        mock_client.get_input_entity = AsyncMock(side_effect=ValueError("cache miss"))
+
+        async def fake_iter_dialogs():
+            yield dialog
+
+        mock_client.iter_dialogs = fake_iter_dialogs
+
+        with patch(
+            "app.services.messaging_service._dialog_matches_chat", return_value=True
+        ):
+            entity = await _resolve_chat_entity(mock_client, db_session, chat)
+
+        assert entity is resolved_entity
+
+    async def test_falls_back_to_username_lookup_after_dialog_scan(self, db_session):
+        from app.services.messaging_service import _resolve_chat_entity
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(username="alice")
+        resolved_entity = object()
+
+        mock_client = AsyncMock()
+        mock_client.get_input_entity = AsyncMock(
+            side_effect=[ValueError("cache miss"), resolved_entity]
+        )
+
+        async def fake_iter_dialogs():
+            if False:
+                yield None
+
+        mock_client.iter_dialogs = fake_iter_dialogs
+
+        entity = await _resolve_chat_entity(mock_client, db_session, chat)
+
+        assert entity is resolved_entity
+        assert mock_client.get_input_entity.await_count == 2
+        assert mock_client.get_input_entity.await_args_list[1].args == ("alice",)
+
+    async def test_raises_clear_error_when_entity_cannot_be_resolved(self, db_session):
+        from app.services.messaging_service import _resolve_chat_entity
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(title="Important Chat")
+
+        mock_client = AsyncMock()
+        mock_client.get_input_entity = AsyncMock(side_effect=ValueError("cache miss"))
+
+        async def fake_iter_dialogs():
+            if False:
+                yield None
+
+        mock_client.iter_dialogs = fake_iter_dialogs
+
+        with pytest.raises(ValueError, match="Could not resolve Telegram entity"):
+            await _resolve_chat_entity(mock_client, db_session, chat)
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +410,7 @@ class TestSendFile:
         mock_client = AsyncMock()
         mock_client.send_file.side_effect = fake_telethon_send_file
         mock_client.disconnect = AsyncMock()
+        resolved_entity = object()
 
         fake_http_client = _FakeHTTPClient([b"hello ", b"world"])
 
@@ -291,6 +423,11 @@ class TestSendFile:
             patch(
                 "app.services.messaging_service.get_client", return_value=mock_client
             ),
+            patch(
+                "app.services.messaging_service._resolve_chat_entity",
+                new_callable=AsyncMock,
+                return_value=resolved_entity,
+            ),
         ):
             result = await send_file(
                 db_session,
@@ -302,6 +439,7 @@ class TestSendFile:
 
         assert result["telegram_message_id"] == 456
         assert result["file_name"] == "doc.pdf"
+        assert observed["chat_id"] is resolved_entity
         assert observed["caption"] == "Report"
         assert observed["file_name"] == "doc.pdf"
         assert observed["file_bytes"] == b"hello world"
@@ -328,9 +466,17 @@ class TestReplyToMessage:
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock(return_value=mock_result)
         mock_client.disconnect = AsyncMock()
+        resolved_entity = object()
 
-        with patch(
-            "app.services.messaging_service.get_client", return_value=mock_client
+        with (
+            patch(
+                "app.services.messaging_service.get_client", return_value=mock_client
+            ),
+            patch(
+                "app.services.messaging_service._resolve_chat_entity",
+                new_callable=AsyncMock,
+                return_value=resolved_entity,
+            ),
         ):
             result = await reply_to_message(
                 db_session, test_user.id, chat.id, 500, "Reply text"
@@ -340,6 +486,7 @@ class TestReplyToMessage:
         mock_client.send_message.assert_awaited_once()
         # Verify reply_to was passed
         call_kwargs = mock_client.send_message.call_args
+        assert call_kwargs.args[0] is resolved_entity
         assert (
             call_kwargs.kwargs.get("reply_to") == 500
             or call_kwargs[1].get("reply_to") == 500

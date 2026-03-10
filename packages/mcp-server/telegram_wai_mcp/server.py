@@ -5,7 +5,7 @@ from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import CallToolResult, TextContent, Tool
 from starlette.requests import Request
 
 from telegram_wai_mcp.client import TelegramAIClient
@@ -93,6 +93,10 @@ def get_client() -> TelegramAIClient:
 
 def _error(message: str) -> list[TextContent]:
     return [TextContent(type="text", text=f"Error: {message}")]
+
+
+def _tool_error(message: str) -> CallToolResult:
+    return CallToolResult(content=_error(message), isError=True)
 
 
 def _as_dict(arguments: dict[str, Any] | None) -> dict[str, Any]:
@@ -449,7 +453,7 @@ async def list_tools() -> list[Tool]:
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] | CallToolResult:
     """Handle tool calls."""
     args = _as_dict(arguments)
     api: TelegramAIClient | None = None
@@ -569,12 +573,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return format_search_results(result)
 
         else:
-            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+            return _tool_error(f"Unknown tool: {name}")
 
     except ValueError as e:
-        return _error(str(e))
+        return _tool_error(str(e))
     except Exception as e:
-        return _error(str(e))
+        return _tool_error(str(e))
     finally:
         if api is not None:
             await api.close()

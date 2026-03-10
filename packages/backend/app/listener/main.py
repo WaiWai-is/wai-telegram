@@ -192,12 +192,24 @@ class TelegramListener:
         stmt = pg_insert(TelegramChat).values(
             user_id=user_id,
             telegram_chat_id=chat_id_tg,
+            access_hash=getattr(entity, "access_hash", None),
             chat_type=chat_type,
             title=title,
             username=username,
         )
-        stmt = stmt.on_conflict_do_nothing(
-            constraint="uq_telegram_chats_user_chat"
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_telegram_chats_user_chat",
+            set_={
+                "access_hash": func.coalesce(
+                    stmt.excluded.access_hash,
+                    TelegramChat.access_hash,
+                ),
+                "title": stmt.excluded.title,
+                "username": func.coalesce(
+                    stmt.excluded.username,
+                    TelegramChat.username,
+                ),
+            },
         ).returning(TelegramChat.id)
         result = await db.execute(stmt)
         row = result.fetchone()
@@ -212,15 +224,7 @@ class TelegramListener:
                 f"Auto-created chat '{title}' ({chat_id_tg}) for user {user_id}"
             )
             return chat
-
-        # on_conflict_do_nothing means it already exists — fetch it
-        result = await db.execute(
-            select(TelegramChat).where(
-                TelegramChat.user_id == user_id,
-                TelegramChat.telegram_chat_id == chat_id_tg,
-            )
-        )
-        return result.scalar_one_or_none()
+        return None
 
     async def _handle_message(self, user_id: UUID, event):
         """Save incoming message to DB."""

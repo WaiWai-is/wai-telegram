@@ -16,8 +16,17 @@ from telethon.errors import (
     RPCError,
     UserBannedInChannelError,
 )
+from telethon.tl.types import (
+    Channel,
+    Chat,
+    InputPeerChannel,
+    InputPeerChat,
+    InputPeerUser,
+    User as TelegramUser,
+)
+from telethon.utils import get_peer_id
 
-from app.models.chat import TelegramChat
+from app.models.chat import ChatType, TelegramChat
 from app.services.telegram_client import get_client
 
 logger = logging.getLogger(__name__)
@@ -68,8 +77,8 @@ def _sanitize_file_name(name: str) -> str:
     return name or "file"
 
 
-async def _get_telegram_chat_id(db: AsyncSession, user_id: UUID, chat_id: UUID) -> int:
-    """Look up the Telegram numeric chat ID from our internal UUID."""
+async def _get_chat(db: AsyncSession, user_id: UUID, chat_id: UUID) -> TelegramChat:
+    """Look up a Telegram chat by our internal UUID."""
     result = await db.execute(
         select(TelegramChat).where(
             TelegramChat.id == chat_id,
@@ -79,7 +88,116 @@ async def _get_telegram_chat_id(db: AsyncSession, user_id: UUID, chat_id: UUID) 
     chat = result.scalar_one_or_none()
     if not chat:
         raise ValueError(f"Chat {chat_id} not found")
-    return chat.telegram_chat_id
+    return chat
+
+
+def _entity_chat_type(entity: object) -> ChatType | None:
+    if isinstance(entity, TelegramUser):
+        return ChatType.PRIVATE
+    if isinstance(entity, Chat):
+        return ChatType.GROUP
+    if isinstance(entity, Channel):
+        return ChatType.SUPERGROUP if entity.megagroup else ChatType.CHANNEL
+    return None
+
+
+def _dialog_matches_chat(dialog: object, chat: TelegramChat) -> bool:
+    entity = getattr(dialog, "entity", None)
+    if entity is None:
+        return False
+
+    entity_ids = {
+        getattr(entity, "id", None),
+        get_peer_id(entity),
+    }
+    if chat.telegram_chat_id not in entity_ids:
+        return False
+
+    return _entity_chat_type(entity) == chat.chat_type
+
+
+def _raw_chat_id(chat: TelegramChat) -> int:
+    chat_id = chat.telegram_chat_id
+    if chat.chat_type == ChatType.GROUP:
+        return abs(chat_id)
+    if chat.chat_type in (ChatType.SUPERGROUP, ChatType.CHANNEL) and chat_id < 0:
+        return abs(chat_id) - 10**12
+    return chat_id
+
+
+def _stored_input_peer(chat: TelegramChat):
+    raw_chat_id = _raw_chat_id(chat)
+    if chat.chat_type == ChatType.GROUP:
+        return InputPeerChat(raw_chat_id)
+    if chat.access_hash is None:
+        return None
+    if chat.chat_type == ChatType.PRIVATE:
+        return InputPeerUser(raw_chat_id, chat.access_hash)
+    if chat.chat_type in (ChatType.SUPERGROUP, ChatType.CHANNEL):
+        return InputPeerChannel(raw_chat_id, chat.access_hash)
+    return None
+
+
+async def _remember_access_hash(
+    db: AsyncSession, chat: TelegramChat, entity: object | None
+) -> None:
+    access_hash = getattr(entity, "access_hash", None)
+    if access_hash is not None and chat.access_hash != access_hash:
+        chat.access_hash = access_hash
+        await db.flush()
+
+
+async def _resolve_chat_entity(
+    client,
+    db: AsyncSession,
+    chat: TelegramChat,
+):
+    """Resolve a sendable Telethon entity for a stored chat.
+
+    Prefer a stored InputPeer when we already know access_hash. Fall back to
+    dialog warm-up for legacy rows that predate access_hash persistence.
+    """
+    stored_peer = _stored_input_peer(chat)
+    if stored_peer is not None:
+        return stored_peer
+
+    try:
+        entity = await client.get_input_entity(chat.telegram_chat_id)
+        await _remember_access_hash(db, chat, entity)
+        return entity
+    except ValueError:
+        pass
+
+    normalized_username = (chat.username or "").strip().removeprefix("@")
+
+    async for dialog in client.iter_dialogs():
+        if _dialog_matches_chat(dialog, chat):
+            entity = getattr(dialog, "entity", None)
+            await _remember_access_hash(db, chat, entity)
+            return getattr(dialog, "input_entity", entity)
+
+        if normalized_username:
+            entity = getattr(dialog, "entity", None)
+            if (
+                entity is not None
+                and getattr(entity, "username", None) == normalized_username
+            ):
+                await _remember_access_hash(db, chat, entity)
+                return getattr(dialog, "input_entity", entity)
+
+    if normalized_username:
+        try:
+            entity = await client.get_input_entity(normalized_username)
+            await _remember_access_hash(db, chat, entity)
+            return entity
+        except (RPCError, ValueError):
+            pass
+
+    hint = chat.title or normalized_username or str(chat.telegram_chat_id)
+    raise ValueError(
+        "Could not resolve Telegram entity for chat "
+        f"'{hint}'. Re-sync chats or open the dialog in Telegram, then try again."
+    )
 
 
 def _handle_telethon_error(e: Exception) -> NoReturn:
@@ -100,10 +218,11 @@ async def send_message(
     text: str,
 ) -> dict:
     """Send a text message to a Telegram chat via user's Telethon client."""
-    telegram_chat_id = await _get_telegram_chat_id(db, user_id, chat_id)
+    chat = await _get_chat(db, user_id, chat_id)
     client = await get_client(user_id, db)
     try:
-        result = await client.send_message(telegram_chat_id, text)
+        entity = await _resolve_chat_entity(client, db, chat)
+        result = await client.send_message(entity, text)
         return {
             "telegram_message_id": result.id,
             "chat_id": str(chat_id),
@@ -132,7 +251,7 @@ async def send_file(
 ) -> dict:
     """Download a file from URL and send it to a Telegram chat."""
     _validate_url(file_url)
-    telegram_chat_id = await _get_telegram_chat_id(db, user_id, chat_id)
+    chat = await _get_chat(db, user_id, chat_id)
 
     if not file_name:
         path = urlparse(file_url).path
@@ -166,8 +285,9 @@ async def send_file(
 
         client = await get_client(user_id, db)
         try:
+            entity = await _resolve_chat_entity(client, db, chat)
             result = await client.send_file(
-                telegram_chat_id,
+                entity,
                 tmp.name,
                 caption=caption,
                 file_name=file_name,
@@ -198,11 +318,12 @@ async def reply_to_message(
     text: str,
 ) -> dict:
     """Reply to a specific message in a Telegram chat."""
-    telegram_chat_id = await _get_telegram_chat_id(db, user_id, chat_id)
+    chat = await _get_chat(db, user_id, chat_id)
     client = await get_client(user_id, db)
     try:
+        entity = await _resolve_chat_entity(client, db, chat)
         result = await client.send_message(
-            telegram_chat_id,
+            entity,
             text,
             reply_to=telegram_message_id,
         )

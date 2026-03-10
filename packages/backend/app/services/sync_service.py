@@ -123,6 +123,7 @@ async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
             values = {
                 "user_id": user_id,
                 "telegram_chat_id": dialog.entity.id,
+                "access_hash": getattr(dialog.entity, "access_hash", None),
                 "chat_type": _get_chat_type(dialog),
                 "title": _get_chat_title(dialog),
                 "username": getattr(dialog.entity, "username", None),
@@ -135,6 +136,10 @@ async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
             stmt = stmt.on_conflict_do_update(
                 constraint="uq_telegram_chats_user_chat",
                 set_={
+                    "access_hash": func.coalesce(
+                        stmt.excluded.access_hash,
+                        TelegramChat.access_hash,
+                    ),
                     "title": stmt.excluded.title,
                     "username": stmt.excluded.username,
                     "last_activity_at": stmt.excluded.last_activity_at,
