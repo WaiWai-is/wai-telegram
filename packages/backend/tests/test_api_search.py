@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, patch
 
 from app.schemas.search import SearchResponse, SearchResultItem
+from app.services.search_service import SearchServiceError
 
 
 class TestSearchEndpoint:
@@ -63,3 +64,34 @@ class TestSearchEndpoint:
                 json={"query": ""},
             )
             assert response.status_code == 200
+
+    async def test_search_service_unavailable_returns_503(self, auth_client):
+        with patch(
+            "app.api.v1.search.semantic_search",
+            new_callable=AsyncMock,
+            side_effect=SearchServiceError("Search is temporarily unavailable"),
+        ):
+            response = await auth_client.post(
+                "/api/v1/search",
+                json={"query": "test query"},
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == "Search is temporarily unavailable"
+
+    async def test_search_service_unavailable_logs_warning(self, auth_client):
+        with patch(
+            "app.api.v1.search.semantic_search",
+            new_callable=AsyncMock,
+            side_effect=SearchServiceError("Search is temporarily unavailable"),
+        ), patch("app.api.v1.search.logger.warning") as mock_logger_warning:
+            response = await auth_client.post(
+                "/api/v1/search",
+                json={"query": "test query"},
+            )
+
+        assert response.status_code == 503
+        mock_logger_warning.assert_called_once()
+        assert mock_logger_warning.call_args.args[0] == (
+            "Search request failed with service unavailability"
+        )
