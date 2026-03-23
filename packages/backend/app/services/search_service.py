@@ -7,7 +7,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.chat import TelegramChat
+from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
 from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
 from app.services.embedding_service import generate_query_embedding
@@ -72,7 +72,7 @@ def _rows_to_response(rows: list, query: str) -> SearchResponse:
             id=row.id,
             chat_id=row.chat_id,
             chat_title=row.chat_title,
-            chat_type=row.chat_type,
+            chat_type=_normalize_chat_type(row.chat_type),
             chat_telegram_id=row.chat_telegram_id,
             chat_username=row.chat_username,
             telegram_message_id=row.telegram_message_id,
@@ -93,6 +93,21 @@ def _rows_to_response(rows: list, query: str) -> SearchResponse:
         query=query,
         total=len(results),
     )
+
+
+def _normalize_chat_type(value: object) -> object:
+    if value is None or isinstance(value, ChatType):
+        return value
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        try:
+            return ChatType(normalized)
+        except ValueError:
+            logger.warning("Unknown chat_type in search result", extra={"chat_type": value})
+            return None
+
+    return None
 
 
 def _like_pattern(value: str) -> str:
@@ -138,15 +153,15 @@ async def _keyword_search(
         "concat_ws(' ', coalesce(m.text, ''), coalesce(m.sender_name, ''), "
         "coalesce(c.title, ''), coalesce(c.username, ''))"
     )
-    match_clauses = [f"{searchable_text} ILIKE :query_pattern ESCAPE '\\\\'"]
-    score_terms = [f"CASE WHEN {searchable_text} ILIKE :query_pattern ESCAPE '\\\\' THEN 2 ELSE 0 END"]
+    match_clauses = [f"{searchable_text} ILIKE :query_pattern"]
+    score_terms = [f"CASE WHEN {searchable_text} ILIKE :query_pattern THEN 2 ELSE 0 END"]
     params["query_pattern"] = _like_pattern(normalized_query)
 
     for idx, token in enumerate(_query_tokens(normalized_query)):
         param_name = f"token_{idx}"
-        match_clauses.append(f"{searchable_text} ILIKE :{param_name} ESCAPE '\\\\'")
+        match_clauses.append(f"{searchable_text} ILIKE :{param_name}")
         score_terms.append(
-            f"CASE WHEN {searchable_text} ILIKE :{param_name} ESCAPE '\\\\' THEN 1 ELSE 0 END"
+            f"CASE WHEN {searchable_text} ILIKE :{param_name} THEN 1 ELSE 0 END"
         )
         params[param_name] = _like_pattern(token)
 

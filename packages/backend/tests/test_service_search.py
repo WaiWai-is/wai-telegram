@@ -49,7 +49,7 @@ class TestSemanticSearch:
             id=uuid4(),
             chat_id=uuid4(),
             chat_title="Test Chat",
-            chat_type="supergroup",
+            chat_type="SUPERGROUP",
             chat_telegram_id=-1001234567890,
             chat_username="test_chat",
             telegram_message_id=42,
@@ -77,6 +77,37 @@ class TestSemanticSearch:
         assert result.results[0].chat_type == "supergroup"
         assert result.results[0].chat_telegram_id == -1001234567890
         assert result.results[0].chat_username == "test_chat"
+
+    async def test_keyword_search_sql_omits_explicit_escape_clause(self, test_user):
+        from app.schemas.search import SearchRequest
+        from app.services.search_service import _keyword_search
+
+        row = SimpleNamespace(
+            id=uuid4(),
+            chat_id=uuid4(),
+            chat_title="Test Chat",
+            chat_type="PRIVATE",
+            chat_telegram_id=123,
+            chat_username=None,
+            telegram_message_id=7,
+            text="wai message",
+            sender_name="John",
+            is_outgoing=False,
+            sent_at="2026-03-10T12:00:00Z",
+            similarity=1.0,
+            has_media=False,
+            media_type=None,
+            transcribed_at=None,
+        )
+        mock_result = SimpleNamespace(fetchall=lambda: [row])
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        result = await _keyword_search(mock_db, test_user.id, SearchRequest(query="wai"))
+
+        sql_text = str(mock_db.execute.call_args.args[0])
+        assert "ESCAPE" not in sql_text
+        assert result.results[0].chat_type == "private"
 
     async def test_falls_back_to_keyword_search_when_embeddings_fail(self, test_user):
         from app.schemas.search import SearchRequest
