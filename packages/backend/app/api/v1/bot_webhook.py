@@ -17,15 +17,16 @@ from app.services.agent.loop import AgentContext, AgentResult, run_agent
 from app.services.bot_service import send_telegram_message
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 router = APIRouter()
 
 
 def _webhook_secret() -> str:
     """Generate webhook URL secret from bot token hash."""
-    if not settings.telegram_bot_token:
+    settings = get_settings()
+    token = settings.telegram_bot_token
+    if not token:
         return "no-token"
-    return hashlib.sha256(settings.telegram_bot_token.encode()).hexdigest()[:32]
+    return hashlib.sha256(token.encode()).hexdigest()[:32]
 
 
 @router.post("/webhook/{secret}")
@@ -130,13 +131,16 @@ async def _transcribe_voice(message: dict) -> str | None:
         import httpx
 
         # Get file path from Telegram
-        url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/getFile"
+        s = get_settings()
+        url = f"https://api.telegram.org/bot{s.telegram_bot_token}/getFile"
         async with httpx.AsyncClient() as client:
             resp = await client.get(url, params={"file_id": file_id})
             file_path = resp.json()["result"]["file_path"]
 
             # Download the file
-            download_url = f"https://api.telegram.org/file/bot{settings.telegram_bot_token}/{file_path}"
+            download_url = (
+                f"https://api.telegram.org/file/bot{s.telegram_bot_token}/{file_path}"
+            )
             audio_resp = await client.get(download_url)
             audio_data = audio_resp.content
 
