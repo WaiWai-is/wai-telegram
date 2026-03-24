@@ -49,10 +49,10 @@ User message: {message}
 MODEL_MAP: dict[Intent, str] = {
     Intent.SEARCH: "claude-haiku-4-5-20251001",
     Intent.VOICE_SUMMARY: "claude-haiku-4-5-20251001",
-    Intent.DIGEST: "claude-sonnet-4-6-20250514",
-    Intent.ACTION: "claude-sonnet-4-6-20250514",
-    Intent.BUILD: "claude-opus-4-6-20250514",
-    Intent.COACH: "claude-sonnet-4-6-20250514",
+    Intent.DIGEST: "claude-sonnet-4-5-20241022",
+    Intent.ACTION: "claude-sonnet-4-5-20241022",
+    Intent.BUILD: "claude-sonnet-4-5-20241022",
+    Intent.COACH: "claude-sonnet-4-5-20241022",
     Intent.CHAT: "claude-haiku-4-5-20251001",
 }
 

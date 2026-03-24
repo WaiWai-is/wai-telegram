@@ -148,9 +148,9 @@ class TestModelRouting:
         model = get_model_for_intent(Intent.ACTION)
         assert "sonnet" in model
 
-    def test_build_uses_opus(self):
+    def test_build_uses_sonnet(self):
         model = get_model_for_intent(Intent.BUILD)
-        assert "opus" in model
+        assert "sonnet" in model
 
     def test_coach_uses_sonnet(self):
         model = get_model_for_intent(Intent.COACH)
