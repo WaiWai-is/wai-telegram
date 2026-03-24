@@ -382,15 +382,30 @@ async def _process_update(update: dict) -> None:
 
     await send_typing_action(chat_id)
 
-    # Run the agent
-    result: AgentResult = await run_agent(context, text)
+    # Run the agent (with error recovery)
+    try:
+        result: AgentResult = await run_agent(context, text)
 
-    # Save conversation history
-    add_message(user_id, "user", text)
-    add_message(user_id, "assistant", result.response)
+        # Save conversation history
+        add_message(user_id, "user", text)
+        add_message(user_id, "assistant", result.response)
 
-    # Send response
-    await send_telegram_message(chat_id, result.response)
+        # Send response
+        await send_telegram_message(chat_id, result.response)
+    except Exception as e:
+        logger.error(f"Agent failed: {e}", exc_info=True)
+        lang = _detect_language(text)
+        if lang == "ru":
+            await send_telegram_message(
+                chat_id,
+                "⚠️ Произошла ошибка при обработке. Попробуйте ещё раз через несколько секунд.",
+            )
+        else:
+            await send_telegram_message(
+                chat_id,
+                "⚠️ Something went wrong processing your message. Please try again in a moment.",
+            )
+        return
 
     # Background: auto-extract commitments from the user's message
     try:
