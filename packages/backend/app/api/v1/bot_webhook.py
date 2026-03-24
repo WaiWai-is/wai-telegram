@@ -273,6 +273,15 @@ async def _process_update(update: dict) -> None:
         voice_transcript=voice_transcript,
     )
 
+    # Load conversation history for context
+    from app.services.agent.conversation import add_message, get_history
+    from app.services.agent.loop import AgentMessage
+
+    history = get_history(user_id)
+    context.conversation_history = [
+        AgentMessage(role=msg.role, content=msg.content) for msg in history
+    ]
+
     # Show "typing..." while Claude thinks (critical for UX)
     from app.services.agent.typing import send_typing_action
 
@@ -280,6 +289,10 @@ async def _process_update(update: dict) -> None:
 
     # Run the agent
     result: AgentResult = await run_agent(context, text)
+
+    # Save conversation history
+    add_message(user_id, "user", text)
+    add_message(user_id, "assistant", result.response)
 
     # Send response
     await send_telegram_message(chat_id, result.response)
