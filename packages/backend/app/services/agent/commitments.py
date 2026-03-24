@@ -189,6 +189,76 @@ def complete_commitment(commitment_id: UUID) -> Commitment | None:
     return None
 
 
+async def save_commitment_db(commitment: Commitment, user_id: UUID) -> None:
+    """Persist a commitment to PostgreSQL (non-blocking)."""
+    try:
+        from app.core.database import async_session_factory
+        from app.models.commitment import Commitment as CommitmentModel
+
+        async with async_session_factory() as db:
+            db_commitment = CommitmentModel(
+                user_id=user_id,
+                who=commitment.who,
+                what=commitment.what,
+                direction=commitment.direction.value,
+                deadline=commitment.deadline,
+                status=commitment.status.value,
+                source_chat=commitment.source_chat,
+                source_message=commitment.source_message,
+            )
+            db.add(db_commitment)
+            await db.commit()
+            logger.info(
+                f"Commitment persisted to DB: {commitment.who}: {commitment.what}"
+            )
+    except Exception as e:
+        logger.debug(f"DB persistence skipped (in-memory only): {e}")
+
+
+async def get_user_commitments_db(
+    user_id: UUID,
+    direction: CommitmentDirection | None = None,
+    status: CommitmentStatus = CommitmentStatus.OPEN,
+) -> list[Commitment]:
+    """Get commitments from DB, falling back to in-memory."""
+    try:
+        from sqlalchemy import select
+
+        from app.core.database import async_session_factory
+        from app.models.commitment import Commitment as CommitmentModel
+
+        async with async_session_factory() as db:
+            query = select(CommitmentModel).where(
+                CommitmentModel.user_id == user_id,
+                CommitmentModel.status == status.value,
+            )
+            if direction:
+                query = query.where(CommitmentModel.direction == direction.value)
+            query = query.order_by(CommitmentModel.created_at.desc())
+            result = await db.execute(query)
+            rows = result.scalars().all()
+
+            return [
+                Commitment(
+                    id=row.id,
+                    user_id=row.user_id,
+                    who=row.who,
+                    what=row.what,
+                    direction=CommitmentDirection(row.direction),
+                    deadline=row.deadline,
+                    status=CommitmentStatus(row.status),
+                    source_chat=row.source_chat,
+                    source_message=row.source_message,
+                    created_at=row.created_at,
+                    completed_at=row.completed_at,
+                )
+                for row in rows
+            ]
+    except Exception as e:
+        logger.debug(f"DB query failed, using in-memory: {e}")
+        return get_user_commitments(user_id, direction, status)
+
+
 def format_commitments_for_display(commitments: list[Commitment]) -> str:
     """Format commitments as a readable string for Telegram."""
     if not commitments:
