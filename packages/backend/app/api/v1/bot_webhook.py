@@ -204,8 +204,7 @@ async def _transcribe_voice(message: dict) -> str | None:
 
 
 def _detect_language(text: str) -> str:
-    """Simple language detection based on character ranges."""
-    cyrillic_count = sum(1 for c in text if "\u0400" <= c <= "\u04ff")
-    if cyrillic_count > len(text) * 0.3:
-        return "ru"
-    return "en"
+    """Detect language using the full language detection service."""
+    from app.services.agent.language import detect_language
+
+    return detect_language(text)
