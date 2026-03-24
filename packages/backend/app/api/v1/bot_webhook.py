@@ -244,6 +244,18 @@ async def _process_update(update: dict) -> None:
     # Send response
     await send_telegram_message(chat_id, result.response)
 
+    # Background: auto-extract commitments from the user's message
+    try:
+        from app.services.agent.commitments import detect_commitments, save_commitment
+
+        user_id = context.user_id
+        detected = detect_commitments(text, user_name=user_name)
+        for c in detected:
+            save_commitment(c, user_id)
+            logger.info(f"Auto-commitment: {c.direction.value} - {c.who}: {c.what}")
+    except Exception as e:
+        logger.debug(f"Auto-commitment extraction: {e}")
+
     logger.info(
         f"Agent response: intent={result.intent.value}, model={result.model_used}, "
         f"tokens={result.input_tokens}+{result.output_tokens}, tools={result.tool_calls}"
