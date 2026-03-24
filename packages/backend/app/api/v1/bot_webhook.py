@@ -170,7 +170,8 @@ async def _process_update(update: dict) -> None:
                 "• `/commitments` — открытые обещания\n"
                 "• `/entities текст` — извлечь сущности\n"
                 "• `/briefing` — утренний брифинг\n"
-                "• `/digest` — дайджест дня",
+                "• `/digest` — дайджест дня\n"
+                "• `/status` — статистика",
             )
         else:
             await send_telegram_message(
@@ -189,8 +190,19 @@ async def _process_update(update: dict) -> None:
                 "• `/commitments` — open promises\n"
                 "• `/entities <text>` — extract entities\n"
                 "• `/briefing` — morning briefing\n"
-                "• `/digest` — daily summary",
+                "• `/digest` — daily summary\n"
+                "• `/status` — statistics",
             )
+        return
+
+    # Handle /status command
+    if text.strip().startswith("/status"):
+        from app.services.agent.status import get_user_status
+
+        user_id = await _resolve_user(from_user)
+        lang = _detect_language(user_name or text)
+        status = await get_user_status(user_id, user_name=user_name, user_language=lang)
+        await send_telegram_message(chat_id, status)
         return
 
     # Handle /briefing command
