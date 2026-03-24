@@ -56,7 +56,7 @@ You respond in the same language the user writes in. You are concise — this is
     now = datetime.now(UTC)
     services_str = ", ".join(connected_services) if connected_services else "none yet"
     sections.append(f"""[Context]
-Current time: {now.strftime('%Y-%m-%d %H:%M')} UTC
+Current time: {now.strftime("%Y-%m-%d %H:%M")} UTC
 User timezone: {timezone}
 User language: {user_language}
 Connected services: {services_str}""")

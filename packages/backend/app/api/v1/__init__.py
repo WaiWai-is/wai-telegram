@@ -1,6 +1,16 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, bot_webhook, chats, digests, messages, search, settings, sync, telegram
+from app.api.v1 import (
+    auth,
+    bot_webhook,
+    chats,
+    digests,
+    messages,
+    search,
+    settings,
+    sync,
+    telegram,
+)
 
 api_router = APIRouter()
 

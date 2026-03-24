@@ -104,18 +104,16 @@ def _normalize_chat_type(value: object) -> object:
         try:
             return ChatType(normalized)
         except ValueError:
-            logger.warning("Unknown chat_type in search result", extra={"chat_type": value})
+            logger.warning(
+                "Unknown chat_type in search result", extra={"chat_type": value}
+            )
             return None
 
     return None
 
 
 def _like_pattern(value: str) -> str:
-    escaped = (
-        value.replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_")
-    )
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
 
 
@@ -154,7 +152,9 @@ async def _keyword_search(
         "coalesce(c.title, ''), coalesce(c.username, ''))"
     )
     match_clauses = [f"{searchable_text} ILIKE :query_pattern"]
-    score_terms = [f"CASE WHEN {searchable_text} ILIKE :query_pattern THEN 2 ELSE 0 END"]
+    score_terms = [
+        f"CASE WHEN {searchable_text} ILIKE :query_pattern THEN 2 ELSE 0 END"
+    ]
     params["query_pattern"] = _like_pattern(normalized_query)
 
     for idx, token in enumerate(_query_tokens(normalized_query)):
@@ -240,7 +240,9 @@ async def semantic_search(
                     mode="keyword_fallback_failure_after_embedding_failure",
                 ),
             )
-            raise SearchServiceError("Search is temporarily unavailable") from fallback_exc
+            raise SearchServiceError(
+                "Search is temporarily unavailable"
+            ) from fallback_exc
 
     if not query_embedding:
         logger.info(
@@ -315,7 +317,9 @@ async def semantic_search(
                     mode="keyword_fallback_failure_after_vector_failure",
                 ),
             )
-            raise SearchServiceError("Search is temporarily unavailable") from fallback_exc
+            raise SearchServiceError(
+                "Search is temporarily unavailable"
+            ) from fallback_exc
 
 
 async def get_recent_messages(

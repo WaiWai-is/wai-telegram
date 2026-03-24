@@ -238,9 +238,7 @@ async def run_agent(context: AgentContext, message: str) -> AgentResult:
     intent = await classify_intent(message, has_voice=context.has_voice)
     model = get_model_for_intent(intent)
 
-    logger.info(
-        f"Agent: intent={intent.value}, model={model}, user={context.user_id}"
-    )
+    logger.info(f"Agent: intent={intent.value}, model={model}, user={context.user_id}")
 
     # 2. Build soul prompt
     system_prompt = build_soul_prompt(
@@ -261,7 +259,11 @@ async def run_agent(context: AgentContext, message: str) -> AgentResult:
     # Add the current message
     user_content = message
     if context.voice_transcript:
-        user_content = f"[Voice message transcript]: {context.voice_transcript}\n\nUser's text: {message}" if message else f"[Voice message transcript]: {context.voice_transcript}"
+        user_content = (
+            f"[Voice message transcript]: {context.voice_transcript}\n\nUser's text: {message}"
+            if message
+            else f"[Voice message transcript]: {context.voice_transcript}"
+        )
 
     messages.append({"role": "user", "content": user_content})
 
@@ -311,7 +313,9 @@ async def run_agent(context: AgentContext, message: str) -> AgentResult:
             if hasattr(block, "text"):
                 text_parts.append(block.text)
 
-        final_response = "\n".join(text_parts) if text_parts else "I processed your request."
+        final_response = (
+            "\n".join(text_parts) if text_parts else "I processed your request."
+        )
 
         return AgentResult(
             response=final_response,

@@ -5,17 +5,20 @@ from uuid import uuid4
 
 
 class TestSemanticSearch:
-    async def test_blank_query_returns_empty_without_embeddings(self, db_session, test_user):
+    async def test_blank_query_returns_empty_without_embeddings(
+        self, db_session, test_user
+    ):
         from app.schemas.search import SearchRequest
         from app.services.search_service import semantic_search
 
         request = SearchRequest(query="   ")
-        with patch(
-            "app.services.search_service.generate_query_embedding",
-            new_callable=AsyncMock,
-        ) as mock_embedding, patch(
-            "app.services.search_service.logger.info"
-        ) as mock_logger_info:
+        with (
+            patch(
+                "app.services.search_service.generate_query_embedding",
+                new_callable=AsyncMock,
+            ) as mock_embedding,
+            patch("app.services.search_service.logger.info") as mock_logger_info,
+        ):
             result = await semantic_search(db_session, test_user.id, request)
 
         assert result.results == []
@@ -29,16 +32,22 @@ class TestSemanticSearch:
         from app.services.search_service import semantic_search
 
         request = SearchRequest(query="test")
-        with patch(
-            "app.services.search_service.generate_query_embedding",
-            new_callable=AsyncMock,
-            return_value=[],
-        ), patch("app.services.search_service.logger.info") as mock_logger_info:
+        with (
+            patch(
+                "app.services.search_service.generate_query_embedding",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch("app.services.search_service.logger.info") as mock_logger_info,
+        ):
             result = await semantic_search(db_session, test_user.id, request)
             assert result.results == []
             assert result.total == 0
         mock_logger_info.assert_called_once()
-        assert mock_logger_info.call_args.args[0] == "Search returned empty embedding result"
+        assert (
+            mock_logger_info.call_args.args[0]
+            == "Search returned empty embedding result"
+        )
 
     async def test_includes_chat_username_when_available(self, test_user):
         from app.schemas.search import SearchRequest
@@ -103,7 +112,9 @@ class TestSemanticSearch:
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(return_value=mock_result)
 
-        result = await _keyword_search(mock_db, test_user.id, SearchRequest(query="wai"))
+        result = await _keyword_search(
+            mock_db, test_user.id, SearchRequest(query="wai")
+        )
 
         sql_text = str(mock_db.execute.call_args.args[0])
         assert "ESCAPE" not in sql_text
@@ -117,19 +128,22 @@ class TestSemanticSearch:
         expected = SimpleNamespace(results=[], query="test", total=0)
         mock_db = AsyncMock()
 
-        with patch(
-            "app.services.search_service.generate_query_embedding",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("openai failed"),
-        ), patch(
-            "app.services.search_service._keyword_search",
-            new_callable=AsyncMock,
-            return_value=expected,
-        ) as mock_keyword_search, patch(
-            "app.services.search_service.logger.exception"
-        ) as mock_logger_exception, patch(
-            "app.services.search_service.logger.info"
-        ) as mock_logger_info:
+        with (
+            patch(
+                "app.services.search_service.generate_query_embedding",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("openai failed"),
+            ),
+            patch(
+                "app.services.search_service._keyword_search",
+                new_callable=AsyncMock,
+                return_value=expected,
+            ) as mock_keyword_search,
+            patch(
+                "app.services.search_service.logger.exception"
+            ) as mock_logger_exception,
+            patch("app.services.search_service.logger.info") as mock_logger_info,
+        ):
             result = await semantic_search(mock_db, test_user.id, request)
 
         assert result is expected
@@ -141,7 +155,9 @@ class TestSemanticSearch:
             "Keyword search fallback succeeded after embedding failure"
         )
 
-    async def test_falls_back_to_keyword_search_when_vector_query_fails(self, test_user):
+    async def test_falls_back_to_keyword_search_when_vector_query_fails(
+        self, test_user
+    ):
         from app.schemas.search import SearchRequest
         from app.services.search_service import semantic_search
 
@@ -150,19 +166,22 @@ class TestSemanticSearch:
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(side_effect=RuntimeError("vector failed"))
 
-        with patch(
-            "app.services.search_service.generate_query_embedding",
-            new_callable=AsyncMock,
-            return_value=[0.1, 0.2, 0.3],
-        ), patch(
-            "app.services.search_service._keyword_search",
-            new_callable=AsyncMock,
-            return_value=expected,
-        ) as mock_keyword_search, patch(
-            "app.services.search_service.logger.exception"
-        ) as mock_logger_exception, patch(
-            "app.services.search_service.logger.info"
-        ) as mock_logger_info:
+        with (
+            patch(
+                "app.services.search_service.generate_query_embedding",
+                new_callable=AsyncMock,
+                return_value=[0.1, 0.2, 0.3],
+            ),
+            patch(
+                "app.services.search_service._keyword_search",
+                new_callable=AsyncMock,
+                return_value=expected,
+            ) as mock_keyword_search,
+            patch(
+                "app.services.search_service.logger.exception"
+            ) as mock_logger_exception,
+            patch("app.services.search_service.logger.info") as mock_logger_info,
+        ):
             result = await semantic_search(mock_db, test_user.id, request)
 
         assert result is expected
@@ -181,14 +200,17 @@ class TestSemanticSearch:
         request = SearchRequest(query="test")
         mock_db = AsyncMock()
 
-        with patch(
-            "app.services.search_service.generate_query_embedding",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("openai failed"),
-        ), patch(
-            "app.services.search_service._keyword_search",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("keyword failed"),
+        with (
+            patch(
+                "app.services.search_service.generate_query_embedding",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("openai failed"),
+            ),
+            patch(
+                "app.services.search_service._keyword_search",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("keyword failed"),
+            ),
         ):
             with pytest.raises(SearchServiceError, match="temporarily unavailable"):
                 await semantic_search(mock_db, test_user.id, request)

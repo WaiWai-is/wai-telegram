@@ -80,11 +80,14 @@ class TestSearchEndpoint:
         assert response.json()["detail"] == "Search is temporarily unavailable"
 
     async def test_search_service_unavailable_logs_warning(self, auth_client):
-        with patch(
-            "app.api.v1.search.semantic_search",
-            new_callable=AsyncMock,
-            side_effect=SearchServiceError("Search is temporarily unavailable"),
-        ), patch("app.api.v1.search.logger.warning") as mock_logger_warning:
+        with (
+            patch(
+                "app.api.v1.search.semantic_search",
+                new_callable=AsyncMock,
+                side_effect=SearchServiceError("Search is temporarily unavailable"),
+            ),
+            patch("app.api.v1.search.logger.warning") as mock_logger_warning,
+        ):
             response = await auth_client.post(
                 "/api/v1/search",
                 json={"query": "test query"},
