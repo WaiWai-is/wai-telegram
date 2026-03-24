@@ -72,14 +72,30 @@ async def _process_update(update: dict) -> None:
     user_name = from_user.get("first_name", "")
     text = message.get("text", "")
     voice = message.get("voice")
-    # Handle voice messages
+    # Handle voice messages — the #1 wow moment
     voice_transcript = None
     has_voice = False
     if voice:
         has_voice = True
         voice_transcript = await _transcribe_voice(message)
-        if not text:
-            text = ""
+        if voice_transcript:
+            # Direct voice summary (skip agent loop for speed)
+            from app.services.agent.voice_summary import summarize_voice
+
+            summary = await summarize_voice(voice_transcript, user_name=user_name)
+            await send_telegram_message(chat_id, summary)
+            logger.info(
+                f"Voice summary sent: {len(voice_transcript)} chars transcript, "
+                f"user={from_user.get('id')}"
+            )
+            return
+        else:
+            await send_telegram_message(
+                chat_id,
+                "❌ Could not transcribe this voice message. "
+                "Try sending a clearer recording.",
+            )
+            return
 
     # Handle /start command
     if text.strip() == "/start":
