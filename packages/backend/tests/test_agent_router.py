@@ -61,6 +61,70 @@ class TestPatternBasedClassification:
         assert await classify_intent("", has_voice=True) == Intent.VOICE_SUMMARY
 
 
+class TestNaturalLanguageClassification:
+    """Test natural language pattern matching (no LLM call)."""
+
+    @pytest.mark.asyncio
+    async def test_what_did_alex_say(self):
+        assert (
+            await classify_intent("What did Alex say about pricing?") == Intent.SEARCH
+        )
+
+    @pytest.mark.asyncio
+    async def test_search_for(self):
+        assert await classify_intent("Search for budget discussions") == Intent.SEARCH
+
+    @pytest.mark.asyncio
+    async def test_russian_search(self):
+        assert await classify_intent("Что обсуждали с Алексом?") == Intent.SEARCH
+
+    @pytest.mark.asyncio
+    async def test_find_keyword(self):
+        assert await classify_intent("Find the link about PostgreSQL") == Intent.SEARCH
+
+    @pytest.mark.asyncio
+    async def test_build_a_site(self):
+        assert await classify_intent("Build a landing page for my cafe") == Intent.BUILD
+
+    @pytest.mark.asyncio
+    async def test_create_keyword(self):
+        assert await classify_intent("Create a Telegram bot for orders") == Intent.BUILD
+
+    @pytest.mark.asyncio
+    async def test_deploy_keyword(self):
+        assert await classify_intent("Deploy this to production") == Intent.BUILD
+
+    @pytest.mark.asyncio
+    async def test_send_email(self):
+        assert (
+            await classify_intent("Send email to Alex about the meeting")
+            == Intent.ACTION
+        )
+
+    @pytest.mark.asyncio
+    async def test_schedule_event(self):
+        assert (
+            await classify_intent("Schedule a meeting for tomorrow at 3pm")
+            == Intent.ACTION
+        )
+
+    @pytest.mark.asyncio
+    async def test_russian_build(self):
+        assert await classify_intent("Создай сайт для кафе") == Intent.BUILD
+
+    @pytest.mark.asyncio
+    async def test_russian_action(self):
+        assert await classify_intent("Отправь письмо Алексу") == Intent.ACTION
+
+    @pytest.mark.asyncio
+    async def test_digest_natural(self):
+        assert await classify_intent("What happened yesterday?") == Intent.DIGEST
+
+    @pytest.mark.asyncio
+    async def test_commitments_natural(self):
+        assert await classify_intent("What did I promise this week?") == Intent.SEARCH
+
+
 class TestModelRouting:
     """Test model selection for each intent."""
 

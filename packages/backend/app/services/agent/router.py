@@ -62,8 +62,10 @@ async def classify_intent(message: str, has_voice: bool = False) -> Intent:
     if has_voice:
         return Intent.VOICE_SUMMARY
 
-    # Quick pattern matching for common commands (skip LLM call)
+    # Quick pattern matching for common commands (skip LLM call — saves ~1s)
     lower = message.lower().strip()
+
+    # Slash commands
     if lower.startswith(("/search", "/find", "/найди", "/поиск")):
         return Intent.SEARCH
     if lower.startswith(("/digest", "/дайджест", "/summary")):
@@ -75,7 +77,80 @@ async def classify_intent(message: str, has_voice: bool = False) -> Intent:
     if lower.startswith(("/send", "/email", "/calendar", "/отправь", "/письмо")):
         return Intent.ACTION
 
-    # LLM classification for ambiguous messages
+    # Natural language patterns (skip LLM for obvious intents)
+    search_keywords = [
+        "search for",
+        "find ",
+        "what did",
+        "when did",
+        "who said",
+        "найди",
+        "поищи",
+        "что говорил",
+        "что обсуждали",
+        "когда",
+        "where is",
+        "show me",
+        "look for",
+        "покажи",
+        "где ",
+    ]
+    if any(lower.startswith(kw) or f" {kw}" in lower for kw in search_keywords):
+        return Intent.SEARCH
+
+    digest_keywords = [
+        "digest",
+        "summary of",
+        "what happened",
+        "дайджест",
+        "что было",
+        "итоги",
+    ]
+    if any(kw in lower for kw in digest_keywords):
+        return Intent.DIGEST
+
+    build_keywords = [
+        "build ",
+        "create ",
+        "deploy ",
+        "make a site",
+        "make a bot",
+        "построй",
+        "создай",
+        "задеплой",
+        "сделай сайт",
+        "сделай бот",
+    ]
+    if any(kw in lower for kw in build_keywords):
+        return Intent.BUILD
+
+    action_keywords = [
+        "send email",
+        "send a message",
+        "create event",
+        "schedule",
+        "отправь письмо",
+        "отправь сообщение",
+        "создай событие",
+        "запланируй",
+    ]
+    if any(kw in lower for kw in action_keywords):
+        return Intent.ACTION
+
+    commitment_keywords = [
+        "what did i promise",
+        "what do i owe",
+        "my commitments",
+        "что я обещал",
+        "мои обязательства",
+        "что должен",
+        "what did they promise",
+        "who owes me",
+    ]
+    if any(kw in lower for kw in commitment_keywords):
+        return Intent.SEARCH  # Route to search with commitment context
+
+    # LLM classification for truly ambiguous messages
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
