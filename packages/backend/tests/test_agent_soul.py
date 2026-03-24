@@ -86,3 +86,19 @@ class TestSoulPromptAssembly:
         assert "MEMORY" in prompt
         assert "BUILD" in prompt
         assert "CHIEF OF STAFF" in prompt
+
+    def test_russian_language_instruction(self):
+        prompt = build_soul_prompt(user_language="ru")
+        assert "русском" in prompt
+
+    def test_spanish_language_instruction(self):
+        prompt = build_soul_prompt(user_language="es")
+        assert "español" in prompt
+
+    def test_english_default_instruction(self):
+        prompt = build_soul_prompt(user_language="en")
+        assert "same language" in prompt
+
+    def test_chinese_language_instruction(self):
+        prompt = build_soul_prompt(user_language="zh")
+        assert "中文" in prompt

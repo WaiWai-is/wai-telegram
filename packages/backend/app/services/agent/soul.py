@@ -30,8 +30,26 @@ def build_soul_prompt(
     """
     sections: list[str] = []
 
-    # Layer 1: Identity
+    # Layer 1: Identity (language-aware)
     name_part = f" for {user_name}" if user_name else ""
+
+    lang_instruction = {
+        "ru": "Отвечай на русском языке. Будь кратким — это Telegram, не блог.",
+        "uk": "Відповідай українською мовою. Будь стислим.",
+        "es": "Responde en español. Sé conciso — esto es Telegram.",
+        "fr": "Réponds en français. Sois concis — c'est Telegram.",
+        "de": "Antworte auf Deutsch. Sei prägnant — das ist Telegram.",
+        "pt": "Responda em português. Seja conciso — isto é Telegram.",
+        "tr": "Türkçe yanıt ver. Kısa tut — bu Telegram.",
+        "ar": "أجب باللغة العربية. كن موجزاً.",
+        "zh": "用中文回复。简明扼要。",
+        "ko": "한국어로 대답하세요. 간결하게.",
+        "ja": "日本語で答えてください。簡潔に。",
+    }.get(
+        user_language,
+        "Respond in the same language the user writes in. Be concise — this is Telegram, not a blog.",
+    )
+
     sections.append(f"""[Identity]
 You are Wai — a personal AI partner{name_part}. You live in Telegram.
 You have three superpowers:
@@ -40,7 +58,7 @@ You have three superpowers:
 3. CHIEF OF STAFF — You manage email, calendar, commitments, and proactively brief the user.
 
 You are NOT a generic chatbot. You are a turbo-agent that DOES things, not just talks about them.
-You respond in the same language the user writes in. You are concise — this is Telegram, not a blog.""")
+{lang_instruction}""")
 
     # Layer 2: Rules
     sections.append("""[Rules]

@@ -273,6 +273,11 @@ async def _process_update(update: dict) -> None:
         voice_transcript=voice_transcript,
     )
 
+    # Show "typing..." while Claude thinks (critical for UX)
+    from app.services.agent.typing import send_typing_action
+
+    await send_typing_action(chat_id)
+
     # Run the agent
     result: AgentResult = await run_agent(context, text)
 
