@@ -7,6 +7,7 @@ and responses are sent back.
 
 import hashlib
 import logging
+import os
 from uuid import UUID
 
 from fastapi import APIRouter, Request
@@ -20,10 +21,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _get_bot_token() -> str:
+    """Get bot token — env var takes precedence over settings (avoids LRU cache issues)."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        token = get_settings().telegram_bot_token
+    return token
+
+
 def _webhook_secret() -> str:
     """Generate webhook URL secret from bot token hash."""
-    settings = get_settings()
-    token = settings.telegram_bot_token
+    token = _get_bot_token()
     if not token:
         return "no-token"
     return hashlib.sha256(token.encode()).hexdigest()[:32]
@@ -131,16 +139,14 @@ async def _transcribe_voice(message: dict) -> str | None:
         import httpx
 
         # Get file path from Telegram
-        s = get_settings()
-        url = f"https://api.telegram.org/bot{s.telegram_bot_token}/getFile"
+        bot_token = _get_bot_token()
+        url = f"https://api.telegram.org/bot{bot_token}/getFile"
         async with httpx.AsyncClient() as client:
             resp = await client.get(url, params={"file_id": file_id})
             file_path = resp.json()["result"]["file_path"]
 
             # Download the file
-            download_url = (
-                f"https://api.telegram.org/file/bot{s.telegram_bot_token}/{file_path}"
-            )
+            download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
             audio_resp = await client.get(download_url)
             audio_data = audio_resp.content
 
