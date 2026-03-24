@@ -169,7 +169,7 @@ async def _tool_search_messages(tool_input: dict, context: AgentContext) -> str:
     """Search user's message history via the existing search service."""
     from app.core.database import async_session_factory
     from app.schemas.search import SearchRequest
-    from app.services.search_service import search_messages
+    from app.services.search_service import semantic_search
 
     query = tool_input.get("query", "")
     request = SearchRequest(
@@ -178,7 +178,7 @@ async def _tool_search_messages(tool_input: dict, context: AgentContext) -> str:
     )
 
     async with async_session_factory() as db:
-        results = await search_messages(db, context.user_id, request)
+        results = await semantic_search(db, context.user_id, request)
 
     if not results.results:
         return f"No messages found matching: {query}"
