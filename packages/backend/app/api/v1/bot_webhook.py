@@ -240,6 +240,7 @@ async def _process_update(update: dict) -> None:
                 "• `/entities текст` — извлечь сущности\n"
                 "• `/briefing` — утренний брифинг\n"
                 "• `/digest` — дайджест дня\n"
+                "• `/summarize текст` — резюмировать текст\n"
                 "• `/web запрос` — поиск в интернете\n"
                 "• `/status` — статистика\n"
                 "• `/clear` — очистить историю",
@@ -262,6 +263,7 @@ async def _process_update(update: dict) -> None:
                 "• `/entities <text>` — extract entities\n"
                 "• `/briefing` — morning briefing\n"
                 "• `/digest` — daily summary\n"
+                "• `/summarize text` — summarize long text\n"
                 "• `/web query` — web search\n"
                 "• `/status` — statistics\n"
                 "• `/clear` — reset conversation",
@@ -351,6 +353,56 @@ async def _process_update(update: dict) -> None:
                 await send_telegram_message(
                     chat_id, "🌅 Nothing important to brief you on. That's a good sign!"
                 )
+        return
+
+    # Handle /summarize command — AI summary of long text
+    if text.strip().startswith("/summarize"):
+        content = text.strip().removeprefix("/summarize").strip()
+        if not content or len(content) < 20:
+            await send_telegram_message(
+                chat_id,
+                "Usage: `/summarize <long text>`\n"
+                "Paste a long message, article, or meeting notes and I'll summarize it.",
+            )
+            return
+
+        from app.services.agent.typing import send_typing_action
+
+        await send_typing_action(chat_id)
+
+        import anthropic
+
+        try:
+            settings = get_settings()
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            lang = _detect_language(content)
+            lang_instruction = (
+                "Respond in Russian."
+                if lang == "ru"
+                else "Respond in the same language as the text."
+            )
+            response = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=800,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Summarize this text concisely. {lang_instruction}\n\n"
+                            f"Format:\n"
+                            f"📝 *Summary* (2-3 sentences)\n"
+                            f"🔑 *Key Points* (bullet list)\n"
+                            f"📋 *Action Items* (if any)\n\n"
+                            f"Text:\n{content[:4000]}"
+                        ),
+                    }
+                ],
+            )
+            summary = response.content[0].text.strip()
+            await send_telegram_message(chat_id, summary)
+        except Exception as e:
+            logger.error(f"Summarize failed: {e}")
+            await send_telegram_message(chat_id, "❌ Summary failed. Try again.")
         return
 
     # Handle /commitments command
