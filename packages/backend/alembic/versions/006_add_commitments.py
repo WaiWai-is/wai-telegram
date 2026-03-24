@@ -8,8 +8,8 @@ Create Date: 2026-03-25
 from alembic import op
 import sqlalchemy as sa
 
-revision = "006"
-down_revision = "005"
+revision = "006_add_commitments"
+down_revision = "005_user_settings"
 branch_labels = None
 depends_on = None
 
