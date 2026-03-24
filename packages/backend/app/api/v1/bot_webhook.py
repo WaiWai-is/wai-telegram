@@ -20,6 +20,27 @@ from app.services.bot_service import send_telegram_message
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+PLACEHOLDER_USER = UUID("00000000-0000-0000-0000-000000000000")
+
+
+async def _resolve_user(from_user: dict) -> UUID:
+    """Resolve Telegram user to internal UUID, with fallback."""
+    try:
+        from app.core.database import async_session_factory
+        from app.services.agent.user_resolver import resolve_user_id
+
+        async with async_session_factory() as db:
+            uid = await resolve_user_id(
+                db,
+                telegram_user_id=from_user.get("id", 0),
+                telegram_username=from_user.get("username"),
+            )
+            await db.commit()
+            return uid
+    except Exception as e:
+        logger.debug(f"User resolution fallback: {e}")
+        return PLACEHOLDER_USER
+
 
 def _get_bot_token() -> str:
     """Get bot token — env var takes precedence over settings (avoids LRU cache issues)."""
@@ -176,7 +197,7 @@ async def _process_update(update: dict) -> None:
     if text.strip().startswith("/briefing"):
         from app.services.agent.briefing import generate_morning_briefing
 
-        user_id = UUID("00000000-0000-0000-0000-000000000000")
+        user_id = await _resolve_user(from_user)
         lang = _detect_language(user_name or text)
         briefing = await generate_morning_briefing(
             user_id, user_name=user_name, user_language=lang
@@ -201,7 +222,7 @@ async def _process_update(update: dict) -> None:
             get_user_commitments,
         )
 
-        user_id = UUID("00000000-0000-0000-0000-000000000000")  # Placeholder
+        user_id = await _resolve_user(from_user)  # Placeholder
         commitments = get_user_commitments(user_id)
         response = format_commitments_for_display(commitments)
         await send_telegram_message(chat_id, response)
@@ -227,13 +248,15 @@ async def _process_update(update: dict) -> None:
     if not text and not has_voice:
         return
 
+    # Resolve Telegram user → internal user ID
+    user_id = await _resolve_user(from_user)
+
     # Build agent context
-    # TODO: Load real user data from DB, load conversation history, load memories
     context = AgentContext(
-        user_id=UUID("00000000-0000-0000-0000-000000000000"),  # Placeholder
+        user_id=user_id,
         chat_id=chat_id,
         user_name=user_name,
-        user_language=_detect_language(text or voice_transcript or ""),
+        user_language=_detect_language(text or ""),
         has_voice=has_voice,
         voice_transcript=voice_transcript,
     )
