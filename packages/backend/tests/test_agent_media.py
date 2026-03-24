@@ -1,7 +1,6 @@
 """Tests for Media Processor — photos and documents."""
 
 
-
 class TestExtractDocumentText:
     """Test text extraction from documents (no network calls needed)."""
 
