@@ -234,9 +234,13 @@ async def run_agent(context: AgentContext, message: str) -> AgentResult:
 
     This is the main entry point for all user interactions.
     """
+    from app.services.agent.metrics import increment
+
     # 1. Classify intent
+    increment("agent_requests_total")
     intent = await classify_intent(message, has_voice=context.has_voice)
     model = get_model_for_intent(intent)
+    increment(f"agent_intent_{intent.value}")
 
     logger.info(f"Agent: intent={intent.value}, model={model}, user={context.user_id}")
 
@@ -317,6 +321,9 @@ async def run_agent(context: AgentContext, message: str) -> AgentResult:
             "\n".join(text_parts) if text_parts else "I processed your request."
         )
 
+        increment("agent_tokens_input", total_input_tokens)
+        increment("agent_tokens_output", total_output_tokens)
+        increment("agent_tool_calls", tool_call_count)
         return AgentResult(
             response=final_response,
             intent=intent,

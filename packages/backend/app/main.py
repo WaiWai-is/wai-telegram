@@ -134,3 +134,11 @@ async def health_check():
     """Backward-compatible health endpoint."""
     await _check_dependencies()
     return {"status": "healthy"}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Agent metrics endpoint — usage, performance, costs."""
+    from app.services.agent.metrics import get_metrics
+
+    return get_metrics()
