@@ -88,6 +88,19 @@ async def _process_update(update: dict) -> None:
     user_name = from_user.get("first_name", "")
     text = message.get("text", "")
     voice = message.get("voice")
+
+    # Handle forwarded messages — the "second brain" mechanic
+    from app.services.agent.forward_processor import is_forwarded_message
+
+    if is_forwarded_message(message) and not text.startswith("/"):
+        from app.services.agent.forward_processor import process_forwarded_message
+
+        response = await process_forwarded_message(message, user_name=user_name)
+        await send_telegram_message(chat_id, response)
+        # If it's a voice forward, also do voice summary
+        if not voice:
+            return
+
     # Handle voice messages — the #1 wow moment
     voice_transcript = None
     has_voice = False
