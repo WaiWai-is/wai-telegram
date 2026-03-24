@@ -48,7 +48,12 @@ async def bot_webhook(secret: str, request: Request) -> JSONResponse:
     if secret != _webhook_secret():
         return JSONResponse({"error": "invalid secret"}, status_code=403)
 
-    update = await request.json()
+    try:
+        update = await request.json()
+    except Exception as e:
+        logger.error(f"Invalid JSON in webhook: {e}")
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+
     logger.info(f"Bot webhook update: {update.get('update_id')}")
 
     # Process in background (don't block Telegram's webhook)
