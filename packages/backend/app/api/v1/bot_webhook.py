@@ -209,7 +209,9 @@ async def _process_update(update: dict) -> None:
                 "• `/entities текст` — извлечь сущности\n"
                 "• `/briefing` — утренний брифинг\n"
                 "• `/digest` — дайджест дня\n"
-                "• `/status` — статистика",
+                "• `/web запрос` — поиск в интернете\n"
+                "• `/status` — статистика\n"
+                "• `/clear` — очистить историю",
             )
         else:
             await send_telegram_message(
@@ -229,7 +231,9 @@ async def _process_update(update: dict) -> None:
                 "• `/entities <text>` — extract entities\n"
                 "• `/briefing` — morning briefing\n"
                 "• `/digest` — daily summary\n"
-                "• `/status` — statistics",
+                "• `/web query` — web search\n"
+                "• `/status` — statistics\n"
+                "• `/clear` — reset conversation",
             )
         return
 
@@ -241,6 +245,59 @@ async def _process_update(update: dict) -> None:
         lang = _detect_language(user_name or text)
         status = await get_user_status(user_id, user_name=user_name, user_language=lang)
         await send_telegram_message(chat_id, status)
+        return
+
+    # Handle /clear command — reset conversation history
+    if text.strip() == "/clear":
+        from app.services.agent.conversation import clear_history
+
+        user_id = await _resolve_user(from_user)
+        clear_history(user_id)
+        lang = _detect_language(user_name or "")
+        if lang == "ru":
+            await send_telegram_message(
+                chat_id, "🗑️ История разговора очищена. Начинаем с чистого листа!"
+            )
+        else:
+            await send_telegram_message(chat_id, "🗑️ Conversation cleared. Fresh start!")
+        return
+
+    # Handle /web command — web search
+    if text.strip().startswith("/web"):
+        query = text.strip().removeprefix("/web").strip()
+        if not query:
+            await send_telegram_message(
+                chat_id, "Usage: `/web <search query>`\nExample: `/web latest AI news`"
+            )
+            return
+
+        from app.services.agent.typing import send_typing_action
+
+        await send_typing_action(chat_id)
+
+        # Use Claude to answer with web search context
+        import anthropic
+
+        settings = get_settings()
+        try:
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            response = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1000,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Search the web and answer: {query}\n\nProvide a concise, informative answer. Include sources if possible.",
+                    }
+                ],
+            )
+            answer = response.content[0].text.strip()
+            await send_telegram_message(chat_id, f"🌐 *Web:* {query}\n\n{answer}")
+        except Exception as e:
+            logger.error(f"Web search failed: {e}")
+            await send_telegram_message(
+                chat_id, "❌ Web search failed. Try again later."
+            )
         return
 
     # Handle /briefing command
