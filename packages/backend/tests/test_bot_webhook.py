@@ -1,6 +1,5 @@
 """Tests for the bot webhook handler — the main entry point."""
 
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 
