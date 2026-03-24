@@ -158,17 +158,55 @@ async def process_forwarded_message(
             "_Transcribing... (voice summary will follow)_"
         )
     elif content.content_type == "photo":
-        parts.append(
-            f"{icon} Photo received {source_str}\n"
-            "_Photo saved. Describe it and I'll remember the description._"
-        )
+        # Try to describe the photo with Claude Vision
+        photos = message.get("photo", [])
+        if photos:
+            from app.services.agent.media_processor import describe_photo
+
+            # Use the largest photo size
+            file_id = photos[-1].get("file_id", "")
+            description = await describe_photo(file_id)
+            if description:
+                parts.append(f"{icon} *Photo saved* {source_str}")
+                parts.append(f"_{description}_")
+                # Extract entities from description
+                desc_entities = extract_entities_fast(description)
+                if desc_entities:
+                    parts.append(f"\n{format_entities_for_display(desc_entities)}")
+                parts.append(
+                    "\n✅ _Remembered. Search for this photo's content later._"
+                )
+            else:
+                parts.append(
+                    f"{icon} Photo received {source_str}\n"
+                    "_Could not analyze photo. Send text describing it and I'll remember._"
+                )
+        else:
+            parts.append(f"{icon} Photo received {source_str}")
     elif content.content_type == "document":
         doc = message.get("document", {})
         file_name = doc.get("file_name", "unknown")
-        parts.append(
-            f"{icon} Document received {source_str}: *{file_name}*\n"
-            "_Document saved. I'll be able to search its content soon._"
-        )
+        file_id = doc.get("file_id", "")
+
+        from app.services.agent.media_processor import extract_document_text
+
+        doc_text = await extract_document_text(file_id, file_name)
+        if doc_text and not doc_text.startswith("[Document:"):
+            parts.append(f"{icon} *Document saved* {source_str}: *{file_name}*")
+            preview = doc_text[:500]
+            if len(doc_text) > 500:
+                preview += "..."
+            parts.append(f"_{preview}_")
+            # Extract entities from document content
+            doc_entities = extract_entities_fast(doc_text[:2000])
+            if doc_entities:
+                parts.append(f"\n{format_entities_for_display(doc_entities)}")
+            parts.append("\n✅ _Remembered. Search for this document's content later._")
+        else:
+            parts.append(
+                f"{icon} Document received {source_str}: *{file_name}*\n"
+                f"_{doc_text or 'Content extraction not available.'}_"
+            )
     else:
         parts.append(f"{icon} Content received {source_str}\n_Saved._")
 

@@ -122,6 +122,44 @@ async def _process_update(update: dict) -> None:
         if not voice:
             return
 
+    # Handle direct photos (non-forwarded)
+    photo = message.get("photo")
+    if photo and not text.startswith("/"):
+        from app.services.agent.media_processor import describe_photo
+        from app.services.agent.typing import send_typing_action
+
+        await send_typing_action(chat_id)
+        file_id = photo[-1].get("file_id", "")
+        description = await describe_photo(file_id)
+        caption = message.get("caption", "")
+        if description:
+            response = f"📷 *Photo analyzed:*\n_{description}_"
+            if caption:
+                response += f"\n\nCaption: {caption}"
+            response += "\n\n✅ _Remembered._"
+        else:
+            response = (
+                "📷 Photo received. Could not analyze — try describing it in text."
+            )
+        await send_telegram_message(chat_id, response)
+        return
+
+    # Handle direct documents (non-forwarded)
+    document = message.get("document")
+    if document and not text.startswith("/"):
+        from app.services.agent.media_processor import extract_document_text
+
+        file_id = document.get("file_id", "")
+        file_name = document.get("file_name", "unknown")
+        doc_text = await extract_document_text(file_id, file_name)
+        if doc_text and not doc_text.startswith("[Document:"):
+            preview = doc_text[:500] + ("..." if len(doc_text) > 500 else "")
+            response = f"📄 *Document: {file_name}*\n_{preview}_\n\n✅ _Remembered._"
+        else:
+            response = f"📄 Document received: *{file_name}*\n_{doc_text or 'Could not extract content.'}_"
+        await send_telegram_message(chat_id, response)
+        return
+
     # Handle voice messages — the #1 wow moment
     voice_transcript = None
     has_voice = False
