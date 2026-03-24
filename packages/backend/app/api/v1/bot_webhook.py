@@ -56,7 +56,18 @@ async def bot_webhook(secret: str, request: Request) -> JSONResponse:
 
     logger.info(f"Bot webhook update: {update.get('update_id')}")
 
-    # Process in background (don't block Telegram's webhook)
+    # Handle inline queries (viral mechanic)
+    inline_query = update.get("inline_query")
+    if inline_query:
+        from app.services.agent.inline import handle_inline_query
+
+        try:
+            await handle_inline_query(inline_query)
+        except Exception as e:
+            logger.error(f"Inline query error: {e}", exc_info=True)
+        return JSONResponse({"ok": True})
+
+    # Process messages in background (don't block Telegram's webhook)
     # For now, process synchronously; later move to Celery
     try:
         await _process_update(update)
