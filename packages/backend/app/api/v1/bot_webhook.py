@@ -110,6 +110,37 @@ async def _process_update(update: dict) -> None:
     text = message.get("text", "")
     voice = message.get("voice")
 
+    # Rate limiting (invisible to normal users, blocks abuse)
+    from app.services.agent.rate_limit import check_rate_limit, get_rate_limit_message
+
+    if not check_rate_limit(from_user.get("id", 0)):
+        lang = _detect_language(text or user_name or "")
+        await send_telegram_message(chat_id, get_rate_limit_message(lang))
+        return
+
+    # Handle /feedback command
+    if text.strip().startswith("/feedback"):
+        feedback_text = text.strip().removeprefix("/feedback").strip()
+        if feedback_text:
+            logger.info(
+                f"FEEDBACK from {from_user.get('id')}/{user_name}: {feedback_text}"
+            )
+            lang = _detect_language(feedback_text)
+            if lang == "ru":
+                await send_telegram_message(
+                    chat_id, "💬 Спасибо за обратную связь! Мы обязательно учтём."
+                )
+            else:
+                await send_telegram_message(
+                    chat_id, "💬 Thanks for the feedback! We'll take it into account."
+                )
+        else:
+            await send_telegram_message(
+                chat_id,
+                "Usage: `/feedback your message here`\nTell us what's great, what's broken, or what you want.",
+            )
+        return
+
     # Handle forwarded messages — the "second brain" mechanic
     from app.services.agent.forward_processor import is_forwarded_message
 
