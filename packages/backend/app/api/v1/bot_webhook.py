@@ -97,23 +97,72 @@ async def _process_update(update: dict) -> None:
             )
             return
 
-    # Handle /start command
-    if text.strip() == "/start":
-        await send_telegram_message(
-            chat_id,
-            "👋 *Hey! I'm Wai* — your AI partner in Telegram.\n\n"
-            "I can:\n"
-            "🔍 Search your past messages by meaning\n"
-            "🎤 Transcribe & summarize voice messages\n"
-            "📋 Track commitments people made\n"
-            "📊 Generate daily digests\n"
-            "🚀 Build & deploy sites\n\n"
-            "Just talk to me naturally, or try:\n"
-            "• Forward a voice message\n"
-            "• `/search what did Alex say about pricing`\n"
-            "• `/digest` for today's summary\n\n"
-            "To connect your Telegram history, visit the Mini App ⬇️",
+    # Handle /start and /help commands
+    if text.strip() in ("/start", "/help"):
+        lang = _detect_language(text)
+        if lang == "ru" or (
+            user_name
+            and any(c in user_name for c in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя")
+        ):
+            await send_telegram_message(
+                chat_id,
+                "👋 *Привет! Я Wai* — твой AI-партнёр в Telegram.\n\n"
+                "Я умею:\n"
+                "🔍 Искать по прошлым сообщениям по смыслу\n"
+                "🎤 Транскрибировать и резюмировать голосовые\n"
+                "📋 Отслеживать обещания (свои и чужие)\n"
+                "📊 Генерировать ежедневные дайджесты\n"
+                "🧠 Извлекать людей, решения, суммы из текста\n"
+                "🌅 Утренний брифинг с обязательствами\n\n"
+                "Просто пиши мне или попробуй:\n"
+                "• Перешли голосовое сообщение\n"
+                "• `/search что обсуждали с Алексом`\n"
+                "• `/commitments` — открытые обещания\n"
+                "• `/entities текст` — извлечь сущности\n"
+                "• `/briefing` — утренний брифинг\n"
+                "• `/digest` — дайджест дня",
+            )
+        else:
+            await send_telegram_message(
+                chat_id,
+                "👋 *Hey! I'm Wai* — your AI partner in Telegram.\n\n"
+                "I can:\n"
+                "🔍 Search past messages by meaning\n"
+                "🎤 Transcribe & summarize voice messages\n"
+                "📋 Track commitments (yours & others')\n"
+                "📊 Generate daily digests\n"
+                "🧠 Extract people, decisions, amounts from text\n"
+                "🌅 Morning briefing with open commitments\n\n"
+                "Just talk to me naturally, or try:\n"
+                "• Forward a voice message\n"
+                "• `/search what did Alex say about pricing`\n"
+                "• `/commitments` — open promises\n"
+                "• `/entities <text>` — extract entities\n"
+                "• `/briefing` — morning briefing\n"
+                "• `/digest` — daily summary",
+            )
+        return
+
+    # Handle /briefing command
+    if text.strip().startswith("/briefing"):
+        from app.services.agent.briefing import generate_morning_briefing
+
+        user_id = UUID("00000000-0000-0000-0000-000000000000")
+        lang = _detect_language(user_name or text)
+        briefing = await generate_morning_briefing(
+            user_id, user_name=user_name, user_language=lang
         )
+        if briefing:
+            await send_telegram_message(chat_id, briefing)
+        else:
+            if lang == "ru":
+                await send_telegram_message(
+                    chat_id, "🌅 Нет ничего важного для брифинга. Хороший знак!"
+                )
+            else:
+                await send_telegram_message(
+                    chat_id, "🌅 Nothing important to brief you on. That's a good sign!"
+                )
         return
 
     # Handle /commitments command
