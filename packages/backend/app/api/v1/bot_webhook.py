@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
-from app.services.agent.loop import AgentContext, AgentMessage, AgentResult, run_agent
+from app.services.agent.loop import AgentContext, AgentResult, run_agent
 from app.services.bot_service import send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -63,8 +63,6 @@ async def _process_update(update: dict) -> None:
     user_name = from_user.get("first_name", "")
     text = message.get("text", "")
     voice = message.get("voice")
-    document = message.get("document")
-
     # Handle voice messages
     voice_transcript = None
     has_voice = False
