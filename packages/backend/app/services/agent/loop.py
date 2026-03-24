@@ -129,6 +129,34 @@ TOOLS = [
         },
     },
     {
+        "name": "extract_entities",
+        "description": "Extract people, topics, decisions, dates, and amounts from text. Use when the user shares meeting notes, voice transcripts, or complex messages.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The text to extract entities from",
+                },
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "list_commitments",
+        "description": "List open commitments/promises. Shows what the user promised others and what others promised the user.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "direction": {
+                    "type": "string",
+                    "enum": ["all", "i_promised", "they_promised"],
+                    "description": "Filter by direction. Default: all",
+                },
+            },
+        },
+    },
+    {
         "name": "search_web",
         "description": "Search the internet for current information.",
         "input_schema": {
@@ -159,6 +187,10 @@ async def execute_tool(tool_name: str, tool_input: dict, context: AgentContext) 
         return await _tool_get_digest(tool_input, context)
     elif tool_name == "track_commitment":
         return await _tool_track_commitment(tool_input, context)
+    elif tool_name == "extract_entities":
+        return _tool_extract_entities(tool_input)
+    elif tool_name == "list_commitments":
+        return _tool_list_commitments(tool_input, context)
     elif tool_name == "search_web":
         return f"[Web search for: {tool_input.get('query', '')}] (not yet implemented)"
     else:
@@ -216,17 +248,74 @@ async def _tool_get_digest(tool_input: dict, context: AgentContext) -> str:
 
 
 async def _tool_track_commitment(tool_input: dict, context: AgentContext) -> str:
-    """Track a commitment (placeholder — will store in DB)."""
+    """Track a commitment using the real commitment store."""
+    from app.services.agent.commitments import (
+        Commitment,
+        CommitmentDirection,
+        save_commitment,
+    )
+
     who = tool_input.get("who", "Unknown")
     what = tool_input.get("what", "")
-    deadline = tool_input.get("deadline", "no deadline")
-    direction = tool_input.get("direction", "they_promised")
+    deadline = tool_input.get("deadline")
+    direction_str = tool_input.get("direction", "they_promised")
 
-    # TODO: Store in commitments table
-    if direction == "i_promised":
-        return f"Tracked: YOU promised {who} to {what} (deadline: {deadline})"
+    direction = (
+        CommitmentDirection.I_PROMISED
+        if direction_str == "i_promised"
+        else CommitmentDirection.THEY_PROMISED
+    )
+
+    commitment = Commitment(
+        who=who,
+        what=what,
+        direction=direction,
+        deadline=deadline,
+    )
+    save_commitment(commitment, context.user_id)
+
+    if direction == CommitmentDirection.I_PROMISED:
+        deadline_text = f" by {deadline}" if deadline else ""
+        return f"✅ Tracked: You promised {who} to {what}{deadline_text}"
     else:
-        return f"Tracked: {who} promised to {what} (deadline: {deadline})"
+        deadline_text = f" by {deadline}" if deadline else ""
+        return f"✅ Tracked: {who} promised to {what}{deadline_text}"
+
+
+def _tool_extract_entities(tool_input: dict) -> str:
+    """Extract entities from text using fast pattern matching."""
+    from app.services.agent.entities import (
+        extract_entities_fast,
+        format_entities_for_display,
+    )
+
+    text = tool_input.get("text", "")
+    if not text:
+        return "No text provided for entity extraction."
+
+    entities = extract_entities_fast(text)
+    return format_entities_for_display(entities)
+
+
+def _tool_list_commitments(tool_input: dict, context: AgentContext) -> str:
+    """List user's open commitments."""
+    from app.services.agent.commitments import (
+        CommitmentDirection,
+        format_commitments_for_display,
+        get_user_commitments,
+    )
+
+    direction_str = tool_input.get("direction", "all")
+
+    if direction_str == "i_promised":
+        direction = CommitmentDirection.I_PROMISED
+    elif direction_str == "they_promised":
+        direction = CommitmentDirection.THEY_PROMISED
+    else:
+        direction = None
+
+    commitments = get_user_commitments(context.user_id, direction=direction)
+    return format_commitments_for_display(commitments)
 
 
 async def run_agent(context: AgentContext, message: str) -> AgentResult:

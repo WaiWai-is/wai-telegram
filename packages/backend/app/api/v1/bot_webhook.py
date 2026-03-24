@@ -100,6 +100,35 @@ async def _process_update(update: dict) -> None:
         )
         return
 
+    # Handle /commitments command
+    if text.strip().startswith("/commitments"):
+        from app.services.agent.commitments import (
+            format_commitments_for_display,
+            get_user_commitments,
+        )
+
+        user_id = UUID("00000000-0000-0000-0000-000000000000")  # Placeholder
+        commitments = get_user_commitments(user_id)
+        response = format_commitments_for_display(commitments)
+        await send_telegram_message(chat_id, response)
+        return
+
+    # Handle /entities command (extract from forwarded/replied message)
+    if text.strip().startswith("/entities"):
+        from app.services.agent.entities import (
+            extract_entities_fast,
+            format_entities_for_display,
+        )
+
+        entity_text = text.replace("/entities", "").strip()
+        if entity_text:
+            entities = extract_entities_fast(entity_text)
+            response = format_entities_for_display(entities)
+        else:
+            response = "Send `/entities <text>` to extract people, decisions, amounts from text."
+        await send_telegram_message(chat_id, response)
+        return
+
     # Skip empty messages
     if not text and not has_voice:
         return
