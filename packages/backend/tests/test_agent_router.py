@@ -140,21 +140,21 @@ class TestModelRouting:
         model = get_model_for_intent(Intent.CHAT)
         assert "haiku" in model
 
-    def test_digest_uses_sonnet(self):
+    def test_digest_uses_haiku(self):
         model = get_model_for_intent(Intent.DIGEST)
-        assert "sonnet" in model
+        assert "haiku" in model
 
-    def test_action_uses_sonnet(self):
+    def test_action_uses_haiku(self):
         model = get_model_for_intent(Intent.ACTION)
-        assert "sonnet" in model
+        assert "haiku" in model
 
-    def test_build_uses_sonnet(self):
+    def test_build_uses_haiku(self):
         model = get_model_for_intent(Intent.BUILD)
-        assert "sonnet" in model
+        assert "haiku" in model
 
-    def test_coach_uses_sonnet(self):
+    def test_coach_uses_haiku(self):
         model = get_model_for_intent(Intent.COACH)
-        assert "sonnet" in model
+        assert "haiku" in model
 
     def test_all_intents_have_models(self):
         for intent in Intent:

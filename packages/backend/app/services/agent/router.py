@@ -46,13 +46,15 @@ User message: {message}
 """
 
 # Model routing: cheap for classification, expensive for complex tasks
+# Model routing: use claude-haiku-4-5-20251001 for all intents
+# (Sonnet not available on current API key — switch when full key is available)
 MODEL_MAP: dict[Intent, str] = {
     Intent.SEARCH: "claude-haiku-4-5-20251001",
     Intent.VOICE_SUMMARY: "claude-haiku-4-5-20251001",
-    Intent.DIGEST: "claude-sonnet-4-5-20241022",
-    Intent.ACTION: "claude-sonnet-4-5-20241022",
-    Intent.BUILD: "claude-sonnet-4-5-20241022",
-    Intent.COACH: "claude-sonnet-4-5-20241022",
+    Intent.DIGEST: "claude-haiku-4-5-20251001",
+    Intent.ACTION: "claude-haiku-4-5-20251001",
+    Intent.BUILD: "claude-haiku-4-5-20251001",
+    Intent.COACH: "claude-haiku-4-5-20251001",
     Intent.CHAT: "claude-haiku-4-5-20251001",
 }
 
