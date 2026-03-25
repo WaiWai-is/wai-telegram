@@ -388,7 +388,11 @@ async def run_agent(context: AgentContext, message: str) -> AgentResult:
             for block in assistant_content:
                 if block.type == "tool_use":
                     tool_call_count += 1
-                    result = await execute_tool(block.name, block.input, context)
+                    try:
+                        result = await execute_tool(block.name, block.input, context)
+                    except Exception as e:
+                        logger.error(f"Tool {block.name} failed: {e}")
+                        result = f"Error executing {block.name}: {e}"
                     tool_results.append(
                         {
                             "type": "tool_result",

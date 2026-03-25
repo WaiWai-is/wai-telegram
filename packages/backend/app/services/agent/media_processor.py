@@ -36,6 +36,15 @@ async def describe_photo(file_id: str) -> str | None:
         if not settings.anthropic_api_key:
             return None
 
+        # Detect actual image format from magic bytes
+        media_type = "image/jpeg"
+        if image_data[:8] == b"\x89PNG\r\n\x1a\n":
+            media_type = "image/png"
+        elif image_data[:4] == b"RIFF" and image_data[8:12] == b"WEBP":
+            media_type = "image/webp"
+        elif image_data[:3] == b"GIF":
+            media_type = "image/gif"
+
         b64_image = base64.b64encode(image_data).decode("utf-8")
 
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -50,7 +59,7 @@ async def describe_photo(file_id: str) -> str | None:
                             "type": "image",
                             "source": {
                                 "type": "base64",
-                                "media_type": "image/jpeg",
+                                "media_type": media_type,
                                 "data": b64_image,
                             },
                         },
@@ -127,8 +136,11 @@ async def extract_document_text(
         return None
 
 
+MAX_DOWNLOAD_SIZE = 20 * 1024 * 1024  # 20MB limit
+
+
 async def _download_telegram_file(file_id: str) -> bytes | None:
-    """Download a file from Telegram by file_id."""
+    """Download a file from Telegram by file_id. Max 20MB."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or get_settings().telegram_bot_token
     if not token:
         return None
@@ -145,8 +157,11 @@ async def _download_telegram_file(file_id: str) -> bytes | None:
 
         file_path = data["result"]["file_path"]
 
-        # Download file
+        # Download file with size check
         download_resp = await client.get(
             f"https://api.telegram.org/file/bot{token}/{file_path}"
         )
+        if len(download_resp.content) > MAX_DOWNLOAD_SIZE:
+            logger.warning(f"File too large: {len(download_resp.content)} bytes")
+            return None
         return download_resp.content

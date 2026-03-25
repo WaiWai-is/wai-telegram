@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.services.agent.commitments import detect_commitments, save_commitment
+from app.services.agent.commitments import detect_commitments
 from app.services.agent.entities import (
     extract_entities_fast,
     format_entities_for_display,
@@ -134,15 +134,11 @@ async def process_forwarded_message(
         if entities:
             parts.append(f"\n{format_entities_for_display(entities)}")
 
-        # Detect commitments
-        from uuid import UUID
-
-        user_id = UUID("00000000-0000-0000-0000-000000000000")
+        # Detect commitments (display only — saving handled by webhook with real user_id)
         commitments = detect_commitments(content.text, user_name=user_name)
         if commitments:
             commit_lines = []
             for c in commitments:
-                save_commitment(c, user_id)
                 deadline_text = f" (by {c.deadline})" if c.deadline else ""
                 commit_lines.append(f"  🤝 {c.who}: {c.what}{deadline_text}")
             parts.append("\n*Commitments detected:*\n" + "\n".join(commit_lines))

@@ -46,7 +46,7 @@ def get_history(user_id: UUID, limit: int = MAX_HISTORY) -> list[ConversationMes
 
 def clear_history(user_id: UUID) -> None:
     """Clear conversation history for a user."""
-    _conversations[user_id].clear()
+    _conversations.pop(user_id, None)
 
 
 def get_history_for_agent(user_id: UUID) -> list[dict[str, str]]:

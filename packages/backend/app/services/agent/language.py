@@ -20,9 +20,10 @@ def detect_language(text: str) -> str:
     if not text or not text.strip():
         return "en"
 
-    # Remove URLs, mentions, numbers, punctuation for cleaner analysis
+    # Remove URLs, mentions, numbers — keep ALL unicode letters
     clean = re.sub(r"https?://\S+|@\w+|#\w+|\d+", "", text)
-    clean = re.sub(r"[^\w\s]", "", clean).strip()
+    # Remove ASCII punctuation only, preserve non-ASCII characters (Cyrillic, CJK, Arabic, etc.)
+    clean = re.sub(r"[!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~]", "", clean).strip()
 
     if not clean:
         return "en"

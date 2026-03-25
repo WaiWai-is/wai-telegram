@@ -80,15 +80,16 @@ async def handle_inline_query(inline_query: dict) -> None:
 
 async def _search_for_inline(query: str, telegram_user_id: int | None) -> list[dict]:
     """Search messages and format as inline results."""
-    # TODO: Map telegram_user_id to internal user_id via DB lookup
-    # For now, use placeholder user_id
-    from uuid import UUID
 
     from app.core.database import async_session_factory
     from app.schemas.search import SearchRequest
+    from app.services.agent.user_resolver import resolve_user_id
     from app.services.search_service import semantic_search
 
-    user_id = UUID("00000000-0000-0000-0000-000000000000")  # Placeholder
+    # Resolve real user ID (not placeholder)
+    async with async_session_factory() as db:
+        user_id = await resolve_user_id(db, telegram_user_id or 0)
+        await db.commit()
 
     request = SearchRequest(query=query, limit=MAX_INLINE_RESULTS)
 
