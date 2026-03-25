@@ -477,6 +477,21 @@ async def _process_update(update: dict) -> None:
         await send_telegram_message(chat_id, result.response)
     except Exception as e:
         logger.error(f"Agent failed: {e}", exc_info=True)
+        # Send to Sentry with context
+        try:
+            import sentry_sdk
+
+            sentry_sdk.set_context(
+                "agent",
+                {
+                    "user_id": str(user_id),
+                    "intent": "unknown",
+                    "text_length": len(text),
+                },
+            )
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
         lang = _detect_language(text)
         if lang == "ru":
             await send_telegram_message(

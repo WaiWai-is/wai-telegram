@@ -2,6 +2,11 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
+try:
+    import sentry_sdk
+except ImportError:
+    sentry_sdk = None  # type: ignore[assignment]
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -16,6 +21,17 @@ from app.models.sync_job import SyncJob, SyncStatus
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# Initialize Sentry for error tracking
+if settings.sentry_dsn and sentry_sdk:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        traces_sample_rate=0.1,
+        environment=settings.environment,
+        release="wai-telegram@0.2.0",
+        send_default_pii=False,
+    )
+    logger.info("Sentry initialized")
 
 
 @asynccontextmanager

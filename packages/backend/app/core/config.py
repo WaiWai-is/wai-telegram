@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="")
     digest_model: str = "claude-sonnet-4-6"
 
+    # Sentry (error tracking)
+    sentry_dsn: str = Field(default="")
+
     # DeepGram (voice transcription)
     deepgram_api_key: str = Field(default="")
     deepgram_model: str = "nova-3"
