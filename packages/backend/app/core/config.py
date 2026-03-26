@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # Sentry (error tracking)
     sentry_dsn: str = Field(default="")
 
+    # Cloudflare (site deployment)
+    cloudflare_api_token: str = Field(default="")
+    cloudflare_account_id: str = Field(default="")
+
     # DeepGram (voice transcription)
     deepgram_api_key: str = Field(default="")
     deepgram_model: str = "nova-3"

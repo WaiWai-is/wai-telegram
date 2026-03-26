@@ -171,29 +171,27 @@ async def build_site(description: str, name: str | None = None) -> SiteResult:
             error=f"AI generation failed: {e}",
         )
 
-    # Save to filesystem
-    try:
-        site_dir.mkdir(parents=True, exist_ok=True)
-        index_path = site_dir / "index.html"
-        index_path.write_text(html, encoding="utf-8")
+    # Deploy: try Cloudflare Pages first, fall back to local filesystem
+    from app.services.agent.cloudflare_deploy import deploy_site_to_pages
 
-        url = f"https://{slug}.{DOMAIN}"
-        logger.info(f"Site deployed: {url} → {site_dir}")
+    deploy_result = await deploy_site_to_pages(slug, html)
 
+    if deploy_result["success"]:
+        url = deploy_result["url"]
+        method = deploy_result.get("method", "cloudflare")
+        logger.info(f"Site deployed ({method}): {url}")
         return SiteResult(
             slug=slug,
             url=url,
-            path=str(site_dir),
+            path=deploy_result.get("deployment_url", ""),
         )
-
-    except Exception as e:
-        logger.error(f"Site save failed: {e}")
+    else:
         return SiteResult(
             slug=slug,
             url="",
             path="",
             success=False,
-            error=f"Failed to save site: {e}",
+            error=deploy_result.get("error", "Deploy failed"),
         )
 
 
