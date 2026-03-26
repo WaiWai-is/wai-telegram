@@ -240,6 +240,8 @@ async def _process_update(update: dict) -> None:
                 "• `/entities текст` — извлечь сущности\n"
                 "• `/briefing` — утренний брифинг\n"
                 "• `/digest` — дайджест дня\n"
+                "• `/build описание` — создать и опубликовать сайт\n"
+                "• `/sites` — список твоих сайтов\n"
                 "• `/summarize текст` — резюмировать текст\n"
                 "• `/web запрос` — поиск в интернете\n"
                 "• `/status` — статистика\n"
@@ -263,6 +265,8 @@ async def _process_update(update: dict) -> None:
                 "• `/entities <text>` — extract entities\n"
                 "• `/briefing` — morning briefing\n"
                 "• `/digest` — daily summary\n"
+                "• `/build description` — create & publish a website\n"
+                "• `/sites` — list your sites\n"
                 "• `/summarize text` — summarize long text\n"
                 "• `/web query` — web search\n"
                 "• `/status` — statistics\n"
@@ -278,6 +282,78 @@ async def _process_update(update: dict) -> None:
         lang = _detect_language(user_name or text)
         status = await get_user_status(user_id, user_name=user_name, user_language=lang)
         await send_telegram_message(chat_id, status)
+        return
+
+    # Handle /build command — generate and deploy a website
+    if text.strip().startswith("/build"):
+        description = text.strip().removeprefix("/build").strip()
+        if not description or len(description) < 10:
+            await send_telegram_message(
+                chat_id,
+                "🚀 Usage: `/build <description>`\n\n"
+                "Example:\n"
+                "`/build Landing page for cafe Sunrise. Menu: coffee $3, latte $4, croissant $2.50. "
+                "Address: 123 Main St. Phone: 555-0123`\n\n"
+                "I'll generate a beautiful website and publish it instantly!",
+            )
+            return
+
+        from app.services.agent.typing import send_typing_action
+
+        await send_typing_action(chat_id)
+
+        from app.services.agent.site_builder import build_site
+
+        # Extract name from first sentence or first few words
+        name = (
+            description.split(".")[0][:40] if "." in description else description[:40]
+        )
+        result = await build_site(description, name=name)
+
+        if result.success:
+            await send_telegram_message(
+                chat_id,
+                f"🚀 *Site deployed!*\n\n"
+                f"🌐 URL: {result.url}\n"
+                f"📁 Slug: `{result.slug}`\n\n"
+                f"_Edit with `/build` again or delete with `/delete-site {result.slug}`_",
+            )
+        else:
+            await send_telegram_message(
+                chat_id,
+                f"❌ Site generation failed: {result.error}\n\nTry again with a more detailed description.",
+            )
+        return
+
+    # Handle /sites command — list deployed sites
+    if text.strip() == "/sites":
+        from app.services.agent.site_builder import list_user_sites
+
+        sites = await list_user_sites()
+        if sites:
+            lines = ["🌐 *Your sites:*\n"]
+            for s in sites[:10]:
+                lines.append(f"• [{s['slug']}]({s['url']}) — {s['size']} bytes")
+            await send_telegram_message(chat_id, "\n".join(lines))
+        else:
+            await send_telegram_message(
+                chat_id,
+                "No sites deployed yet. Use `/build <description>` to create one!",
+            )
+        return
+
+    # Handle /delete-site command
+    if text.strip().startswith("/delete-site"):
+        slug = text.strip().removeprefix("/delete-site").strip()
+        if not slug:
+            await send_telegram_message(chat_id, "Usage: `/delete-site <slug>`")
+            return
+        from app.services.agent.site_builder import delete_site
+
+        if await delete_site(slug):
+            await send_telegram_message(chat_id, f"🗑️ Site `{slug}` deleted.")
+        else:
+            await send_telegram_message(chat_id, f"❌ Site `{slug}` not found.")
         return
 
     # Handle /clear command — reset conversation history
