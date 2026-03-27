@@ -144,15 +144,23 @@ async def build_site(description: str, name: str | None = None) -> SiteResult:
         )
         html = response.content[0].text.strip()
 
-        # Ensure it starts with DOCTYPE
+        # Strip markdown code blocks (Claude often wraps in ```html ... ```)
+        if html.startswith("```"):
+            # Remove opening ```html or ```
+            html = re.sub(r"^```\w*\n?", "", html)
+            # Remove closing ```
+            html = re.sub(r"\n?```$", "", html)
+            html = html.strip()
+
+        # Extract HTML if still wrapped in text
         if not html.startswith("<!DOCTYPE") and not html.startswith("<html"):
-            # Try to extract HTML from the response
             match = re.search(
                 r"(<!DOCTYPE html.*</html>)", html, re.DOTALL | re.IGNORECASE
             )
             if match:
                 html = match.group(1)
             else:
+                logger.error(f"Invalid HTML output (first 200 chars): {html[:200]}")
                 return SiteResult(
                     slug=slug,
                     url="",
