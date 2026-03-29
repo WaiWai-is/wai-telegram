@@ -110,6 +110,10 @@ async def _process_update(update: dict) -> None:
     text = message.get("text", "")
     voice = message.get("voice")
 
+    logger.info(
+        f"Processing update: chat_id={chat_id} user={user_name} text={text[:80] if text else '[no text]'}"
+    )
+
     # Rate limiting (invisible to normal users, blocks abuse)
     from app.services.agent.rate_limit import check_rate_limit, get_rate_limit_message
 
@@ -286,6 +290,7 @@ async def _process_update(update: dict) -> None:
 
     # Handle /build command — generate and deploy a website
     if text.strip().startswith("/build"):
+        logger.info(f"/build command from {chat_id}: {text[:100]}")
         description = text.strip().removeprefix("/build").strip()
         if not description or len(description) < 10:
             await send_telegram_message(
