@@ -31,18 +31,20 @@ SITE_GENERATION_PROMPT = """Generate a stunning, modern single-page website.
 
 Description: {description}
 
-TECH STACK (use these CDNs):
+TECH STACK (use these CDNs in <head>):
 - Tailwind CSS: <script src="https://cdn.tailwindcss.com"></script>
 - Google Fonts: pick 1-2 fonts that fit the vibe
 - Lucide Icons: <script src="https://unpkg.com/lucide@latest"></script> then <i data-lucide="icon-name"></i>
-- Alpine.js: <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+- Alpine.js + Intersect plugin (BOTH required):
+  <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/intersect@3.x.x/dist/cdn.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 
 REQUIREMENTS:
 - Single HTML file, all content inline
 - Hero section with bold headline and CTA
 - At least 4 content sections (services/features, about, testimonials, contact)
+- ALL sections must be visible by default. Use Alpine x-intersect ONLY for adding animations, NOT for showing/hiding content. Example: x-data="{ shown: true }" x-intersect="shown = true" :class="shown ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'" class="transition duration-700"
 - Mobile-responsive (Tailwind handles this)
-- Smooth scroll, hover effects, scroll-triggered fade-in animations (Alpine.js + IntersectionObserver)
 - Professional color scheme fitting the business
 - Footer with "Made with Wai ✨"
 
