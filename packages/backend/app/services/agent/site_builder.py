@@ -58,9 +58,16 @@ SEO (include in <head>):
 - <meta name="twitter:description" content="...">
 - <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
 
+IMAGES (use real photos, NOT just gradients):
+- For hero backgrounds, about sections, and visual content use picsum.photos:
+  <img src="https://picsum.photos/seed/DESCRIPTIVE-SEED/1200/800" loading="lazy" class="w-full h-full object-cover" alt="...">
+- Seeds should describe the content: seed/coffee-shop, seed/team-work, seed/modern-office, seed/yoga-studio
+- ALWAYS add loading="lazy" and descriptive alt text
+- Use object-fit: cover with rounded corners for cards
+
 REQUIREMENTS:
 - Single HTML file, all content inline
-- Hero section with bold headline and CTA
+- Hero section with bold headline, CTA, and a background image or visual
 - At least 4 content sections (services/features, about, testimonials, contact)
 - ALL sections must be visible by default. Use CSS transitions for scroll animations via a small inline script with IntersectionObserver (NOT Alpine x-intersect). Sections start with opacity-0 translate-y-4 and get opacity-100 translate-y-0 when scrolled into view.
 - Mobile-responsive (Tailwind handles this)
