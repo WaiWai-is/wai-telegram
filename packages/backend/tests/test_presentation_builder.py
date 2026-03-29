@@ -1,7 +1,5 @@
 """Tests for presentation_builder — slide generation and validation."""
 
-import pytest
-
 from app.services.agent.presentation_builder import (
     PresentationResult,
     PRESENTATION_PROMPT,

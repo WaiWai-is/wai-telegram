@@ -1,7 +1,5 @@
 """Tests for html_validator — quality checks before deployment."""
 
-import pytest
-
 from app.services.agent.html_validator import validate_html
 
 

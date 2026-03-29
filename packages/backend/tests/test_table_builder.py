@@ -1,7 +1,5 @@
 """Tests for table_builder — interactive table generation and validation."""
 
-import pytest
-
 from app.services.agent.table_builder import TableResult, TABLE_GENERATION_PROMPT
 from app.services.agent.site_builder import generate_slug
 
