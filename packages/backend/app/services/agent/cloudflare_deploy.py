@@ -1,19 +1,15 @@
 """Cloudflare Pages Deploy — publish sites instantly to *.wai.computer.
 
-Uses Wrangler-style Direct Upload: write HTML to temp dir, call Wrangler API.
+Uses `wrangler pages deploy` CLI for reliable deployments.
 Each site deploys to the shared `wai-sites` Pages project.
 Custom domains like {slug}.wai.computer route via wildcard CNAME.
-
-Verified working: test deploy at https://c3d1bb69.wai-sites.pages.dev
 """
 
-import hashlib
+import asyncio
 import logging
 import os
 import tempfile
 from pathlib import Path
-
-import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -21,100 +17,70 @@ DOMAIN = "wai.computer"
 PROJECT_NAME = "wai-sites"
 
 
-def _get_cf_credentials() -> tuple[str, str]:
-    """Get Cloudflare API token and account ID from environment."""
+async def deploy_to_cloudflare_pages(slug: str, html_content: str) -> dict:
+    """Deploy HTML to Cloudflare Pages via wrangler CLI."""
     token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
-    return token, account_id
-
-
-async def deploy_to_cloudflare_pages(slug: str, html_content: str) -> dict:
-    """Deploy HTML to Cloudflare Pages via Direct Upload API.
-
-    Uses the same approach as Wrangler CLI: hash-based manifest + file upload.
-    """
-    token, account_id = _get_cf_credentials()
     if not token or not account_id:
         return {"success": False, "error": "Cloudflare credentials not configured"}
 
     try:
-        # Write HTML to temp file
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".html", delete=False, encoding="utf-8"
-        ) as f:
-            f.write(html_content)
-            temp_path = f.name
+        # Write HTML to a temp directory (wrangler deploys a directory)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            index_path = Path(tmpdir) / "index.html"
+            index_path.write_text(html_content, encoding="utf-8")
 
-        # Calculate MD5 hash for manifest
-        content_hash = hashlib.md5(html_content.encode("utf-8")).hexdigest()
+            proc = await asyncio.create_subprocess_exec(
+                "wrangler", "pages", "deploy", tmpdir,
+                f"--project-name={PROJECT_NAME}",
+                "--commit-dirty=true",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={
+                    **os.environ,
+                    "CLOUDFLARE_API_TOKEN": token,
+                    "CLOUDFLARE_ACCOUNT_ID": account_id,
+                },
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
 
-        headers = {"Authorization": f"Bearer {token}"}
-        url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/pages/projects/{PROJECT_NAME}/deployments"
+        stdout_text = stdout.decode()
+        stderr_text = stderr.decode()
 
-        # Manifest maps: path → content hash
-        manifest = (
-            f'{{"/{slug}/index.html":"{content_hash}","/index.html":"{content_hash}"}}'
-        )
+        if proc.returncode == 0:
+            # Extract deployment URL from wrangler output
+            deploy_url = ""
+            for line in stdout_text.splitlines():
+                if "https://" in line and ".pages.dev" in line:
+                    deploy_url = line.strip().split()[-1]
+                    break
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            with open(temp_path, "rb") as file_obj:
-                resp = await client.post(
-                    url,
-                    headers=headers,
-                    data={"manifest": manifest},
-                    files={content_hash: ("index.html", file_obj, "text/html")},
-                )
-
-        # Clean up
-        os.unlink(temp_path)
-
-        if resp.status_code == 200:
-            data = resp.json()
-            result = data.get("result", {})
-            deploy_url = result.get("url", "")
             logger.info(f"Cloudflare deploy OK: {deploy_url} for slug={slug}")
             return {
                 "success": True,
-                "url": f"https://{slug}.{DOMAIN}",
-                "deployment_url": deploy_url,
-                "pages_url": f"https://{PROJECT_NAME}.pages.dev/{slug}/",
+                "url": deploy_url or f"https://{PROJECT_NAME}.pages.dev",
                 "slug": slug,
                 "method": "cloudflare",
             }
         else:
-            error = resp.text[:200]
-            logger.error(f"Cloudflare deploy failed: {resp.status_code} {error}")
-            return {"success": False, "error": f"API error {resp.status_code}: {error}"}
+            error = (stderr_text or stdout_text)[:300]
+            logger.error(f"Wrangler deploy failed (exit {proc.returncode}): {error}")
+            return {"success": False, "error": f"Wrangler error: {error}"}
 
+    except asyncio.TimeoutError:
+        logger.error("Wrangler deploy timed out after 60s")
+        return {"success": False, "error": "Deploy timed out"}
     except Exception as e:
         logger.error(f"Cloudflare deploy error: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 
 async def deploy_site_to_pages(slug: str, html: str) -> dict:
-    """High-level deploy: Cloudflare Pages → local fallback.
-
-    This is the main entry point called from site_builder.py.
-    """
-    token, account_id = _get_cf_credentials()
+    """High-level deploy entry point called from site_builder.py."""
+    token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
 
     if token and account_id:
-        result = await deploy_to_cloudflare_pages(slug, html)
-        if result["success"]:
-            return result
-        logger.warning(f"Cloudflare deploy failed, trying local: {result.get('error')}")
+        return await deploy_to_cloudflare_pages(slug, html)
 
-    # Fallback: local filesystem
-    try:
-        sites_dir = Path("/var/www/sites")
-        site_dir = sites_dir / slug
-        site_dir.mkdir(parents=True, exist_ok=True)
-        (site_dir / "index.html").write_text(html, encoding="utf-8")
-        return {
-            "success": True,
-            "url": f"https://{slug}.{DOMAIN}",
-            "slug": slug,
-            "method": "local",
-        }
-    except Exception as e:
-        return {"success": False, "error": f"Local deploy failed: {e}"}
+    return {"success": False, "error": "Cloudflare credentials not configured"}

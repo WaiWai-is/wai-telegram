@@ -110,11 +110,8 @@ def generate_slug(name: str) -> str:
 async def build_site(description: str, name: str | None = None) -> SiteResult:
     """Generate and deploy a website from a text description.
 
-    1. Generate HTML via Claude
-    2. Save to /var/www/sites/{slug}/index.html
-    3. Return the URL
-
-    The nginx wildcard config serves it at {slug}.wai.computer.
+    Strategy: Agent SDK (Claude Code-like) → Direct API call fallback.
+    Deploy: Cloudflare Pages → local filesystem fallback.
     """
     settings = get_settings()
 
@@ -191,7 +188,7 @@ async def build_site(description: str, name: str | None = None) -> SiteResult:
         return SiteResult(
             slug=slug,
             url=url,
-            path=deploy_result.get("deployment_url", ""),
+            path=url,
         )
     else:
         return SiteResult(
