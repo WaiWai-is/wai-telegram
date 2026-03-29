@@ -48,6 +48,16 @@ TECH STACK (use these CDNs in <head>):
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/intersect@3.x.x/dist/cdn.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 
+SEO (include in <head>):
+- <meta name="description" content="..."> with a compelling 150-char summary
+- <meta property="og:title" content="...">
+- <meta property="og:description" content="...">
+- <meta property="og:type" content="website">
+- <meta name="twitter:card" content="summary_large_image">
+- <meta name="twitter:title" content="...">
+- <meta name="twitter:description" content="...">
+- <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
+
 REQUIREMENTS:
 - Single HTML file, all content inline
 - Hero section with bold headline and CTA

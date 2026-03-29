@@ -27,6 +27,16 @@ TECH STACK (include in <head>):
 - reveal.js JS: <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js"></script>
 - Google Fonts: pick 1 font that fits the vibe
 
+SEO (include in <head>):
+- <meta name="description" content="..."> with a concise summary of the presentation
+- <meta property="og:title" content="...">
+- <meta property="og:description" content="...">
+- <meta property="og:type" content="website">
+- <meta name="twitter:card" content="summary_large_image">
+- <meta name="twitter:title" content="...">
+- <meta name="twitter:description" content="...">
+- <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+
 STRUCTURE:
 - Title slide with bold headline, subtitle, date
 - 8-15 content slides

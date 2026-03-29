@@ -29,6 +29,16 @@ TECH STACK (use these CDNs in <head>):
 - Google Fonts: Inter for body, JetBrains Mono for numbers
 - Tailwind CSS: <script src="https://cdn.tailwindcss.com"></script>
 
+SEO (include in <head>):
+- <meta name="description" content="..."> with a concise summary of the table data
+- <meta property="og:title" content="...">
+- <meta property="og:description" content="...">
+- <meta property="og:type" content="website">
+- <meta name="twitter:card" content="summary_large_image">
+- <meta name="twitter:title" content="...">
+- <meta name="twitter:description" content="...">
+- <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
+
 DATA REQUIREMENTS:
 - Fill in REAL data based on your knowledge. No "TBD" or "N/A" unless genuinely unknown.
 - Pricing: actual prices with currency symbols
