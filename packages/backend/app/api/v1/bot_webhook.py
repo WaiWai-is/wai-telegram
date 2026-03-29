@@ -939,6 +939,48 @@ async def _process_update(update: dict) -> None:
         AgentMessage(role=msg.role, content=msg.content) for msg in history
     ]
 
+    # Check if this is an edit intent and user has a stored site
+    from app.services.agent.router import classify_intent, Intent
+
+    intent = classify_intent(text)
+    if intent == Intent.EDIT:
+        from app.services.agent.site_builder import edit_site, get_stored_site
+
+        stored = get_stored_site(chat_id)
+        if stored:
+            from app.services.agent.typing import send_typing_action
+
+            await send_typing_action(chat_id)
+            edit_result = await edit_site(chat_id, text)
+            if edit_result.success:
+                # Try screenshot preview
+                try:
+                    from app.services.agent.screenshot_service import (
+                        get_screenshot_url,
+                    )
+
+                    screenshot_url = await get_screenshot_url(edit_result.url)
+                    if screenshot_url:
+                        sent = await send_telegram_photo(
+                            chat_id,
+                            screenshot_url,
+                            f"Site updated!\n{edit_result.url}",
+                        )
+                        if sent:
+                            return
+                except Exception:
+                    pass
+                await send_telegram_message(
+                    chat_id,
+                    f"✅ *Site updated!*\n\n🌐 {edit_result.url}",
+                )
+            else:
+                await send_telegram_message(
+                    chat_id,
+                    f"❌ Edit failed: {edit_result.error}",
+                )
+            return
+
     # Show "typing..." while Claude thinks (critical for UX)
     from app.services.agent.typing import send_typing_action
 

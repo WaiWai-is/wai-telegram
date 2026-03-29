@@ -27,6 +27,7 @@ class Intent(StrEnum):
     DIGEST = "digest"
     ACTION = "action"
     BUILD = "build"
+    EDIT = "edit"
     COACH = "coach"
     CHAT = "chat"
 
@@ -125,6 +126,36 @@ async def classify_intent(message: str, has_voice: bool = False) -> Intent:
     ]
     if any(kw in lower for kw in build_keywords):
         return Intent.BUILD
+
+    edit_keywords = [
+        "change ",
+        "modify ",
+        "update ",
+        "add ",
+        "remove ",
+        "make it ",
+        "make the ",
+        "replace ",
+        "fix the ",
+        "измени",
+        "поменяй",
+        "добавь",
+        "убери",
+        "сделай ",
+        "замени",
+        "поправь",
+        "обнови",
+        "darker",
+        "lighter",
+        "bigger",
+        "smaller",
+        "темнее",
+        "светлее",
+        "крупнее",
+        "меньше",
+    ]
+    if any(lower.startswith(kw) or kw in lower for kw in edit_keywords):
+        return Intent.EDIT
 
     action_keywords = [
         "send email",
