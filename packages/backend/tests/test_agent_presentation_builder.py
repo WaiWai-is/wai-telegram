@@ -1,7 +1,7 @@
 """Tests for Presentation Builder — slug generation, HTML cleanup, result dataclass, prompt."""
 
 import re
-from datetime import UTC, datetime
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -124,7 +124,9 @@ class TestPresentationResultDataclass:
     """PresentationResult must hold all expected fields."""
 
     def test_success_result(self):
-        r = PresentationResult(slug="slides-demo-abc1", url="https://example.com", slide_count=10)
+        r = PresentationResult(
+            slug="slides-demo-abc1", url="https://example.com", slide_count=10
+        )
         assert r.success is True
         assert r.error is None
         assert r.slide_count == 10
@@ -134,7 +136,9 @@ class TestPresentationResultDataclass:
         assert r.created_at.tzinfo is not None
 
     def test_failure_result(self):
-        r = PresentationResult(slug="slides-fail-0000", url="", success=False, error="Deploy failed")
+        r = PresentationResult(
+            slug="slides-fail-0000", url="", success=False, error="Deploy failed"
+        )
         assert r.success is False
         assert r.error == "Deploy failed"
         assert r.slide_count == 0
@@ -200,11 +204,21 @@ class TestBuildPresentationIntegration:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=mock_html)]
 
-        mock_deploy = AsyncMock(return_value={"success": True, "url": "https://slides-test.pages.dev"})
+        mock_deploy = AsyncMock(
+            return_value={"success": True, "url": "https://slides-test.pages.dev"}
+        )
 
-        with patch("app.services.agent.presentation_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.presentation_builder.get_settings") as mock_settings, \
-             patch("app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy):
+        with (
+            patch(
+                "app.services.agent.presentation_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch(
+                "app.services.agent.presentation_builder.get_settings"
+            ) as mock_settings,
+            patch(
+                "app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy
+            ),
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(return_value=mock_response)
@@ -219,8 +233,14 @@ class TestBuildPresentationIntegration:
 
     @pytest.mark.asyncio
     async def test_build_api_failure(self):
-        with patch("app.services.agent.presentation_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.presentation_builder.get_settings") as mock_settings:
+        with (
+            patch(
+                "app.services.agent.presentation_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch(
+                "app.services.agent.presentation_builder.get_settings"
+            ) as mock_settings,
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
@@ -237,8 +257,14 @@ class TestBuildPresentationIntegration:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text="Sorry, I can't generate that.")]
 
-        with patch("app.services.agent.presentation_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.presentation_builder.get_settings") as mock_settings:
+        with (
+            patch(
+                "app.services.agent.presentation_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch(
+                "app.services.agent.presentation_builder.get_settings"
+            ) as mock_settings,
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(return_value=mock_response)
@@ -255,11 +281,21 @@ class TestBuildPresentationIntegration:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=mock_html)]
 
-        mock_deploy = AsyncMock(return_value={"success": False, "error": "Credentials missing"})
+        mock_deploy = AsyncMock(
+            return_value={"success": False, "error": "Credentials missing"}
+        )
 
-        with patch("app.services.agent.presentation_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.presentation_builder.get_settings") as mock_settings, \
-             patch("app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy):
+        with (
+            patch(
+                "app.services.agent.presentation_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch(
+                "app.services.agent.presentation_builder.get_settings"
+            ) as mock_settings,
+            patch(
+                "app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy
+            ),
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(return_value=mock_response)
@@ -277,8 +313,14 @@ class TestBuildPresentationIntegration:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=mock_html)]
 
-        with patch("app.services.agent.presentation_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.presentation_builder.get_settings") as mock_settings:
+        with (
+            patch(
+                "app.services.agent.presentation_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch(
+                "app.services.agent.presentation_builder.get_settings"
+            ) as mock_settings,
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(return_value=mock_response)

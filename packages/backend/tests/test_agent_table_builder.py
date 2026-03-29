@@ -1,7 +1,7 @@
 """Tests for Table Builder — slug generation, HTML cleanup, result dataclass, prompt."""
 
 import re
-from datetime import UTC, datetime
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -62,7 +62,9 @@ class TestTableHTMLCleanup:
         assert "```" not in html
 
     def test_extract_html_from_wrapped_text(self):
-        raw = "Here's your table:\n<!DOCTYPE html><html><body>Grid</body></html>\nEnjoy!"
+        raw = (
+            "Here's your table:\n<!DOCTYPE html><html><body>Grid</body></html>\nEnjoy!"
+        )
         html = raw.strip()
         if not html.startswith("<!DOCTYPE") and not html.startswith("<html"):
             match = re.search(
@@ -119,7 +121,9 @@ class TestTableResultDataclass:
     """TableResult must hold all expected fields."""
 
     def test_success_result(self):
-        r = TableResult(slug="table-demo-abc1", url="https://example.com", rows=10, columns=5)
+        r = TableResult(
+            slug="table-demo-abc1", url="https://example.com", rows=10, columns=5
+        )
         assert r.success is True
         assert r.error is None
         assert r.rows == 10
@@ -129,7 +133,9 @@ class TestTableResultDataclass:
         assert isinstance(r.created_at, datetime)
 
     def test_failure_result(self):
-        r = TableResult(slug="table-fail-0000", url="", success=False, error="Deploy failed")
+        r = TableResult(
+            slug="table-fail-0000", url="", success=False, error="Deploy failed"
+        )
         assert r.success is False
         assert r.error == "Deploy failed"
         assert r.rows == 0
@@ -144,27 +150,27 @@ class TestRowColumnCounting:
     """Row and column counting from AG Grid JS."""
 
     def test_count_header_names(self):
-        html = '''
+        html = """
         const columnDefs = [
             { headerName: "Product", field: "product" },
             { headerName: "Price", field: "price" },
             { headerName: "Rating", field: "rating" },
         ];
-        '''
+        """
         columns = len(re.findall(r"headerName", html))
         assert columns == 3
 
     def test_count_row_data_objects(self):
-        html = '''
+        html = """
         const rowData = [
             { product: "A", price: 10 },
             { product: "B", price: 20 },
             { product: "C", price: 30 },
         ];
-        '''
+        """
         row_data = re.search(r"rowData\s*[:=]\s*\[", html)
         assert row_data is not None
-        rows = html[row_data.end():].count("}")
+        rows = html[row_data.end() :].count("}")
         assert rows == 3
 
     def test_zero_columns_no_headers(self):
@@ -218,11 +224,19 @@ class TestBuildTableIntegration:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=mock_html)]
 
-        mock_deploy = AsyncMock(return_value={"success": True, "url": "https://table-test.pages.dev"})
+        mock_deploy = AsyncMock(
+            return_value={"success": True, "url": "https://table-test.pages.dev"}
+        )
 
-        with patch("app.services.agent.table_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.table_builder.get_settings") as mock_settings, \
-             patch("app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy):
+        with (
+            patch(
+                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+            patch(
+                "app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy
+            ),
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(return_value=mock_response)
@@ -237,11 +251,17 @@ class TestBuildTableIntegration:
 
     @pytest.mark.asyncio
     async def test_build_api_failure(self):
-        with patch("app.services.agent.table_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.table_builder.get_settings") as mock_settings:
+        with (
+            patch(
+                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(side_effect=Exception("Rate limited"))
+            mock_client.messages.create = AsyncMock(
+                side_effect=Exception("Rate limited")
+            )
             mock_cls.return_value = mock_client
 
             result = await build_table("Test table")
@@ -255,8 +275,12 @@ class TestBuildTableIntegration:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text="I cannot create that table.")]
 
-        with patch("app.services.agent.table_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.table_builder.get_settings") as mock_settings:
+        with (
+            patch(
+                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(return_value=mock_response)
@@ -273,11 +297,19 @@ class TestBuildTableIntegration:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=mock_html)]
 
-        mock_deploy = AsyncMock(return_value={"success": False, "error": "No credentials"})
+        mock_deploy = AsyncMock(
+            return_value={"success": False, "error": "No credentials"}
+        )
 
-        with patch("app.services.agent.table_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.table_builder.get_settings") as mock_settings, \
-             patch("app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy):
+        with (
+            patch(
+                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+            patch(
+                "app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy
+            ),
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(return_value=mock_response)
@@ -299,8 +331,12 @@ class TestBuildTableIntegration:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=mock_html)]
 
-        with patch("app.services.agent.table_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.table_builder.get_settings") as mock_settings:
+        with (
+            patch(
+                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
             mock_client.messages.create = AsyncMock(return_value=mock_response)
@@ -319,16 +355,24 @@ class TestBuildTableIntegration:
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text=mock_html)]
 
-        mock_deploy = AsyncMock(return_value={"success": True, "url": "https://test.pages.dev"})
+        mock_deploy = AsyncMock(
+            return_value={"success": True, "url": "https://test.pages.dev"}
+        )
         captured_prompt = []
 
         async def capture_create(**kwargs):
             captured_prompt.append(kwargs["messages"][0]["content"])
             return mock_response
 
-        with patch("app.services.agent.table_builder.anthropic.AsyncAnthropic") as mock_cls, \
-             patch("app.services.agent.table_builder.get_settings") as mock_settings, \
-             patch("app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy):
+        with (
+            patch(
+                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
+            ) as mock_cls,
+            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+            patch(
+                "app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy
+            ),
+        ):
             mock_settings.return_value.anthropic_api_key = "test-key"
             mock_client = AsyncMock()
             mock_client.messages.create = capture_create
