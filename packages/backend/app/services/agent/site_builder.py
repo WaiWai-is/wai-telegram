@@ -27,22 +27,26 @@ logger = logging.getLogger(__name__)
 SITES_DIR = Path("/var/www/sites")
 DOMAIN = "wai.computer"
 
-SITE_GENERATION_PROMPT = """You are a web developer. Generate a complete, beautiful, modern single-page website based on this description:
+SITE_GENERATION_PROMPT = """Generate a stunning, modern single-page website.
 
-{description}
+Description: {description}
 
-Requirements:
-- Single HTML file with embedded CSS and JavaScript
-- Modern, clean, responsive design (mobile-first)
-- Beautiful typography and spacing
-- Use a professional color scheme that fits the content
-- Include all content from the description
-- Add appropriate icons using emoji (no external icon libraries)
-- The page must look professional and polished
-- Do NOT use any external CDN links, frameworks, or fonts — everything inline
-- Include a footer with "Made with Wai ✨"
+TECH STACK (use these CDNs):
+- Tailwind CSS: <script src="https://cdn.tailwindcss.com"></script>
+- Google Fonts: pick 1-2 fonts that fit the vibe
+- Lucide Icons: <script src="https://unpkg.com/lucide@latest"></script> then <i data-lucide="icon-name"></i>
+- Alpine.js: <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 
-Respond with ONLY the complete HTML code. No markdown, no explanation, just the HTML starting with <!DOCTYPE html>."""
+REQUIREMENTS:
+- Single HTML file, all content inline
+- Hero section with bold headline and CTA
+- At least 4 content sections (services/features, about, testimonials, contact)
+- Mobile-responsive (Tailwind handles this)
+- Smooth scroll, hover effects, scroll-triggered fade-in animations (Alpine.js + IntersectionObserver)
+- Professional color scheme fitting the business
+- Footer with "Made with Wai ✨"
+
+OUTPUT: Only the HTML starting with <!DOCTYPE html>. No markdown, no explanation."""
 
 
 @dataclass
@@ -128,8 +132,8 @@ async def build_site(description: str, name: str | None = None) -> SiteResult:
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=4096,
+            model="claude-sonnet-4-6-20250514",
+            max_tokens=16384,
             messages=[
                 {
                     "role": "user",
