@@ -245,6 +245,7 @@ async def _process_update(update: dict) -> None:
                 "• `/briefing` — утренний брифинг\n"
                 "• `/digest` — дайджест дня\n"
                 "• `/build описание` — создать и опубликовать сайт\n"
+                "• `/slides тема` — создать презентацию\n"
                 "• `/sites` — список твоих сайтов\n"
                 "• `/summarize текст` — резюмировать текст\n"
                 "• `/web запрос` — поиск в интернете\n"
@@ -270,6 +271,7 @@ async def _process_update(update: dict) -> None:
                 "• `/briefing` — morning briefing\n"
                 "• `/digest` — daily summary\n"
                 "• `/build description` — create & publish a website\n"
+                "• `/slides topic` — create a presentation\n"
                 "• `/sites` — list your sites\n"
                 "• `/summarize text` — summarize long text\n"
                 "• `/web query` — web search\n"
@@ -327,6 +329,46 @@ async def _process_update(update: dict) -> None:
             await send_telegram_message(
                 chat_id,
                 f"❌ Site generation failed: {result.error}\n\nTry again with a more detailed description.",
+            )
+        return
+
+    # Handle /slides command — generate presentation
+    if text.strip().startswith("/slides"):
+        description = text.strip().removeprefix("/slides").strip()
+        if not description or len(description) < 10:
+            await send_telegram_message(
+                chat_id,
+                "🎯 Usage: `/slides <topic>`\n\n"
+                "Example:\n"
+                "`/slides Pitch deck for AI startup. Problem: manual data entry. "
+                "Solution: AI agents. Market: $50B. Team: 3 co-founders.`\n\n"
+                "I'll generate a beautiful slide presentation!",
+            )
+            return
+
+        from app.services.agent.typing import send_typing_action
+
+        await send_typing_action(chat_id)
+
+        from app.services.agent.presentation_builder import build_presentation
+
+        name = (
+            description.split(".")[0][:40] if "." in description else description[:40]
+        )
+        result = await build_presentation(description, name=name)
+
+        if result.success:
+            await send_telegram_message(
+                chat_id,
+                f"🎯 *Presentation ready!*\n\n"
+                f"🌐 {result.url}\n"
+                f"📊 {result.slide_count} slides\n\n"
+                f"_Use arrow keys or swipe to navigate_",
+            )
+        else:
+            await send_telegram_message(
+                chat_id,
+                f"❌ Presentation failed: {result.error}",
             )
         return
 
