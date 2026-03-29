@@ -43,7 +43,7 @@ REQUIREMENTS:
 - Single HTML file, all content inline
 - Hero section with bold headline and CTA
 - At least 4 content sections (services/features, about, testimonials, contact)
-- ALL sections must be visible by default. Use Alpine x-intersect ONLY for adding animations, NOT for showing/hiding content. Example: x-data="{ shown: true }" x-intersect="shown = true" :class="shown ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'" class="transition duration-700"
+- ALL sections must be visible by default. Use CSS transitions for scroll animations via a small inline script with IntersectionObserver (NOT Alpine x-intersect). Sections start with opacity-0 translate-y-4 and get opacity-100 translate-y-0 when scrolled into view.
 - Mobile-responsive (Tailwind handles this)
 - Professional color scheme fitting the business
 - Footer with "Made with Wai ✨"
