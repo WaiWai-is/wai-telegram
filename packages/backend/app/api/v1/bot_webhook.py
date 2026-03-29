@@ -245,6 +245,7 @@ async def _process_update(update: dict) -> None:
                 "• `/briefing` — утренний брифинг\n"
                 "• `/digest` — дайджест дня\n"
                 "• `/build описание` — создать и опубликовать сайт\n"
+                "• `/edit изменения` — редактировать последний сайт\n"
                 "• `/slides тема` — создать презентацию\n"
                 "• `/table описание` — интерактивная таблица\n"
                 "• `/sites` — список твоих сайтов\n"
@@ -272,6 +273,7 @@ async def _process_update(update: dict) -> None:
                 "• `/briefing` — morning briefing\n"
                 "• `/digest` — daily summary\n"
                 "• `/build description` — create & publish a website\n"
+                "• `/edit changes` — edit the last built site\n"
                 "• `/slides topic` — create a presentation\n"
                 "• `/table description` — interactive data table\n"
                 "• `/sites` — list your sites\n"
@@ -311,7 +313,7 @@ async def _process_update(update: dict) -> None:
 
         await send_typing_action(chat_id)
 
-        from app.services.agent.site_builder import build_site
+        from app.services.agent.site_builder import build_site, store_site
 
         # Extract name from first sentence or first few words
         name = (
@@ -320,17 +322,70 @@ async def _process_update(update: dict) -> None:
         result = await build_site(description, name=name)
 
         if result.success:
+            # Store HTML for later /edit usage
+            if result.html:
+                store_site(chat_id, result.slug, result.html)
             await send_telegram_message(
                 chat_id,
                 f"🚀 *Site deployed!*\n\n"
                 f"🌐 URL: {result.url}\n"
                 f"📁 Slug: `{result.slug}`\n\n"
-                f"_Edit with `/build` again or delete with `/delete-site {result.slug}`_",
+                f"_Edit with `/edit <changes>` or delete with `/delete-site {result.slug}`_",
             )
         else:
             await send_telegram_message(
                 chat_id,
                 f"❌ Site generation failed: {result.error}\n\nTry again with a more detailed description.",
+            )
+        return
+
+    # Handle /edit command — iterative site refinement
+    if text.strip().startswith("/edit"):
+        instruction = text.strip().removeprefix("/edit").strip()
+        if not instruction:
+            await send_telegram_message(
+                chat_id,
+                "✏️ Usage: `/edit <changes>`\n\n"
+                "Example:\n"
+                "`/edit add a testimonials section with 3 reviews`\n"
+                "`/edit make the hero section darker`\n"
+                "`/edit добавь секцию с отзывами`\n\n"
+                "_First build a site with `/build`, then refine it with `/edit`._",
+            )
+            return
+
+        from app.services.agent.site_builder import edit_site
+
+        from app.services.agent.typing import send_typing_action
+
+        await send_typing_action(chat_id)
+
+        result = await edit_site(chat_id, instruction)
+
+        if result.success:
+            await send_telegram_message(
+                chat_id,
+                f"✏️ *Site updated!*\n\n"
+                f"🌐 URL: {result.url}\n"
+                f"📁 Slug: `{result.slug}`\n\n"
+                f"_Edit again with `/edit <changes>`_",
+            )
+        elif result.error == "no_previous_site":
+            lang = _detect_language(instruction)
+            if lang == "ru":
+                await send_telegram_message(
+                    chat_id,
+                    "❌ Сначала создайте сайт с помощью `/build <описание>`",
+                )
+            else:
+                await send_telegram_message(
+                    chat_id,
+                    "❌ Build a site first with `/build <description>`",
+                )
+        else:
+            await send_telegram_message(
+                chat_id,
+                f"❌ Edit failed: {result.error}\n\nTry again with a different instruction.",
             )
         return
 
