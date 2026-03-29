@@ -31,7 +31,6 @@ class TestGetScreenshotUrl:
         call_kwargs = mock_client.get.call_args
         assert call_kwargs[1]["params"]["url"] == "https://test-site.wai.computer"
         assert call_kwargs[1]["params"]["screenshot"] == "true"
-        assert call_kwargs[1]["params"]["type"] == "jpeg"
 
     async def test_returns_none_on_non_200(self):
         mock_response = MagicMock()
@@ -138,7 +137,7 @@ class TestGetScreenshotUrl:
         params = mock_client.get.call_args[1]["params"]
         assert params["viewport.width"] == "1280"
         assert params["viewport.height"] == "720"
-        assert params["embed"] == "screenshot.url"
+        assert "embed" not in params
 
     async def test_returns_none_on_partial_data_structure(self):
         """Microlink returns data but no screenshot key at all."""
