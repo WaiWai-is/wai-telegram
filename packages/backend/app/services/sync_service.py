@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telethon.tl.types import (
     Channel,
     Chat,
+    InputPeerChannel,
+    InputPeerChat,
+    InputPeerUser,
     Message,
     MessageMediaDocument,
     MessageMediaPhoto,
@@ -92,6 +95,23 @@ def _get_media_type(message: Message) -> str | None:
                 return "audio"
         return "document"
     return "other"
+
+
+def _build_peer(chat: "TelegramChat"):
+    """Build Telethon InputPeer from stored chat data using access_hash.
+
+    Passing a bare numeric ID fails for private users/bots when Telethon
+    doesn't have the entity cached in its session. Using InputPeer with the
+    stored access_hash resolves the entity correctly without a cache lookup.
+    """
+    if chat.access_hash is not None:
+        if chat.chat_type == ChatType.PRIVATE:
+            return InputPeerUser(chat.telegram_chat_id, chat.access_hash)
+        if chat.chat_type in (ChatType.SUPERGROUP, ChatType.CHANNEL):
+            return InputPeerChannel(chat.telegram_chat_id, chat.access_hash)
+    if chat.chat_type == ChatType.GROUP:
+        return InputPeerChat(chat.telegram_chat_id)
+    return chat.telegram_chat_id
 
 
 async def _jittered_sleep(base: float, jitter: float) -> None:
@@ -243,7 +263,7 @@ async def sync_messages(
     total_reported = False
 
     try:
-        iterator = client.iter_messages(chat.telegram_chat_id, **iter_kwargs)
+        iterator = client.iter_messages(_build_peer(chat), **iter_kwargs)
         async for message in iterator:
             messages_seen += 1
 
