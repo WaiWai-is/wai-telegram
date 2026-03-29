@@ -55,6 +55,7 @@ MODEL_MAP: dict[Intent, str] = {
     Intent.DIGEST: "claude-haiku-4-5-20251001",
     Intent.ACTION: "claude-haiku-4-5-20251001",
     Intent.BUILD: "claude-haiku-4-5-20251001",
+    Intent.EDIT: "claude-haiku-4-5-20251001",
     Intent.COACH: "claude-haiku-4-5-20251001",
     Intent.CHAT: "claude-haiku-4-5-20251001",
 }

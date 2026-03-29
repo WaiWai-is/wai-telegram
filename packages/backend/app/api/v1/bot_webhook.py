@@ -942,7 +942,7 @@ async def _process_update(update: dict) -> None:
     # Check if this is an edit intent and user has a stored site
     from app.services.agent.router import classify_intent, Intent
 
-    intent = classify_intent(text)
+    intent = await classify_intent(text)
     if intent == Intent.EDIT:
         from app.services.agent.site_builder import edit_site, get_stored_site
 

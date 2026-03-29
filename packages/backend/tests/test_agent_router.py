@@ -172,6 +172,7 @@ class TestIntentEnum:
             "digest",
             "action",
             "build",
+            "edit",
             "coach",
             "chat",
         }
