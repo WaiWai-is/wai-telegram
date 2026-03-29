@@ -138,16 +138,10 @@ async def _process_update(update: dict) -> None:
                 )
                 from app.services.agent.user_resolver import resolve_user_id
 
-                user_id = await resolve_user_id(from_user.get("id", 0))
-                if not user_id:
-                    await send_telegram_message(
-                        chat_id, "❌ User not found. Send /start first."
-                    )
-                    return
-
                 from app.core.database import async_session_factory
 
                 async with async_session_factory() as db:
+                    user_id = await resolve_user_id(db, from_user.get("id", 0))
                     agent = await create_agent_from_description(
                         db, user_id, chat_id, arg
                     )
@@ -180,60 +174,52 @@ async def _process_update(update: dict) -> None:
                 list_user_agents,
             )
             from app.services.agent.user_resolver import resolve_user_id
+            from app.core.database import async_session_factory
 
-            user_id = await resolve_user_id(from_user.get("id", 0))
-            if user_id:
-                from app.core.database import async_session_factory
-
-                async with async_session_factory() as db:
-                    agents = await list_user_agents(db, user_id)
-                    await send_telegram_message(chat_id, format_agents_list(agents))
-            else:
-                await send_telegram_message(chat_id, "🤖 No agents yet.")
+            async with async_session_factory() as db:
+                user_id = await resolve_user_id(db, from_user.get("id", 0))
+                agents = await list_user_agents(db, user_id)
+                await send_telegram_message(chat_id, format_agents_list(agents))
             return
 
         if subcommand in ("delete", "run") and arg:
             from app.services.agent.user_resolver import resolve_user_id
+            from app.core.database import async_session_factory
+            from app.models.digital_agent import DigitalAgent
 
-            user_id = await resolve_user_id(from_user.get("id", 0))
-            if user_id:
-                from app.core.database import async_session_factory
-                from app.models.digital_agent import DigitalAgent
+            from sqlalchemy import select
 
-                from sqlalchemy import select
-
-                async with async_session_factory() as db:
-                    result = await db.execute(
-                        select(DigitalAgent).where(
-                            DigitalAgent.user_id == user_id,
-                            DigitalAgent.status != "deleted",
-                        )
+            async with async_session_factory() as db:
+                user_id = await resolve_user_id(db, from_user.get("id", 0))
+                result = await db.execute(
+                    select(DigitalAgent).where(
+                        DigitalAgent.user_id == user_id,
+                        DigitalAgent.status != "deleted",
                     )
-                    agents = result.scalars().all()
-                    target = next(
-                        (a for a in agents if str(a.id).startswith(arg.strip())),
-                        None,
+                )
+                agents = result.scalars().all()
+                target = next(
+                    (a for a in agents if str(a.id).startswith(arg.strip())),
+                    None,
+                )
+                if not target:
+                    await send_telegram_message(chat_id, f"❌ Agent `{arg}` not found.")
+                    return
+
+                if subcommand == "delete":
+                    from app.services.agent.digital_agents import delete_agent
+
+                    await delete_agent(db, user_id, target.id)
+                    await send_telegram_message(
+                        chat_id, f"✅ Agent *{target.name}* deleted."
                     )
-                    if not target:
-                        await send_telegram_message(
-                            chat_id, f"❌ Agent `{arg}` not found."
-                        )
-                        return
+                else:
+                    from app.tasks.agent_tasks import execute_agent
 
-                    if subcommand == "delete":
-                        from app.services.agent.digital_agents import delete_agent
-
-                        await delete_agent(db, user_id, target.id)
-                        await send_telegram_message(
-                            chat_id, f"✅ Agent *{target.name}* deleted."
-                        )
-                    else:
-                        from app.tasks.agent_tasks import execute_agent
-
-                        execute_agent.delay(str(target.id))
-                        await send_telegram_message(
-                            chat_id, f"🚀 Running *{target.name}*..."
-                        )
+                    execute_agent.delay(str(target.id))
+                    await send_telegram_message(
+                        chat_id, f"🚀 Running *{target.name}*..."
+                    )
             return
 
         await send_telegram_message(
