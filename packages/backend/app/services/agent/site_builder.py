@@ -27,8 +27,19 @@ logger = logging.getLogger(__name__)
 SITES_DIR = Path("/var/www/sites")
 DOMAIN = "wai.computer"
 
-# In-memory store of last generated HTML per chat_id → (slug, html)
-_site_store: dict[int, tuple[str, str]] = {}
+_redis_client = None
+_SITE_STORE_TTL = 86400 * 7  # 7 days
+
+
+def _get_redis():
+    """Get Redis client for site store (survives server restarts)."""
+    global _redis_client
+    if _redis_client is None:
+        import redis
+
+        _redis_client = redis.from_url(get_settings().redis_url)
+    return _redis_client
+
 
 SITE_EDIT_PROMPT = (
     "Here is the current HTML of a website. Apply the following changes: {instruction}. "
@@ -249,13 +260,30 @@ async def build_site(description: str, name: str | None = None) -> SiteResult:
 
 
 def store_site(chat_id: int, slug: str, html: str) -> None:
-    """Store last generated HTML for a chat (for /edit reuse)."""
-    _site_store[chat_id] = (slug, html)
+    """Store last generated HTML for a chat in Redis (survives restarts)."""
+    import json
+
+    try:
+        r = _get_redis()
+        data = json.dumps({"slug": slug, "html": html})
+        r.setex(f"site:{chat_id}", _SITE_STORE_TTL, data)
+    except Exception as e:
+        logger.warning(f"Failed to store site in Redis: {e}")
 
 
 def get_stored_site(chat_id: int) -> tuple[str, str] | None:
     """Return (slug, html) for the last site built by this chat, or None."""
-    return _site_store.get(chat_id)
+    import json
+
+    try:
+        r = _get_redis()
+        data = r.get(f"site:{chat_id}")
+        if data:
+            parsed = json.loads(data)
+            return (parsed["slug"], parsed["html"])
+    except Exception as e:
+        logger.warning(f"Failed to get site from Redis: {e}")
+    return None
 
 
 async def edit_site(chat_id: int, instruction: str) -> SiteResult:

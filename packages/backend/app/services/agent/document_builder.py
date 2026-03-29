@@ -18,8 +18,19 @@ from app.services.agent.site_builder import generate_slug
 
 logger = logging.getLogger(__name__)
 
-# In-memory store of last generated HTML per chat_id → (slug, html)
-_doc_store: dict[int, tuple[str, str]] = {}
+_redis_client = None
+_DOC_STORE_TTL = 86400 * 7
+
+
+def _get_redis():
+    """Get Redis client for document store (survives server restarts)."""
+    global _redis_client
+    if _redis_client is None:
+        import redis
+
+        _redis_client = redis.from_url(get_settings().redis_url)
+    return _redis_client
+
 
 DOCUMENT_EDIT_PROMPT = (
     "Here is the current HTML of a document. Apply the following changes: {instruction}. "
@@ -298,13 +309,30 @@ async def build_document(description: str, name: str | None = None) -> DocumentR
 
 
 def store_document(chat_id: int, slug: str, html: str) -> None:
-    """Store last generated HTML for a chat (for /doc-edit reuse)."""
-    _doc_store[chat_id] = (slug, html)
+    """Store last generated HTML for a chat in Redis."""
+    import json
+
+    try:
+        r = _get_redis()
+        data = json.dumps({"slug": slug, "html": html})
+        r.setex(f"doc:{chat_id}", _DOC_STORE_TTL, data)
+    except Exception as e:
+        logger.warning(f"Failed to store document in Redis: {e}")
 
 
 def get_stored_document(chat_id: int) -> tuple[str, str] | None:
     """Return (slug, html) for the last document built by this chat, or None."""
-    return _doc_store.get(chat_id)
+    import json
+
+    try:
+        r = _get_redis()
+        data = r.get(f"doc:{chat_id}")
+        if data:
+            parsed = json.loads(data)
+            return (parsed["slug"], parsed["html"])
+    except Exception as e:
+        logger.warning(f"Failed to get document from Redis: {e}")
+    return None
 
 
 async def edit_document(chat_id: int, instruction: str) -> DocumentResult:
