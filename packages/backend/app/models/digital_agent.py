@@ -33,7 +33,9 @@ class DigitalAgent(Base):
     cron_expression: Mapped[str | None] = mapped_column(String(50))
 
     # State
-    status: Mapped[str] = mapped_column(String(20), default="active")
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active"
+    )
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     run_count: Mapped[int] = mapped_column(Integer, default=0)
