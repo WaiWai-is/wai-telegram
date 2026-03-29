@@ -9,9 +9,7 @@ Instead of a single API call, runs a full Claude Code-like agent that:
 This is the "Lovable from Telegram" experience.
 """
 
-import asyncio
 import logging
-import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -85,9 +83,7 @@ async def build_site_with_agent(
             if dist_dir.exists():
                 output_dir = dist_dir
 
-        logger.info(
-            f"Agent built site: {len(files_created)} files in {work_dir}"
-        )
+        logger.info(f"Agent built site: {len(files_created)} files in {work_dir}")
 
         return {
             "success": True,
