@@ -49,4 +49,10 @@ async def send_telegram_message(
                     "parse_mode": parse_mode,
                 },
             )
+            # If Markdown/HTML parsing fails, retry as plain text
+            if resp.status_code == 400 and parse_mode:
+                resp = await client.post(
+                    url,
+                    json={"chat_id": chat_id, "text": chunk},
+                )
             resp.raise_for_status()
