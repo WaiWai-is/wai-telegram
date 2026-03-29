@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.services.agent.loop import AgentContext, AgentResult, run_agent
-from app.services.bot_service import send_telegram_message
+from app.services.bot_service import send_telegram_message, send_telegram_photo
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -443,13 +443,34 @@ async def _process_update(update: dict) -> None:
             # Store HTML for later /edit usage
             if result.html:
                 store_site(chat_id, result.slug, result.html)
-            await send_telegram_message(
-                chat_id,
-                f"🚀 *Site deployed!*\n\n"
-                f"🌐 URL: {result.url}\n"
-                f"📁 Slug: `{result.slug}`\n\n"
-                f"_Edit with `/edit <changes>` or delete with `/delete-site {result.slug}`_",
+
+            # Try to send a screenshot preview
+            caption = (
+                f"Site deployed!\n\n"
+                f"URL: {result.url}\n"
+                f"Slug: {result.slug}\n\n"
+                f"Edit with /edit <changes> or delete with /delete-site {result.slug}"
             )
+            screenshot_sent = False
+            try:
+                from app.services.agent.screenshot_service import get_screenshot_url
+
+                screenshot_url = await get_screenshot_url(result.url)
+                if screenshot_url:
+                    screenshot_sent = await send_telegram_photo(
+                        chat_id, screenshot_url, caption=caption
+                    )
+            except Exception as e:
+                logger.debug(f"Screenshot preview failed: {e}")
+
+            if not screenshot_sent:
+                await send_telegram_message(
+                    chat_id,
+                    f"🚀 *Site deployed!*\n\n"
+                    f"🌐 URL: {result.url}\n"
+                    f"📁 Slug: `{result.slug}`\n\n"
+                    f"_Edit with `/edit <changes>` or delete with `/delete-site {result.slug}`_",
+                )
         else:
             await send_telegram_message(
                 chat_id,
@@ -481,13 +502,33 @@ async def _process_update(update: dict) -> None:
         result = await edit_site(chat_id, instruction)
 
         if result.success:
-            await send_telegram_message(
-                chat_id,
-                f"✏️ *Site updated!*\n\n"
-                f"🌐 URL: {result.url}\n"
-                f"📁 Slug: `{result.slug}`\n\n"
-                f"_Edit again with `/edit <changes>`_",
+            # Try to send a screenshot preview
+            caption = (
+                f"Site updated!\n\n"
+                f"URL: {result.url}\n"
+                f"Slug: {result.slug}\n\n"
+                f"Edit again with /edit <changes>"
             )
+            screenshot_sent = False
+            try:
+                from app.services.agent.screenshot_service import get_screenshot_url
+
+                screenshot_url = await get_screenshot_url(result.url)
+                if screenshot_url:
+                    screenshot_sent = await send_telegram_photo(
+                        chat_id, screenshot_url, caption=caption
+                    )
+            except Exception as e:
+                logger.debug(f"Screenshot preview failed: {e}")
+
+            if not screenshot_sent:
+                await send_telegram_message(
+                    chat_id,
+                    f"✏️ *Site updated!*\n\n"
+                    f"🌐 URL: {result.url}\n"
+                    f"📁 Slug: `{result.slug}`\n\n"
+                    f"_Edit again with `/edit <changes>`_",
+                )
         elif result.error == "no_previous_site":
             lang = _detect_language(instruction)
             if lang == "ru":

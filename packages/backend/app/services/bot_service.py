@@ -56,3 +56,32 @@ async def send_telegram_message(
                     json={"chat_id": chat_id, "text": chunk},
                 )
             resp.raise_for_status()
+
+
+async def send_telegram_photo(chat_id: int, photo_url: str, caption: str = "") -> bool:
+    """Send a photo via Telegram Bot API.
+
+    No parse_mode — captions are plain text to avoid Markdown 400 errors.
+    Returns True on success, False if the photo send failed.
+    """
+    if not settings.telegram_bot_token:
+        raise ValueError("TELEGRAM_BOT_TOKEN is not configured")
+
+    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendPhoto"
+    payload: dict = {
+        "chat_id": chat_id,
+        "photo": photo_url,
+    }
+    if caption:
+        payload["caption"] = caption
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code == 200:
+                return True
+            logger.warning(f"sendPhoto failed ({resp.status_code}): {resp.text[:200]}")
+            return False
+    except Exception as e:
+        logger.warning(f"sendPhoto error: {e}")
+        return False
