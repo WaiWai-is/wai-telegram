@@ -2,10 +2,6 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
-)
-
 try:
     import sentry_sdk
 except ImportError:
@@ -23,6 +19,9 @@ from app.core.database import async_session_factory, engine
 from app.core.limiter import limiter
 from app.models.sync_job import SyncJob, SyncStatus
 
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
+)
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
