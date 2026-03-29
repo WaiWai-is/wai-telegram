@@ -246,6 +246,7 @@ async def _process_update(update: dict) -> None:
                 "• `/digest` — дайджест дня\n"
                 "• `/build описание` — создать и опубликовать сайт\n"
                 "• `/slides тема` — создать презентацию\n"
+                "• `/table описание` — интерактивная таблица\n"
                 "• `/sites` — список твоих сайтов\n"
                 "• `/summarize текст` — резюмировать текст\n"
                 "• `/web запрос` — поиск в интернете\n"
@@ -272,6 +273,7 @@ async def _process_update(update: dict) -> None:
                 "• `/digest` — daily summary\n"
                 "• `/build description` — create & publish a website\n"
                 "• `/slides topic` — create a presentation\n"
+                "• `/table description` — interactive data table\n"
                 "• `/sites` — list your sites\n"
                 "• `/summarize text` — summarize long text\n"
                 "• `/web query` — web search\n"
@@ -369,6 +371,49 @@ async def _process_update(update: dict) -> None:
             await send_telegram_message(
                 chat_id,
                 f"❌ Presentation failed: {result.error}",
+            )
+        return
+
+    # Handle /table command — generate interactive data table
+    if text.strip().startswith("/table"):
+        description = text.strip().removeprefix("/table").strip()
+        if not description or len(description) < 10:
+            await send_telegram_message(
+                chat_id,
+                "📊 Usage: `/table <description>`\n\n"
+                "Examples:\n"
+                "• `/table Compare CRM: Salesforce, HubSpot, Pipedrive, Bitrix24`\n"
+                "• `/table Top 10 programming languages 2026: popularity, salary, difficulty`\n\n"
+                "I'll create a sortable, filterable table with real data!",
+            )
+            return
+
+        from app.services.agent.typing import send_typing_action
+
+        await send_typing_action(chat_id)
+
+        from app.services.agent.table_builder import build_table
+
+        name = (
+            description.split(".")[0][:40] if "." in description else description[:40]
+        )
+        result = await build_table(description, name=name)
+
+        if result.success:
+            dims = ""
+            if result.rows and result.columns:
+                dims = f"📏 {result.rows} rows x {result.columns} columns\n"
+            await send_telegram_message(
+                chat_id,
+                f"📊 *Table ready!*\n\n"
+                f"🌐 {result.url}\n"
+                f"{dims}\n"
+                f"_Sortable, filterable, CSV export_",
+            )
+        else:
+            await send_telegram_message(
+                chat_id,
+                f"❌ Table failed: {result.error}",
             )
         return
 
