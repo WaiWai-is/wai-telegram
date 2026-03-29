@@ -114,6 +114,19 @@ async def build_presentation(
                     error="Failed to generate valid presentation HTML",
                 )
 
+        # Validate before deploy
+        from app.services.agent.html_validator import validate_html
+
+        is_valid, validation_error = validate_html(html, "presentation")
+        if not is_valid:
+            logger.error(f"Presentation validation failed: {validation_error}")
+            return PresentationResult(
+                slug=slug,
+                url="",
+                success=False,
+                error=f"Quality check failed: {validation_error}",
+            )
+
         # Count slides
         slide_count = html.lower().count("<section")
 

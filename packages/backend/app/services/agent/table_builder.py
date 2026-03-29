@@ -113,6 +113,19 @@ async def build_table(description: str, name: str | None = None) -> TableResult:
                     error="Failed to generate valid table HTML",
                 )
 
+        # Validate before deploy
+        from app.services.agent.html_validator import validate_html
+
+        is_valid, validation_error = validate_html(html, "table")
+        if not is_valid:
+            logger.error(f"Table validation failed: {validation_error}")
+            return TableResult(
+                slug=slug,
+                url="",
+                success=False,
+                error=f"Quality check failed: {validation_error}",
+            )
+
         # Count rows and columns
         rows = len(re.findall(r"headerName", html))
         columns = rows  # headerName count = column count

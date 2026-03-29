@@ -27,6 +27,15 @@ logger = logging.getLogger(__name__)
 SITES_DIR = Path("/var/www/sites")
 DOMAIN = "wai.computer"
 
+# In-memory store of last generated HTML per chat_id → (slug, html)
+_site_store: dict[int, tuple[str, str]] = {}
+
+SITE_EDIT_PROMPT = (
+    "Here is the current HTML of a website. Apply the following changes: {instruction}. "
+    "Return the COMPLETE updated HTML. Do not explain, just output the full HTML "
+    "starting with <!DOCTYPE html>."
+)
+
 SITE_GENERATION_PROMPT = """Generate a stunning, modern single-page website.
 
 Description: {description}
@@ -59,6 +68,7 @@ class SiteResult:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     success: bool = True
     error: str | None = None
+    html: str | None = None
 
 
 def generate_slug(name: str) -> str:
@@ -172,6 +182,20 @@ async def build_site(description: str, name: str | None = None) -> SiteResult:
                     error="Failed to generate valid HTML",
                 )
 
+        # Validate before deploy
+        from app.services.agent.html_validator import validate_html
+
+        is_valid, validation_error = validate_html(html, "site")
+        if not is_valid:
+            logger.error(f"Site validation failed: {validation_error}")
+            return SiteResult(
+                slug=slug,
+                url="",
+                path="",
+                success=False,
+                error=f"Quality check failed: {validation_error}",
+            )
+
     except Exception as e:
         logger.error(f"Site generation failed: {e}")
         return SiteResult(
@@ -195,7 +219,123 @@ async def build_site(description: str, name: str | None = None) -> SiteResult:
             slug=slug,
             url=url,
             path=url,
+            html=html,
         )
+    else:
+        return SiteResult(
+            slug=slug,
+            url="",
+            path="",
+            success=False,
+            error=deploy_result.get("error", "Deploy failed"),
+        )
+
+
+def store_site(chat_id: int, slug: str, html: str) -> None:
+    """Store last generated HTML for a chat (for /edit reuse)."""
+    _site_store[chat_id] = (slug, html)
+
+
+def get_stored_site(chat_id: int) -> tuple[str, str] | None:
+    """Return (slug, html) for the last site built by this chat, or None."""
+    return _site_store.get(chat_id)
+
+
+async def edit_site(chat_id: int, instruction: str) -> SiteResult:
+    """Edit the last generated site for a chat and redeploy it.
+
+    Fetches stored HTML, sends it to Claude with the edit instruction,
+    then redeploys to the same slug.
+    """
+    stored = get_stored_site(chat_id)
+    if stored is None:
+        return SiteResult(
+            slug="",
+            url="",
+            path="",
+            success=False,
+            error="no_previous_site",
+        )
+
+    slug, current_html = stored
+    settings = get_settings()
+
+    try:
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=16384,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        SITE_EDIT_PROMPT.format(instruction=instruction)
+                        + "\n\n"
+                        + current_html
+                    ),
+                }
+            ],
+        )
+        html = response.content[0].text.strip()
+
+        # Strip markdown code blocks
+        if html.startswith("```"):
+            html = re.sub(r"^```\w*\n?", "", html)
+            html = re.sub(r"\n?```$", "", html)
+            html = html.strip()
+
+        # Extract HTML if wrapped in text
+        if not html.startswith("<!DOCTYPE") and not html.startswith("<html"):
+            match = re.search(
+                r"(<!DOCTYPE html.*</html>)", html, re.DOTALL | re.IGNORECASE
+            )
+            if match:
+                html = match.group(1)
+            else:
+                logger.error(f"Invalid HTML from edit (first 200 chars): {html[:200]}")
+                return SiteResult(
+                    slug=slug,
+                    url="",
+                    path="",
+                    success=False,
+                    error="Failed to generate valid HTML from edit",
+                )
+
+        # Validate before deploy
+        from app.services.agent.html_validator import validate_html
+
+        is_valid, validation_error = validate_html(html, "site")
+        if not is_valid:
+            logger.error(f"Edited site validation failed: {validation_error}")
+            return SiteResult(
+                slug=slug,
+                url="",
+                path="",
+                success=False,
+                error=f"Quality check failed: {validation_error}",
+            )
+
+    except Exception as e:
+        logger.error(f"Site edit generation failed: {e}")
+        return SiteResult(
+            slug=slug,
+            url="",
+            path="",
+            success=False,
+            error=f"AI edit failed: {e}",
+        )
+
+    # Redeploy to the same slug
+    from app.services.agent.cloudflare_deploy import deploy_site_to_pages
+
+    deploy_result = await deploy_site_to_pages(slug, html)
+
+    if deploy_result["success"]:
+        # Update stored HTML
+        store_site(chat_id, slug, html)
+        url = deploy_result["url"]
+        logger.info(f"Site edited and redeployed: {url}")
+        return SiteResult(slug=slug, url=url, path=url)
     else:
         return SiteResult(
             slug=slug,
