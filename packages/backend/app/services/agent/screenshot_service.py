@@ -26,10 +26,8 @@ async def get_screenshot_url(site_url: str) -> str | None:
                 params={
                     "url": site_url,
                     "screenshot": "true",
-                    "embed": "screenshot.url",
                     "viewport.width": "1280",
                     "viewport.height": "720",
-                    "type": "jpeg",
                 },
             )
             if resp.status_code != 200:
