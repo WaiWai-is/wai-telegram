@@ -31,7 +31,10 @@ async def deploy_to_cloudflare_pages(slug: str, html_content: str) -> dict:
             index_path.write_text(html_content, encoding="utf-8")
 
             proc = await asyncio.create_subprocess_exec(
-                "wrangler", "pages", "deploy", tmpdir,
+                "wrangler",
+                "pages",
+                "deploy",
+                tmpdir,
                 f"--project-name={PROJECT_NAME}",
                 "--commit-dirty=true",
                 stdout=asyncio.subprocess.PIPE,
