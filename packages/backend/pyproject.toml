@@ -27,6 +27,7 @@ dependencies = [
     "slowapi>=0.1.9",  # Rate limiting
     "sentry-sdk[fastapi]>=2.0.0",  # Error tracking
     "deepgram-sdk>=6.0.0",  # Voice transcription (v6 API)
+    "croniter>=2.0.0",  # Cron expression parsing for digital agents
 ]
 
 [project.optional-dependencies]

@@ -1,6 +1,7 @@
 from app.models.api_key import ApiKey
 from app.models.chat import TelegramChat
 from app.models.digest import DailyDigest
+from app.models.digital_agent import DigitalAgent
 from app.models.message import TelegramMessage
 from app.models.session import TelegramSession
 from app.models.settings import UserSettings
@@ -16,4 +17,5 @@ __all__ = [
     "TelegramMessage",
     "SyncJob",
     "DailyDigest",
+    "DigitalAgent",
 ]

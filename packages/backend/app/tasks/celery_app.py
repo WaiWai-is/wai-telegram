@@ -8,7 +8,7 @@ celery_app = Celery(
     "wai_telegram",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.sync_tasks", "app.tasks.digest_tasks"],
+    include=["app.tasks.sync_tasks", "app.tasks.digest_tasks", "app.tasks.agent_tasks"],
 )
 
 celery_app.conf.update(
@@ -36,5 +36,9 @@ celery_app.conf.beat_schedule = {
     "reap-stale-sync-jobs": {
         "task": "app.tasks.sync_tasks.reap_stale_sync_jobs",
         "schedule": 120,  # Every 2 minutes
+    },
+    "run-due-agents": {
+        "task": "app.tasks.agent_tasks.run_due_agents",
+        "schedule": 60,  # Every minute
     },
 }

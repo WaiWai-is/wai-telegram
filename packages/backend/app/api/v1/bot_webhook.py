@@ -122,6 +122,134 @@ async def _process_update(update: dict) -> None:
         await send_telegram_message(chat_id, get_rate_limit_message(lang))
         return
 
+    # Handle /agent command — create and manage digital agents
+    if text.strip().startswith("/agent"):
+        parts = text.strip().split(maxsplit=2)
+        subcommand = parts[1] if len(parts) > 1 else "help"
+        arg = parts[2] if len(parts) > 2 else ""
+
+        if subcommand == "create" and arg:
+            from app.services.agent.typing import send_typing_action
+
+            await send_typing_action(chat_id)
+            try:
+                from app.services.agent.digital_agents import (
+                    create_agent_from_description,
+                )
+                from app.services.agent.user_resolver import resolve_user_id
+
+                user_id = await resolve_user_id(from_user.get("id", 0))
+                if not user_id:
+                    await send_telegram_message(
+                        chat_id, "❌ User not found. Send /start first."
+                    )
+                    return
+
+                from app.core.database import async_session_factory
+
+                async with async_session_factory() as db:
+                    agent = await create_agent_from_description(
+                        db, user_id, chat_id, arg
+                    )
+
+                schedule_info = (
+                    f"⏰ `{agent.cron_expression}`"
+                    if agent.cron_expression
+                    else "🔧 Manual"
+                )
+                await send_telegram_message(
+                    chat_id,
+                    f"🤖 *Agent created!*\n\n"
+                    f"📋 *{agent.name}*\n"
+                    f"{schedule_info}\n"
+                    f"🛠️ Tools: {agent.tools or 'none'}\n"
+                    f"ID: `{str(agent.id)[:8]}`\n\n"
+                    f"_/agent list — see all agents_\n"
+                    f"_/agent run {str(agent.id)[:8]} — trigger now_",
+                )
+            except ValueError as e:
+                await send_telegram_message(chat_id, f"❌ {e}")
+            except Exception as e:
+                logger.error(f"Agent creation failed: {e}", exc_info=True)
+                await send_telegram_message(chat_id, f"❌ Failed to create agent: {e}")
+            return
+
+        if subcommand == "list":
+            from app.services.agent.digital_agents import (
+                format_agents_list,
+                list_user_agents,
+            )
+            from app.services.agent.user_resolver import resolve_user_id
+
+            user_id = await resolve_user_id(from_user.get("id", 0))
+            if user_id:
+                from app.core.database import async_session_factory
+
+                async with async_session_factory() as db:
+                    agents = await list_user_agents(db, user_id)
+                    await send_telegram_message(chat_id, format_agents_list(agents))
+            else:
+                await send_telegram_message(chat_id, "🤖 No agents yet.")
+            return
+
+        if subcommand in ("delete", "run") and arg:
+            from app.services.agent.user_resolver import resolve_user_id
+
+            user_id = await resolve_user_id(from_user.get("id", 0))
+            if user_id:
+                from app.core.database import async_session_factory
+                from app.models.digital_agent import DigitalAgent
+
+                from sqlalchemy import select
+
+                async with async_session_factory() as db:
+                    result = await db.execute(
+                        select(DigitalAgent).where(
+                            DigitalAgent.user_id == user_id,
+                            DigitalAgent.status != "deleted",
+                        )
+                    )
+                    agents = result.scalars().all()
+                    target = next(
+                        (a for a in agents if str(a.id).startswith(arg.strip())),
+                        None,
+                    )
+                    if not target:
+                        await send_telegram_message(
+                            chat_id, f"❌ Agent `{arg}` not found."
+                        )
+                        return
+
+                    if subcommand == "delete":
+                        from app.services.agent.digital_agents import delete_agent
+
+                        await delete_agent(db, user_id, target.id)
+                        await send_telegram_message(
+                            chat_id, f"✅ Agent *{target.name}* deleted."
+                        )
+                    else:
+                        from app.tasks.agent_tasks import execute_agent
+
+                        execute_agent.delay(str(target.id))
+                        await send_telegram_message(
+                            chat_id, f"🚀 Running *{target.name}*..."
+                        )
+            return
+
+        await send_telegram_message(
+            chat_id,
+            "🤖 *Digital Agents*\n\n"
+            "Create AI agents that work for you on autopilot:\n\n"
+            "`/agent create <description>` — create agent\n"
+            "`/agent list` — your agents\n"
+            "`/agent run <id>` — trigger manually\n"
+            "`/agent delete <id>` — remove\n\n"
+            "Examples:\n"
+            "• `/agent create Every morning check HackerNews for top AI articles`\n"
+            "• `/agent create Каждый вечер присылай итог моих чатов за день`",
+        )
+        return
+
     # Handle /feedback command
     if text.strip().startswith("/feedback"):
         feedback_text = text.strip().removeprefix("/feedback").strip()
@@ -248,6 +376,8 @@ async def _process_update(update: dict) -> None:
                 "• `/edit изменения` — редактировать последний сайт\n"
                 "• `/slides тема` — создать презентацию\n"
                 "• `/table описание` — интерактивная таблица\n"
+                "• `/doc описание` — профессиональный документ\n"
+                "• `/doc-edit изменения` — редактировать последний документ\n"
                 "• `/sites` — список твоих сайтов\n"
                 "• `/summarize текст` — резюмировать текст\n"
                 "• `/web запрос` — поиск в интернете\n"
@@ -276,6 +406,8 @@ async def _process_update(update: dict) -> None:
                 "• `/edit changes` — edit the last built site\n"
                 "• `/slides topic` — create a presentation\n"
                 "• `/table description` — interactive data table\n"
+                "• `/doc description` — professional document\n"
+                "• `/doc-edit changes` — edit the last document\n"
                 "• `/sites` — list your sites\n"
                 "• `/summarize text` — summarize long text\n"
                 "• `/web query` — web search\n"
@@ -469,6 +601,103 @@ async def _process_update(update: dict) -> None:
             await send_telegram_message(
                 chat_id,
                 f"❌ Table failed: {result.error}",
+            )
+        return
+
+    # Handle /doc-edit command — edit last document (MUST be before /doc check)
+    if text.strip().startswith("/doc-edit"):
+        instruction = text.strip().removeprefix("/doc-edit").strip()
+        if not instruction:
+            await send_telegram_message(
+                chat_id,
+                "✏️ Usage: `/doc-edit <changes>`\n\n"
+                "Example:\n"
+                "`/doc-edit add a payment schedule table`\n"
+                "`/doc-edit change the deadline to April 15`\n"
+                "`/doc-edit добавь раздел про гарантии`\n\n"
+                "_First create a document with `/doc`, then refine it with `/doc-edit`._",
+            )
+            return
+
+        from app.services.agent.document_builder import edit_document
+
+        from app.services.agent.typing import send_typing_action
+
+        await send_typing_action(chat_id)
+
+        result = await edit_document(chat_id, instruction)
+
+        if result.success:
+            await send_telegram_message(
+                chat_id,
+                f"✏️ *Document updated!*\n\n"
+                f"🌐 URL: {result.url}\n"
+                f"📄 Type: {result.doc_type}\n"
+                f"📑 ~{result.page_estimate} pages\n\n"
+                f"_Edit again with `/doc-edit <changes>` or print from browser_",
+            )
+        elif result.error == "no_previous_document":
+            lang = _detect_language(instruction)
+            if lang == "ru":
+                await send_telegram_message(
+                    chat_id,
+                    "❌ Сначала создайте документ с помощью `/doc <описание>`",
+                )
+            else:
+                await send_telegram_message(
+                    chat_id,
+                    "❌ Create a document first with `/doc <description>`",
+                )
+        else:
+            await send_telegram_message(
+                chat_id,
+                f"❌ Edit failed: {result.error}\n\nTry again with a different instruction.",
+            )
+        return
+
+    # Handle /doc command — generate professional document
+    if text.strip().startswith("/doc"):
+        logger.info(f"/doc command from {chat_id}: {text[:100]}")
+        description = text.strip().removeprefix("/doc").strip()
+        if not description or len(description) < 10:
+            await send_telegram_message(
+                chat_id,
+                "📄 Usage: `/doc <description>`\n\n"
+                "Examples:\n"
+                "• `/doc NDA between Acme Corp and StartupX for 2 years`\n"
+                "• `/doc Quarterly report Q1 2026: revenue $2.1M, costs $1.5M, team grew to 15`\n"
+                "• `/doc Коммерческое предложение на разработку сайта за 500к`\n\n"
+                "Types: proposals, contracts, reports, letters, meeting summaries\n"
+                "I'll generate a print-ready document you can open and Ctrl+P!",
+            )
+            return
+
+        from app.services.agent.typing import send_typing_action
+
+        await send_typing_action(chat_id)
+
+        from app.services.agent.document_builder import build_document, store_document
+
+        name = (
+            description.split(".")[0][:40] if "." in description else description[:40]
+        )
+        result = await build_document(description, name=name)
+
+        if result.success:
+            if result.html:
+                store_document(chat_id, result.slug, result.html)
+            await send_telegram_message(
+                chat_id,
+                f"📄 *Document ready!*\n\n"
+                f"🌐 URL: {result.url}\n"
+                f"📋 Type: {result.doc_type}\n"
+                f"📑 ~{result.page_estimate} pages\n\n"
+                f"_Open in browser and Ctrl+P to print. Edit with `/doc-edit <changes>`_",
+            )
+        else:
+            await send_telegram_message(
+                chat_id,
+                f"❌ Document generation failed: {result.error}\n\nTry again with a more detailed description.",
             )
         return
 
