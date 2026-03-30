@@ -13,6 +13,20 @@ from celery import shared_task
 
 from app.core.config import get_settings
 
+
+def _run_async(coro):
+    """Run async code in Celery worker without EventLoop conflicts.
+
+    Celery fork workers inherit a closed event loop from the parent.
+    Creating a fresh loop avoids 'Future attached to a different loop'.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -59,7 +73,7 @@ async def _execute_tool_call(tool_name: str, tool_input: dict) -> str:
 @shared_task
 def run_due_agents():
     """Find and execute all agents whose next_run_at <= now."""
-    return asyncio.run(_run_due_agents())
+    return _run_async(_run_due_agents())
 
 
 async def _run_due_agents() -> dict:
@@ -92,7 +106,7 @@ async def _run_due_agents() -> dict:
 @shared_task(bind=True, max_retries=2)
 def execute_agent(self, agent_id: str):
     """Execute a single digital agent run."""
-    return asyncio.run(_execute_agent(UUID(agent_id)))
+    return _run_async(_execute_agent(UUID(agent_id)))
 
 
 async def _execute_agent(agent_id: UUID) -> dict:
