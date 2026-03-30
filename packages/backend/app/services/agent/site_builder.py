@@ -445,7 +445,7 @@ REQUIREMENTS:
 - Follow all COMPONENT PATTERNS for cards, buttons, testimonials, etc.
 - Follow ANIMATION RULES — content always visible, animations are additive only
 - Follow FOOTER PATTERN with columns, links, social icons, and "Made with Wai ✨"
-- Mobile-responsive (Tailwind handles this)
+- Mobile-responsive: add `overflow-x: hidden` on <html> and <body>. Use `break-words` on headings. All text must fit within 375px viewport without horizontal scroll.
 - If a THEME section is provided above, strictly follow its color scheme, fonts, and styling. Otherwise pick a professional color scheme fitting the business.
 - End of <body> must include: <script>lucide.createIcons();</script> (inside the animation script or standalone)
 
