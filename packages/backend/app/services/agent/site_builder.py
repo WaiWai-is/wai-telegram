@@ -29,6 +29,7 @@ DOMAIN = "wai.computer"
 
 _redis_client = None
 _SITE_STORE_TTL = 86400 * 7  # 7 days
+_SITES_LIST_TTL = 86400 * 30  # 30 days
 
 
 def _get_redis():
@@ -76,14 +77,151 @@ IMAGES (use real photos, NOT just gradients):
 - ALWAYS add loading="lazy" and descriptive alt text
 - Use object-fit: cover with rounded corners for cards
 
+DESIGN SYSTEM (follow these rules strictly for consistent, premium output):
+
+  Spacing scale — use ONLY these vertical paddings for sections:
+  - Hero section: py-24 md:py-32
+  - Major content sections: py-16 md:py-24
+  - Minor/compact sections: py-12 md:py-16
+  - Inside cards and containers: p-6 md:p-8
+  - Grid gap between items: gap-6 md:gap-8
+  - Space between heading and content: mb-12 md:mb-16
+
+  Container — every section's content sits inside:
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+  Typography hierarchy:
+  - h1 (hero): text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-tight
+  - h2 (section titles): text-3xl md:text-4xl font-bold tracking-tight
+  - h3 (card/item titles): text-xl md:text-2xl font-semibold
+  - Body text: text-base md:text-lg leading-relaxed text-gray-600 (or light equivalent)
+  - Small/caption: text-sm text-gray-500
+  - Section subtitles: text-lg md:text-xl text-gray-600 max-w-2xl mx-auto (centered under h2)
+
+COMPONENT PATTERNS (use these exact patterns):
+
+  Cards:
+  <div class="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow duration-300 p-6 md:p-8">
+    ...content...
+  </div>
+  Grid layout: grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8
+
+  Pricing tables (when applicable):
+  - Always 3 columns on desktop (grid-cols-1 md:grid-cols-3)
+  - Middle column is "popular": scale-105, ring-2 ring-{{brand}}, badge "Popular" at top
+  - Each card: rounded-2xl shadow-lg p-8, price in text-4xl font-bold, feature list with check icons
+  - CTA button at bottom of each card
+
+  Testimonials:
+  <div class="bg-white rounded-2xl shadow-lg p-6 md:p-8">
+    <div class="flex items-center gap-4 mb-4">
+      <img src="https://picsum.photos/seed/person-NAME/80/80" class="w-12 h-12 rounded-full object-cover" alt="...">
+      <div>
+        <p class="font-semibold">Name</p>
+        <p class="text-sm text-gray-500">Role / Company</p>
+      </div>
+    </div>
+    <div class="flex gap-1 mb-3 text-yellow-400">★★★★★</div>
+    <p class="text-gray-600 leading-relaxed italic">"Quote text..."</p>
+  </div>
+
+  Buttons:
+  - Primary: px-6 py-3 md:px-8 md:py-4 bg-{{brand}} text-white rounded-xl font-semibold hover:bg-{{brand-dark}} transition-colors duration-200 shadow-lg hover:shadow-xl
+  - Secondary/outline: px-6 py-3 border-2 border-{{brand}} text-{{brand}} rounded-xl font-semibold hover:bg-{{brand}} hover:text-white transition-colors duration-200
+
+HERO SECTION PATTERN:
+- Full viewport height: min-h-screen
+- Use a layered approach: background image with dark overlay + centered content
+  <section class="relative min-h-screen flex items-center justify-center overflow-hidden">
+    <img src="https://picsum.photos/seed/SEED/1920/1080" class="absolute inset-0 w-full h-full object-cover" alt="...">
+    <div class="absolute inset-0 bg-gradient-to-b from-black/60 via-black/40 to-black/70"></div>
+    <div class="relative z-10 text-center text-white max-w-4xl mx-auto px-4">
+      <h1 class="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight leading-tight mb-6">...</h1>
+      <p class="text-lg md:text-xl text-white/90 mb-8 max-w-2xl mx-auto">...</p>
+      <div class="flex flex-col sm:flex-row gap-4 justify-center">
+        <!-- Primary + Secondary CTA buttons -->
+      </div>
+    </div>
+  </section>
+
+ANIMATION RULES (CRITICAL — content must NEVER be invisible):
+- ALL content is visible by default. Animations are progressive enhancement ONLY.
+- Use a single inline <script> at the end of <body> (before </body>) with IntersectionObserver.
+- The script ADDS animation classes to elements, it does NOT start them hidden.
+- Pattern:
+  <script>
+  document.addEventListener('DOMContentLoaded', function() {{
+    const observer = new IntersectionObserver((entries) => {{
+      entries.forEach(entry => {{
+        if (entry.isIntersecting) {{
+          entry.target.classList.add('animate-fade-in');
+          observer.unobserve(entry.target);
+        }}
+      }});
+    }}, {{ threshold: 0.1 }});
+    document.querySelectorAll('[data-animate]').forEach(el => observer.observe(el));
+  }});
+  lucide.createIcons();
+  </script>
+- Add a <style> block for the animation:
+  <style>
+  @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(20px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+  .animate-fade-in {{ animation: fadeIn 0.6s ease-out forwards; }}
+  </style>
+- Mark sections with data-animate attribute. They remain fully visible (opacity:1) even without JS.
+- Do NOT use opacity-0, translate-y-4, or any Tailwind class that hides content by default.
+- Do NOT use Alpine x-intersect for animations.
+
+FOOTER PATTERN:
+<footer class="bg-gray-900 text-white py-12 md:py-16">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+      <!-- Column 1: Brand + description -->
+      <div class="md:col-span-1">
+        <h3 class="text-xl font-bold mb-4">Company Name</h3>
+        <p class="text-gray-400 leading-relaxed">Short description.</p>
+      </div>
+      <!-- Column 2: Quick Links -->
+      <div>
+        <h4 class="font-semibold mb-4">Quick Links</h4>
+        <ul class="space-y-2 text-gray-400">
+          <li><a href="#section" class="hover:text-white transition-colors">Link</a></li>
+          ...
+        </ul>
+      </div>
+      <!-- Column 3: Contact info -->
+      <div>
+        <h4 class="font-semibold mb-4">Contact</h4>
+        <ul class="space-y-2 text-gray-400">...</ul>
+      </div>
+      <!-- Column 4: Social icons -->
+      <div>
+        <h4 class="font-semibold mb-4">Follow Us</h4>
+        <div class="flex gap-4">
+          <a href="#" class="text-gray-400 hover:text-white transition-colors"><i data-lucide="instagram" class="w-5 h-5"></i></a>
+          <a href="#" class="text-gray-400 hover:text-white transition-colors"><i data-lucide="twitter" class="w-5 h-5"></i></a>
+          <a href="#" class="text-gray-400 hover:text-white transition-colors"><i data-lucide="facebook" class="w-5 h-5"></i></a>
+        </div>
+      </div>
+    </div>
+    <div class="border-t border-gray-800 mt-8 pt-8 text-center text-gray-500 text-sm">
+      <p>&copy; 2025 Company Name. All rights reserved.</p>
+      <p class="mt-2">Made with Wai ✨</p>
+    </div>
+  </div>
+</footer>
+
 REQUIREMENTS:
 - Single HTML file, all content inline
-- Hero section with bold headline, CTA, and a background image or visual
+- Hero section following the HERO SECTION PATTERN above
 - At least 4 content sections (services/features, about, testimonials, contact)
-- ALL sections must be visible by default. Use CSS transitions for scroll animations via a small inline script with IntersectionObserver (NOT Alpine x-intersect). Sections start with opacity-0 translate-y-4 and get opacity-100 translate-y-0 when scrolled into view.
+- Follow all DESIGN SYSTEM rules for spacing, typography, and containers
+- Follow all COMPONENT PATTERNS for cards, buttons, testimonials, etc.
+- Follow ANIMATION RULES — content always visible, animations are additive only
+- Follow FOOTER PATTERN with columns, links, social icons, and "Made with Wai ✨"
 - Mobile-responsive (Tailwind handles this)
 - Professional color scheme fitting the business
-- Footer with "Made with Wai ✨"
+- End of <body> must include: <script>lucide.createIcons();</script> (inside the animation script or standalone)
 
 OUTPUT: Only the HTML starting with <!DOCTYPE html>. No markdown, no explanation."""
 
@@ -284,6 +422,38 @@ def get_stored_site(chat_id: int) -> tuple[str, str] | None:
     except Exception as e:
         logger.warning(f"Failed to get site from Redis: {e}")
     return None
+
+
+def track_deployed_site(
+    chat_id: int, slug: str, url: str, content_type: str = "site"
+) -> None:
+    """Track a deployed site/slide/table/doc for /sites listing."""
+    import json
+    import time
+
+    try:
+        r = _get_redis()
+        entry = json.dumps(
+            {"slug": slug, "url": url, "type": content_type, "ts": int(time.time())}
+        )
+        r.lpush(f"deployed:{chat_id}", entry)
+        r.ltrim(f"deployed:{chat_id}", 0, 49)  # Keep last 50
+        r.expire(f"deployed:{chat_id}", _SITES_LIST_TTL)
+    except Exception as e:
+        logger.warning(f"Failed to track deployed site: {e}")
+
+
+def get_deployed_sites(chat_id: int) -> list[dict]:
+    """Get all deployed sites for a chat."""
+    import json
+
+    try:
+        r = _get_redis()
+        items = r.lrange(f"deployed:{chat_id}", 0, 49)
+        return [json.loads(item) for item in items] if items else []
+    except Exception as e:
+        logger.warning(f"Failed to get deployed sites: {e}")
+        return []
 
 
 async def edit_site(chat_id: int, instruction: str) -> SiteResult:
