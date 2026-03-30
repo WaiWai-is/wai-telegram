@@ -22,6 +22,23 @@ router = APIRouter()
 
 PLACEHOLDER_USER = UUID("00000000-0000-0000-0000-000000000000")
 
+# Simple dedup: track last N update_ids to prevent Telegram retry loops
+_seen_updates: set[int] = set()
+_MAX_SEEN = 1000
+
+
+def _is_duplicate_update(update_id: int) -> bool:
+    """Check if we've already processed this update_id."""
+    if update_id in _seen_updates:
+        logger.debug(f"Duplicate update_id {update_id}, skipping")
+        return True
+    _seen_updates.add(update_id)
+    if len(_seen_updates) > _MAX_SEEN:
+        # Remove oldest entries (approximate — sets aren't ordered, but good enough)
+        to_remove = sorted(_seen_updates)[: _MAX_SEEN // 2]
+        _seen_updates.difference_update(to_remove)
+    return False
+
 
 async def _resolve_user(from_user: dict) -> UUID:
     """Resolve Telegram user to internal UUID, with fallback."""
@@ -75,7 +92,11 @@ async def bot_webhook(secret: str, request: Request) -> JSONResponse:
         logger.error(f"Invalid JSON in webhook: {e}")
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
 
-    logger.info(f"Bot webhook update: {update.get('update_id')}")
+    # Deduplicate: Telegram retries on 404/timeout during deploys
+    update_id = update.get("update_id")
+    if update_id and _is_duplicate_update(update_id):
+        return JSONResponse({"ok": True})
+    logger.info(f"Bot webhook update: {update_id}")
 
     # Handle inline queries (viral mechanic)
     inline_query = update.get("inline_query")
