@@ -122,9 +122,13 @@ async def _process_update(update: dict) -> None:
         await send_telegram_message(chat_id, get_rate_limit_message(lang))
         return
 
-    # Handle /agent command — create and manage digital agents
-    if text.strip().startswith("/agent"):
-        parts = text.strip().split(maxsplit=2)
+    # Handle /agent and /skill commands — create and manage digital agents
+    if text.strip().startswith("/agent") or text.strip().startswith("/skill"):
+        # Normalize: /skill → /agent for processing
+        normalized = text.strip()
+        if normalized.startswith("/skill"):
+            normalized = "/agent" + normalized[6:]
+        parts = normalized.split(maxsplit=2)
         subcommand = parts[1] if len(parts) > 1 else "help"
         arg = parts[2] if len(parts) > 2 else ""
 
@@ -224,15 +228,16 @@ async def _process_update(update: dict) -> None:
 
         await send_telegram_message(
             chat_id,
-            "🤖 *Digital Agents*\n\n"
-            "Create AI agents that work for you on autopilot:\n\n"
-            "`/agent create <description>` — create agent\n"
-            "`/agent list` — your agents\n"
-            "`/agent run <id>` — trigger manually\n"
-            "`/agent delete <id>` — remove\n\n"
+            "🤖 *Skills (Digital Agents)*\n\n"
+            "Create AI skills that work for you on autopilot:\n\n"
+            "`/skill create <description>` — create skill\n"
+            "`/skill list` — your skills\n"
+            "`/skill run <id>` — trigger manually\n"
+            "`/skill delete <id>` — remove\n\n"
             "Examples:\n"
-            "• `/agent create Every morning check HackerNews for top AI articles`\n"
-            "• `/agent create Каждый вечер присылай итог моих чатов за день`",
+            "• `/skill create Every morning check HackerNews for top AI articles`\n"
+            "• `/skill create Каждый вечер присылай итог моих чатов за день`\n\n"
+            "_Also works with `/agent` command_",
         )
         return
 

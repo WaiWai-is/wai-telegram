@@ -282,8 +282,9 @@ TECH STACK (use these CDNs in <head>):
 - Tailwind CSS: <script src="https://cdn.tailwindcss.com"></script>
 - Google Fonts: pick 1-2 fonts that fit the vibe (or use the theme-specified fonts if a THEME section is provided above)
 - Lucide Icons: <script src="https://unpkg.com/lucide@latest"></script> then <i data-lucide="icon-name"></i>
-- Alpine.js + Intersect plugin (BOTH required):
+- Alpine.js + plugins (load in this order):
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/intersect@3.x.x/dist/cdn.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 
 SEO (include in <head>):
@@ -354,6 +355,28 @@ COMPONENT PATTERNS (use these exact patterns):
   Buttons:
   - Primary: px-6 py-3 md:px-8 md:py-4 bg-{{brand}} text-white rounded-xl font-semibold hover:bg-{{brand-dark}} transition-colors duration-200 shadow-lg hover:shadow-xl
   - Secondary/outline: px-6 py-3 border-2 border-{{brand}} text-{{brand}} rounded-xl font-semibold hover:bg-{{brand}} hover:text-white transition-colors duration-200
+
+ALPINE.JS INTERACTIVE COMPONENTS (use x-data for these):
+
+  Mobile hamburger menu (REQUIRED on every site):
+  <nav x-data="{{ open: false }}" class="...">
+    <button @click="open = !open" class="md:hidden"><i data-lucide="menu"></i></button>
+    <div x-show="open" @click.away="open = false" x-transition class="md:flex ...">
+      <!-- nav links -->
+    </div>
+  </nav>
+
+  FAQ Accordion (if site has FAQ section):
+  <div x-data="{{ active: null }}">
+    <div @click="active = active === 1 ? null : 1" class="cursor-pointer ...">
+      <h3>Question?</h3>
+      <i data-lucide="chevron-down" :class="active === 1 && 'rotate-180'" class="transition-transform"></i>
+    </div>
+    <div x-show="active === 1" x-collapse class="...">Answer text</div>
+  </div>
+
+  Also add the Alpine Collapse plugin CDN (after intersect, before alpine):
+  <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
 
 HERO SECTION PATTERN:
 - Full viewport height: min-h-screen
