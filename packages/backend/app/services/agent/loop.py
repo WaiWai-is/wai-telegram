@@ -192,7 +192,10 @@ async def execute_tool(tool_name: str, tool_input: dict, context: AgentContext) 
     elif tool_name == "list_commitments":
         return _tool_list_commitments(tool_input, context)
     elif tool_name == "search_web":
-        return f"[Web search for: {tool_input.get('query', '')}] (not yet implemented)"
+        from app.services.agent.web_search import search_web
+
+        query = tool_input.get("query", "")
+        return await search_web(query)
     else:
         return f"Unknown tool: {tool_name}"
 

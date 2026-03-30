@@ -16,6 +16,45 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Max tool-calling rounds per agent execution (prevents runaway costs)
+MAX_TOOL_ROUNDS = 2
+
+# Tool definition for Claude when agent has "search_web"
+SEARCH_WEB_TOOL = {
+    "name": "search_web",
+    "description": "Search the internet for current information. Use this to find news, facts, prices, events, or any real-time data.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
+def _build_tools_for_agent(agent_tools: str) -> list[dict]:
+    """Build Claude tools list based on agent's configured tools."""
+    tools = []
+    tool_names = [t.strip() for t in agent_tools.split(",") if t.strip()]
+    if "search_web" in tool_names:
+        tools.append(SEARCH_WEB_TOOL)
+    return tools
+
+
+async def _execute_tool_call(tool_name: str, tool_input: dict) -> str:
+    """Execute a tool call from Claude and return the result string."""
+    if tool_name == "search_web":
+        from app.services.agent.web_search import search_web
+
+        query = tool_input.get("query", "")
+        return await search_web(query)
+
+    return f"Unknown tool: {tool_name}"
+
 
 @shared_task
 def run_due_agents():
@@ -77,20 +116,65 @@ async def _execute_agent(agent_id: UUID) -> dict:
             return {"status": "skipped"}
 
         try:
-            # Call Claude with the agent's system prompt
+            # Build tools based on agent config
+            tools = _build_tools_for_agent(agent.tools or "")
+
+            # Call Claude with the agent's system prompt and tools
             client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=agent.max_tokens_per_run,
-                system=agent.system_prompt,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Execute your task now. Current time: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}.",
-                    }
-                ],
-            )
-            output = response.content[0].text.strip()
+            messages = [
+                {
+                    "role": "user",
+                    "content": f"Execute your task now. Current time: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}.",
+                }
+            ]
+
+            create_kwargs: dict = {
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": agent.max_tokens_per_run,
+                "system": agent.system_prompt,
+                "messages": messages,
+            }
+            if tools:
+                create_kwargs["tools"] = tools
+
+            output = ""
+            for _round in range(MAX_TOOL_ROUNDS + 1):
+                response = await client.messages.create(**create_kwargs)
+
+                # If no tool use, extract text and break
+                if response.stop_reason != "tool_use":
+                    text_parts = []
+                    for block in response.content:
+                        if hasattr(block, "text"):
+                            text_parts.append(block.text)
+                    output = "\n".join(text_parts).strip() if text_parts else ""
+                    break
+
+                # Handle tool calls
+                messages.append(
+                    {"role": "assistant", "content": response.content}
+                )
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        try:
+                            result = await _execute_tool_call(
+                                block.name, block.input
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Agent tool {block.name} failed: {e}"
+                            )
+                            result = f"Error: {e}"
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result[:4000],
+                            }
+                        )
+                messages.append({"role": "user", "content": tool_results})
+                create_kwargs["messages"] = messages
 
             # Send result to user
             header = f"🤖 *{agent.name}*\n\n"
