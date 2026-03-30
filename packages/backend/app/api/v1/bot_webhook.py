@@ -368,10 +368,10 @@ async def _process_update(update: dict) -> None:
                 "• `/slides тема` — создать презентацию\n"
                 "• `/table описание` — интерактивная таблица\n"
                 "• `/doc описание` — профессиональный документ\n"
-                "• `/doc-edit изменения` — редактировать последний документ\n"
-                "• `/sites` — список твоих сайтов\n"
-                "• `/summarize текст` — резюмировать текст\n"
-                "• `/web запрос` — поиск в интернете\n"
+                "• `/doc-edit изменения` — редактировать документ\n"
+                "• `/skill create описание` — создать AI-сотрудника\n"
+                "• `/skill list` — список сотрудников\n"
+                "• `/sites` — все деплои\n"
                 "• `/status` — статистика\n"
                 "• `/clear` — очистить историю",
             )
@@ -399,9 +399,9 @@ async def _process_update(update: dict) -> None:
                 "• `/table description` — interactive data table\n"
                 "• `/doc description` — professional document\n"
                 "• `/doc-edit changes` — edit the last document\n"
-                "• `/sites` — list your sites\n"
-                "• `/summarize text` — summarize long text\n"
-                "• `/web query` — web search\n"
+                "• `/skill create description` — create AI agent\n"
+                "• `/skill list` — your agents\n"
+                "• `/sites` — all deployments\n"
                 "• `/status` — statistics\n"
                 "• `/clear` — reset conversation",
             )
