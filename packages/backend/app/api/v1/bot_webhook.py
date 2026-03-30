@@ -964,6 +964,26 @@ async def _process_update(update: dict) -> None:
         AgentMessage(role=msg.role, content=msg.content) for msg in history
     ]
 
+    # Proactive memory recall — silently search for related past messages
+    if text and len(text) > 15:
+        try:
+            from app.schemas.search import SearchRequest
+            from app.services.search_service import semantic_search
+
+            from app.core.database import async_session_factory
+
+            async with async_session_factory() as db:
+                search_req = SearchRequest(query=text[:200], limit=3)
+                response = await semantic_search(db, user_id, search_req)
+                if response.results:
+                    context.recalled_memories = [
+                        f"{r.sender_name} in {r.chat_title}: {r.text[:150]}"
+                        for r in response.results
+                        if r.text and len(r.text) > 20
+                    ][:3]
+        except Exception as e:
+            logger.debug(f"Proactive recall failed (non-critical): {e}")
+
     # Check if this is an edit intent and user has a stored site
     from app.services.agent.router import classify_intent, Intent
 
