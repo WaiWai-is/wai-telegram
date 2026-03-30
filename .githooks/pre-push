@@ -1,0 +1,23 @@
+#!/bin/bash
+# Pre-push hook: run ruff check + format before pushing
+# Catches 90% of CI failures locally
+
+set -e
+
+echo "🔍 Running pre-push checks..."
+
+cd packages/backend
+
+# Lint check
+python3 -m ruff check . 2>/dev/null || {
+    echo "❌ Ruff lint errors found. Fix with: python3 -m ruff check . --fix"
+    exit 1
+}
+
+# Format check
+python3 -m ruff format --check . 2>/dev/null || {
+    echo "❌ Ruff format errors. Fix with: python3 -m ruff format ."
+    exit 1
+}
+
+echo "✅ Pre-push checks passed"
