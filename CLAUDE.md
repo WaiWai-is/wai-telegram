@@ -98,13 +98,37 @@ The core AI agent with 19 modules:
 - `bot_webhook.py` — Telegram webhook with 12 commands + voice/photo/doc/forward
 
 ## Bot Commands
-`/start` `/help` `/search` `/summarize` `/web` `/digest` `/commitments` `/entities` `/briefing` `/status` `/clear` `/feedback` + voice + photo + document + forward + inline
+
+**Content Generation:**
+- `/build <description>` — Generate a website (Tailwind+Alpine, deployed to Cloudflare Pages)
+- `/build --theme <name> <description>` — Build with theme (dark-corporate, neon-startup, luxury-gold, warm-organic, clean-minimal, fresh-modern, retro-vintage)
+- `/edit <changes>` — Edit last built site
+- Conversational edit: just describe changes without /edit ("make it darker")
+- `/slides <topic>` — Generate reveal.js presentation (8-16 slides)
+- `/table <description>` — Generate AG Grid interactive table
+- `/doc <description>` — Generate print-ready document (proposals, contracts, reports)
+- `/doc-edit <changes>` — Edit last document
+
+**AI Agents:**
+- `/agent create <description>` — Create autonomous agent with cron schedule
+- `/agent list` — Show your agents
+- `/agent run <id>` — Trigger agent manually
+- `/agent delete <id>` — Remove agent
+
+**Memory & Search:**
+- `/search <query>` — Semantic search across 106K+ synced messages
+- `/briefing` — Morning digest
+- `/commitments` — Open promises
+- `/sites` — List all deployed sites/slides/tables/docs
+
+**Other:**
+`/start` `/help` `/status` `/clear` `/feedback` `/summarize` `/web` `/entities` `/digest` + voice + photo + document + forward + inline
 
 ## Testing
 ```bash
 cd packages/backend
-PYTHONPATH=. python -m pytest tests/ -q         # 502 tests
-PYTHONPATH=. python -m pytest tests/ --cov=app   # 61% coverage
+PYTHONPATH=. python -m pytest tests/ -q         # 768 tests
+PYTHONPATH=. python -m pytest tests/ --cov=app   # coverage
 ```
 
 ## GitHub Secrets (for Actions deploy)
