@@ -111,11 +111,11 @@ class TestAgentResult:
         result = AgentResult(
             response="hello",
             intent=Intent.CHAT,
-            model_used="claude-haiku-4-5-20251001",
+            model_used="claude-haiku-4-5",
         )
         assert result.response == "hello"
         assert result.intent == Intent.CHAT
-        assert result.model_used == "claude-haiku-4-5-20251001"
+        assert result.model_used == "claude-haiku-4-5"
         assert result.input_tokens == 0
         assert result.output_tokens == 0
         assert result.tool_calls == 0
@@ -250,7 +250,7 @@ class TestRunAgentSimpleChat:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls
     ):
         mock_classify.return_value = Intent.CHAT
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         # Mock the client instance and its messages.create
@@ -265,7 +265,7 @@ class TestRunAgentSimpleChat:
 
         assert result.response == "Hello! How can I help?"
         assert result.intent == Intent.CHAT
-        assert result.model_used == "claude-haiku-4-5-20251001"
+        assert result.model_used == "claude-haiku-4-5"
         assert result.input_tokens == 10
         assert result.output_tokens == 20
         assert result.tool_calls == 0
@@ -279,7 +279,7 @@ class TestRunAgentSimpleChat:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls
     ):
         mock_classify.return_value = Intent.SEARCH
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         mock_client = MagicMock()
@@ -305,7 +305,7 @@ class TestRunAgentSimpleChat:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls
     ):
         mock_classify.return_value = Intent.BUILD
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         mock_client = MagicMock()
@@ -336,7 +336,7 @@ class TestRunAgentWithToolCalling:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls, mock_exec_tool
     ):
         mock_classify.return_value = Intent.SEARCH
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
         mock_exec_tool.return_value = "Found: Alex discussed pricing at $500"
 
@@ -381,7 +381,7 @@ class TestRunAgentWithToolCalling:
     ):
         """Claude returns two tool_use blocks in a single response."""
         mock_classify.return_value = Intent.SEARCH
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
         mock_exec_tool.side_effect = ["Result A", "Result B"]
 
@@ -419,7 +419,7 @@ class TestRunAgentWithToolCalling:
     ):
         """Claude calls a tool, gets result, calls another tool, then responds."""
         mock_classify.return_value = Intent.SEARCH
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
         mock_exec_tool.side_effect = ["search result", "digest result"]
 
@@ -467,7 +467,7 @@ class TestRunAgentWithToolCalling:
     ):
         """When a tool raises an exception, the error message is returned to Claude."""
         mock_classify.return_value = Intent.SEARCH
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
         mock_exec_tool.side_effect = RuntimeError("DB connection failed")
 
@@ -502,7 +502,7 @@ class TestRunAgentEdgeCases:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls
     ):
         mock_classify.return_value = Intent.CHAT
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         mock_client = MagicMock()
@@ -527,7 +527,7 @@ class TestRunAgentEdgeCases:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls
     ):
         mock_classify.return_value = Intent.CHAT
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         mock_client = MagicMock()
@@ -556,7 +556,7 @@ class TestRunAgentEdgeCases:
     ):
         """When Claude returns content with no text blocks, return a default."""
         mock_classify.return_value = Intent.CHAT
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         # Content block without .text attribute
@@ -583,7 +583,7 @@ class TestRunAgentEdgeCases:
     ):
         """When the agent loops MAX_TURNS times with tool_use, it gives up."""
         mock_classify.return_value = Intent.SEARCH
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
         mock_exec_tool.return_value = "some result"
 
@@ -621,7 +621,7 @@ class TestRunAgentVoiceMessages:
     ):
         """Voice transcript + user text creates combined user content."""
         mock_classify.return_value = Intent.VOICE_SUMMARY
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         mock_client = MagicMock()
@@ -655,7 +655,7 @@ class TestRunAgentVoiceMessages:
     ):
         """Voice transcript with empty text shows only transcript."""
         mock_classify.return_value = Intent.VOICE_SUMMARY
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         mock_client = MagicMock()
@@ -687,7 +687,7 @@ class TestRunAgentConversationHistory:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls
     ):
         mock_classify.return_value = Intent.CHAT
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         mock_client = MagicMock()
@@ -724,7 +724,7 @@ class TestRunAgentConversationHistory:
     ):
         """Only the last 20 messages from history should be included."""
         mock_classify.return_value = Intent.CHAT
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         mock_client = MagicMock()
@@ -761,7 +761,7 @@ class TestRunAgentMetrics:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls
     ):
         mock_classify.return_value = Intent.DIGEST
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         mock_client = MagicMock()
@@ -813,7 +813,7 @@ class TestRunAgentSoulPromptArgs:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls
     ):
         mock_classify.return_value = Intent.CHAT
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "Assembled prompt"
 
         mock_client = MagicMock()
@@ -852,7 +852,7 @@ class TestRunAgentSoulPromptArgs:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls
     ):
         mock_classify.return_value = Intent.CHAT
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "Custom soul prompt"
 
         mock_client = MagicMock()
@@ -882,7 +882,7 @@ class TestRunAgentMultiTextBlocks:
         self, mock_soul, mock_model, mock_classify, mock_anthropic_cls
     ):
         mock_classify.return_value = Intent.CHAT
-        mock_model.return_value = "claude-haiku-4-5-20251001"
+        mock_model.return_value = "claude-haiku-4-5"
         mock_soul.return_value = "You are Wai."
 
         mock_client = MagicMock()

@@ -243,7 +243,7 @@ class TestDescribePhoto:
         assert result == "A photo of a sunset over the ocean."
         mock_client.messages.create.assert_awaited_once()
         call_kwargs = mock_client.messages.create.call_args.kwargs
-        assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
+        assert call_kwargs["model"] == "claude-haiku-4-5"
         assert call_kwargs["max_tokens"] == 300
 
     async def test_png_media_type_detection(self):
