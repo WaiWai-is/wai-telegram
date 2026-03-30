@@ -116,7 +116,7 @@ class TestPresentationPromptFormatting:
 
     def test_prompt_contains_structure_requirements(self):
         result = PRESENTATION_PROMPT.format(description="test")
-        assert "Title slide" in result
+        assert "TITLE SLIDE" in result
         assert "8-12" in result
 
 
