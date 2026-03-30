@@ -434,7 +434,11 @@ async def _process_update(update: dict) -> None:
 
         await send_typing_action(chat_id)
 
-        from app.services.agent.site_builder import build_site, resolve_theme, store_site
+        from app.services.agent.site_builder import (
+            build_site,
+            resolve_theme,
+            store_site,
+        )
 
         # Resolve theme from --theme flag or auto-detect from keywords
         theme, description = resolve_theme(description)

@@ -107,9 +107,12 @@ class TestDetectTheme:
         assert detect_theme("DARK THEME PLEASE") == "dark-corporate"
 
     def test_keyword_in_longer_text(self):
-        assert detect_theme(
-            "Build a landing page for my SaaS product. I want a neon aesthetic with gradients."
-        ) == "neon-startup"
+        assert (
+            detect_theme(
+                "Build a landing page for my SaaS product. I want a neon aesthetic with gradients."
+            )
+            == "neon-startup"
+        )
 
 
 class TestParseThemeFlag:

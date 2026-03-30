@@ -76,7 +76,13 @@ THEMES: dict[str, dict] = {
             "- Footer: bg-slate-950 text-slate-400\n"
         ),
         "keywords_en": ["dark", "corporate", "professional", "dark theme", "navy"],
-        "keywords_ru": ["тёмная", "темная", "корпоративная", "тёмная тема", "темная тема"],
+        "keywords_ru": [
+            "тёмная",
+            "темная",
+            "корпоративная",
+            "тёмная тема",
+            "темная тема",
+        ],
     },
     "warm-organic": {
         "name": "warm-organic",
