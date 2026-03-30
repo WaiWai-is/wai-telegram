@@ -120,7 +120,9 @@ class TestSearchWeb:
         mock_client.get.return_value = mock_response
         mock_client.__aenter__.return_value = mock_client
 
-        with patch("app.services.agent.web_search.httpx.AsyncClient", return_value=mock_client):
+        with patch(
+            "app.services.agent.web_search.httpx.AsyncClient", return_value=mock_client
+        ):
             result = await search_web("artificial intelligence")
 
         assert "Test result about AI." in result
@@ -132,13 +134,17 @@ class TestSearchWeb:
     @pytest.mark.asyncio
     async def test_search_web_http_error(self):
         mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = Exception("503 Service Unavailable")
+        mock_response.raise_for_status.side_effect = Exception(
+            "503 Service Unavailable"
+        )
 
         mock_client = AsyncMock()
         mock_client.get.return_value = mock_response
         mock_client.__aenter__.return_value = mock_client
 
-        with patch("app.services.agent.web_search.httpx.AsyncClient", return_value=mock_client):
+        with patch(
+            "app.services.agent.web_search.httpx.AsyncClient", return_value=mock_client
+        ):
             with pytest.raises(Exception, match="503"):
                 await search_web("test query")
 
@@ -152,7 +158,9 @@ class TestSearchWeb:
         mock_client.get.return_value = mock_response
         mock_client.__aenter__.return_value = mock_client
 
-        with patch("app.services.agent.web_search.httpx.AsyncClient", return_value=mock_client):
+        with patch(
+            "app.services.agent.web_search.httpx.AsyncClient", return_value=mock_client
+        ):
             result = await search_web("xyzgarbage")
 
         assert "No results found" in result

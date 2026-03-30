@@ -151,20 +151,14 @@ async def _execute_agent(agent_id: UUID) -> dict:
                     break
 
                 # Handle tool calls
-                messages.append(
-                    {"role": "assistant", "content": response.content}
-                )
+                messages.append({"role": "assistant", "content": response.content})
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
                         try:
-                            result = await _execute_tool_call(
-                                block.name, block.input
-                            )
+                            result = await _execute_tool_call(block.name, block.input)
                         except Exception as e:
-                            logger.error(
-                                f"Agent tool {block.name} failed: {e}"
-                            )
+                            logger.error(f"Agent tool {block.name} failed: {e}")
                             result = f"Error: {e}"
                         tool_results.append(
                             {
