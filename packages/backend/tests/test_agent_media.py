@@ -1,13 +1,19 @@
 """Tests for Media Processor — photos and documents."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from app.services.agent.media_processor import (
+    MAX_DOWNLOAD_SIZE,
+    describe_photo,
+    extract_document_text,
+)
+
 
 class TestExtractDocumentText:
     """Test text extraction from documents (no network calls needed)."""
 
     def test_text_extension_check(self):
         """Verify text extensions are recognized."""
-
-        # Can't test actual download in unit tests, but test logic:
         text_extensions = {
             ".txt",
             ".py",
@@ -63,6 +69,454 @@ class TestExtractDocumentText:
         for name in binary_names:
             ext = os.path.splitext(name)[1].lower()
             assert ext not in text_extensions
+
+    async def test_download_failure_returns_none(self):
+        """If _download_telegram_file returns None, extract_document_text returns None."""
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await extract_document_text("file_id_123", "report.txt")
+            assert result is None
+
+    async def test_text_file_extraction(self):
+        """UTF-8 text content is returned correctly."""
+        file_content = b"Hello, this is a text file.\nSecond line."
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            return_value=file_content,
+        ):
+            result = await extract_document_text("file_id_123", "notes.txt")
+            assert result == "Hello, this is a text file.\nSecond line."
+
+    async def test_python_file_extraction(self):
+        """Python file content is treated as text."""
+        file_content = b"def hello():\n    print('hi')\n"
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            return_value=file_content,
+        ):
+            result = await extract_document_text("file_id_123", "script.py")
+            assert "def hello():" in result
+
+    async def test_binary_file_returns_rejection_message(self):
+        """Binary file extensions get a rejection message, not extracted."""
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            return_value=b"\x00\x01\x02binary",
+        ):
+            result = await extract_document_text("file_id_123", "image.png")
+            assert result is not None
+            assert "binary file" in result
+            assert "image.png" in result
+
+    async def test_large_text_is_truncated(self):
+        """Text longer than 5000 chars is truncated with a notice."""
+        long_content = ("A" * 6000).encode("utf-8")
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            return_value=long_content,
+        ):
+            result = await extract_document_text("file_id_123", "big.txt")
+            assert len(result) < 6000
+            assert "truncated" in result
+            assert "6000 bytes total" in result
+
+    async def test_text_under_5000_not_truncated(self):
+        """Text under 5000 chars is returned as-is."""
+        content = ("B" * 4999).encode("utf-8")
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            return_value=content,
+        ):
+            result = await extract_document_text("file_id_123", "small.txt")
+            assert result == "B" * 4999
+            assert "truncated" not in result
+
+    async def test_unicode_decode_error_returns_binary_message(self):
+        """Non-UTF-8 data for a text extension returns a binary content message."""
+        # Invalid UTF-8 byte sequence
+        bad_utf8 = b"\xff\xfe\x00\x01"
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            return_value=bad_utf8,
+        ):
+            result = await extract_document_text("file_id_123", "data.txt")
+            assert result is not None
+            assert "binary content" in result
+
+    async def test_no_filename_binary_content(self):
+        """When no filename is given and content is not UTF-8, uses 'unknown'."""
+        bad_utf8 = b"\xff\xfe\x00\x01"
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            return_value=bad_utf8,
+        ):
+            result = await extract_document_text("file_id_123")
+            assert result is not None
+            assert "unknown" in result
+
+    async def test_no_filename_text_content(self):
+        """When no filename is given, text content is extracted normally."""
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            return_value=b"plain text content",
+        ):
+            result = await extract_document_text("file_id_123")
+            assert result == "plain text content"
+
+    async def test_exception_during_extraction_returns_none(self):
+        """Unexpected exception during extraction returns None."""
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            side_effect=Exception("network error"),
+        ):
+            result = await extract_document_text("file_id_123", "test.txt")
+            assert result is None
+
+
+class TestDescribePhoto:
+    """Test photo description with mocked Claude Vision API."""
+
+    async def test_download_failure_returns_none(self):
+        """If file download fails, returns None."""
+        with patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await describe_photo("file_id_123")
+            assert result is None
+
+    async def test_no_anthropic_key_returns_none(self):
+        """If anthropic_api_key is not set, returns None."""
+        # JPEG magic bytes
+        jpeg_data = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+        with (
+            patch(
+                "app.services.agent.media_processor._download_telegram_file",
+                new_callable=AsyncMock,
+                return_value=jpeg_data,
+            ),
+            patch("app.services.agent.media_processor.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.anthropic_api_key = ""
+            result = await describe_photo("file_id_123")
+            assert result is None
+
+    async def test_successful_jpeg_description(self):
+        """JPEG image is sent to Claude Vision and description returned."""
+        jpeg_data = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+
+        mock_content_block = MagicMock()
+        mock_content_block.text = "  A photo of a sunset over the ocean.  "
+
+        mock_response = MagicMock()
+        mock_response.content = [mock_content_block]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with (
+            patch(
+                "app.services.agent.media_processor._download_telegram_file",
+                new_callable=AsyncMock,
+                return_value=jpeg_data,
+            ),
+            patch("app.services.agent.media_processor.get_settings") as mock_settings,
+            patch("anthropic.AsyncAnthropic", return_value=mock_client),
+        ):
+            mock_settings.return_value.anthropic_api_key = "sk-test-key"
+
+            result = await describe_photo("file_id_123")
+
+        assert result == "A photo of a sunset over the ocean."
+        mock_client.messages.create.assert_awaited_once()
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
+        assert call_kwargs["max_tokens"] == 300
+
+    async def test_png_media_type_detection(self):
+        """PNG images are detected by magic bytes and sent as image/png."""
+        png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="A PNG image")]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with (
+            patch(
+                "app.services.agent.media_processor._download_telegram_file",
+                new_callable=AsyncMock,
+                return_value=png_data,
+            ),
+            patch("app.services.agent.media_processor.get_settings") as mock_settings,
+            patch("anthropic.AsyncAnthropic", return_value=mock_client),
+        ):
+            mock_settings.return_value.anthropic_api_key = "sk-test-key"
+
+            await describe_photo("file_id_123")
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        image_block = call_kwargs["messages"][0]["content"][0]
+        assert image_block["source"]["media_type"] == "image/png"
+
+    async def test_webp_media_type_detection(self):
+        """WebP images are detected by magic bytes and sent as image/webp."""
+        webp_data = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 100
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="A WebP image")]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with (
+            patch(
+                "app.services.agent.media_processor._download_telegram_file",
+                new_callable=AsyncMock,
+                return_value=webp_data,
+            ),
+            patch("app.services.agent.media_processor.get_settings") as mock_settings,
+            patch("anthropic.AsyncAnthropic", return_value=mock_client),
+        ):
+            mock_settings.return_value.anthropic_api_key = "sk-test-key"
+
+            await describe_photo("file_id_123")
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        image_block = call_kwargs["messages"][0]["content"][0]
+        assert image_block["source"]["media_type"] == "image/webp"
+
+    async def test_gif_media_type_detection(self):
+        """GIF images are detected by magic bytes and sent as image/gif."""
+        gif_data = b"GIF89a" + b"\x00" * 100
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="A GIF")]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with (
+            patch(
+                "app.services.agent.media_processor._download_telegram_file",
+                new_callable=AsyncMock,
+                return_value=gif_data,
+            ),
+            patch("app.services.agent.media_processor.get_settings") as mock_settings,
+            patch("anthropic.AsyncAnthropic", return_value=mock_client),
+        ):
+            mock_settings.return_value.anthropic_api_key = "sk-test-key"
+
+            await describe_photo("file_id_123")
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        image_block = call_kwargs["messages"][0]["content"][0]
+        assert image_block["source"]["media_type"] == "image/gif"
+
+    async def test_unknown_format_defaults_to_jpeg(self):
+        """Unknown image formats default to image/jpeg media type."""
+        unknown_data = b"\x00\x01\x02\x03\x04\x05" + b"\x00" * 100
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="Some image")]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with (
+            patch(
+                "app.services.agent.media_processor._download_telegram_file",
+                new_callable=AsyncMock,
+                return_value=unknown_data,
+            ),
+            patch("app.services.agent.media_processor.get_settings") as mock_settings,
+            patch("anthropic.AsyncAnthropic", return_value=mock_client),
+        ):
+            mock_settings.return_value.anthropic_api_key = "sk-test-key"
+
+            await describe_photo("file_id_123")
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        image_block = call_kwargs["messages"][0]["content"][0]
+        assert image_block["source"]["media_type"] == "image/jpeg"
+
+    async def test_claude_api_failure_returns_none(self):
+        """If Claude Vision API raises an exception, returns None."""
+        jpeg_data = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(
+            side_effect=Exception("API rate limit exceeded")
+        )
+
+        with (
+            patch(
+                "app.services.agent.media_processor._download_telegram_file",
+                new_callable=AsyncMock,
+                return_value=jpeg_data,
+            ),
+            patch("app.services.agent.media_processor.get_settings") as mock_settings,
+            patch("anthropic.AsyncAnthropic", return_value=mock_client),
+        ):
+            mock_settings.return_value.anthropic_api_key = "sk-test-key"
+
+            result = await describe_photo("file_id_123")
+
+        assert result is None
+
+    async def test_image_is_base64_encoded(self):
+        """Verify the image data is base64 encoded before sending to Claude."""
+        import base64
+
+        jpeg_data = b"\xff\xd8\xff\xe0TESTDATA"
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="Description")]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        with (
+            patch(
+                "app.services.agent.media_processor._download_telegram_file",
+                new_callable=AsyncMock,
+                return_value=jpeg_data,
+            ),
+            patch("app.services.agent.media_processor.get_settings") as mock_settings,
+            patch("anthropic.AsyncAnthropic", return_value=mock_client),
+        ):
+            mock_settings.return_value.anthropic_api_key = "sk-test-key"
+
+            await describe_photo("file_id_123")
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        image_block = call_kwargs["messages"][0]["content"][0]
+        sent_b64 = image_block["source"]["data"]
+        # Verify it round-trips back to the original data
+        assert base64.b64decode(sent_b64) == jpeg_data
+
+
+class TestDownloadTelegramFile:
+    """Test _download_telegram_file with mocked httpx."""
+
+    async def test_no_token_returns_none(self):
+        """If no bot token is available, returns None."""
+        from app.services.agent.media_processor import _download_telegram_file
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("app.services.agent.media_processor.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value.telegram_bot_token = ""
+            # Also clear TELEGRAM_BOT_TOKEN from env
+            import os
+
+            old = os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+            try:
+                result = await _download_telegram_file("file_id_123")
+                assert result is None
+            finally:
+                if old is not None:
+                    os.environ["TELEGRAM_BOT_TOKEN"] = old
+
+    async def test_successful_download(self):
+        """Successful file download returns bytes."""
+        from app.services.agent.media_processor import _download_telegram_file
+
+        mock_get_file_resp = MagicMock()
+        mock_get_file_resp.json.return_value = {
+            "ok": True,
+            "result": {"file_path": "photos/file_42.jpg"},
+        }
+
+        mock_download_resp = MagicMock()
+        mock_download_resp.content = b"fake image bytes"
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
+            side_effect=[mock_get_file_resp, mock_download_resp]
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("os.environ.get", return_value="test-bot-token"),
+            patch(
+                "app.services.agent.media_processor.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _download_telegram_file("file_id_123")
+
+        assert result == b"fake image bytes"
+
+    async def test_get_file_api_failure_returns_none(self):
+        """If Telegram getFile API returns not ok, returns None."""
+        from app.services.agent.media_processor import _download_telegram_file
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"ok": False, "description": "Bad Request"}
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("os.environ.get", return_value="test-bot-token"),
+            patch(
+                "app.services.agent.media_processor.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _download_telegram_file("file_id_123")
+
+        assert result is None
+
+    async def test_oversized_file_returns_none(self):
+        """Files exceeding MAX_DOWNLOAD_SIZE are rejected."""
+        from app.services.agent.media_processor import _download_telegram_file
+
+        mock_get_file_resp = MagicMock()
+        mock_get_file_resp.json.return_value = {
+            "ok": True,
+            "result": {"file_path": "photos/huge.jpg"},
+        }
+
+        mock_download_resp = MagicMock()
+        mock_download_resp.content = b"\x00" * (MAX_DOWNLOAD_SIZE + 1)
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(
+            side_effect=[mock_get_file_resp, mock_download_resp]
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("os.environ.get", return_value="test-bot-token"),
+            patch(
+                "app.services.agent.media_processor.httpx.AsyncClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await _download_telegram_file("file_id_123")
+
+        assert result is None
 
 
 class TestMediaTypes:

@@ -32,8 +32,8 @@ _AUTH_CLIENT_TTL = 300  # 5 minutes
 async def _disconnect_auth_client(client: TelegramClient) -> None:
     try:
         await client.disconnect()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Client disconnect error (non-critical): {e}")
 
 
 async def _replace_auth_client(client_key: str, client: TelegramClient) -> None:

@@ -1018,8 +1018,8 @@ async def _process_update(update: dict) -> None:
                         )
                         if sent:
                             return
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"Non-critical error: {_e}")
                 await send_telegram_message(
                     chat_id,
                     f"✅ *Site updated!*\n\n🌐 {edit_result.url}",
@@ -1061,8 +1061,8 @@ async def _process_update(update: dict) -> None:
                 },
             )
             sentry_sdk.capture_exception(e)
-        except Exception:
-            pass
+        except Exception as _sentry_err:
+            logger.debug(f"Sentry not configured: {_sentry_err}")
         lang = _detect_language(text)
         if lang == "ru":
             await send_telegram_message(

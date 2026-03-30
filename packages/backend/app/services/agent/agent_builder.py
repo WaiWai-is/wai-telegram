@@ -102,8 +102,8 @@ def cleanup_build(work_dir: str) -> None:
     """Clean up temporary build directory."""
     try:
         shutil.rmtree(work_dir, ignore_errors=True)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Cleanup failed (non-critical): {e}")
 
 
 def _simple_site_prompt(description: str) -> str:
