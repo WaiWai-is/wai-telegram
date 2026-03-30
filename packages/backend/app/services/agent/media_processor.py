@@ -49,7 +49,7 @@ async def describe_photo(file_id: str) -> str | None:
 
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-haiku-4-5",
             max_tokens=300,
             messages=[
                 {

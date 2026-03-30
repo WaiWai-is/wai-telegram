@@ -573,7 +573,7 @@ async def build_site(
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=16384,
             messages=[
                 {
@@ -742,7 +742,7 @@ async def edit_site(chat_id: int, instruction: str) -> SiteResult:
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=16384,
             messages=[
                 {

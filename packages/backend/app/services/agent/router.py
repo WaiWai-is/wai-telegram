@@ -47,17 +47,17 @@ User message: {message}
 """
 
 # Model routing: cheap for classification, expensive for complex tasks
-# Model routing: use claude-haiku-4-5-20251001 for all intents
+# Model routing: use claude-haiku-4-5 for all intents
 # (Sonnet not available on current API key — switch when full key is available)
 MODEL_MAP: dict[Intent, str] = {
-    Intent.SEARCH: "claude-haiku-4-5-20251001",
-    Intent.VOICE_SUMMARY: "claude-haiku-4-5-20251001",
-    Intent.DIGEST: "claude-haiku-4-5-20251001",
-    Intent.ACTION: "claude-haiku-4-5-20251001",
-    Intent.BUILD: "claude-haiku-4-5-20251001",
-    Intent.EDIT: "claude-haiku-4-5-20251001",
-    Intent.COACH: "claude-haiku-4-5-20251001",
-    Intent.CHAT: "claude-haiku-4-5-20251001",
+    Intent.SEARCH: "claude-haiku-4-5",
+    Intent.VOICE_SUMMARY: "claude-haiku-4-5",
+    Intent.DIGEST: "claude-haiku-4-5",
+    Intent.ACTION: "claude-haiku-4-5",
+    Intent.BUILD: "claude-haiku-4-5",
+    Intent.EDIT: "claude-haiku-4-5",
+    Intent.COACH: "claude-haiku-4-5",
+    Intent.CHAT: "claude-haiku-4-5",
 }
 
 
@@ -188,7 +188,7 @@ async def classify_intent(message: str, has_voice: bool = False) -> Intent:
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-haiku-4-5",
             max_tokens=20,
             messages=[
                 {

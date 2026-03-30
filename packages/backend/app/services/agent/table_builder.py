@@ -88,7 +88,7 @@ async def build_table(description: str, name: str | None = None) -> TableResult:
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=16384,
             messages=[
                 {

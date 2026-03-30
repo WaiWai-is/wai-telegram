@@ -226,7 +226,7 @@ async def build_document(description: str, name: str | None = None) -> DocumentR
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=16384,
             messages=[
                 {
@@ -360,7 +360,7 @@ async def edit_document(chat_id: int, instruction: str) -> DocumentResult:
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=16384,
             messages=[
                 {

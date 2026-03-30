@@ -17,47 +17,73 @@ from app.services.agent.site_builder import generate_slug
 
 logger = logging.getLogger(__name__)
 
-PRESENTATION_PROMPT = """Generate a stunning reveal.js presentation as a single HTML file.
+PRESENTATION_PROMPT = """Generate a sophisticated, minimalist reveal.js presentation.
 
 Topic: {description}
 
 TECH STACK (include in <head>):
-- reveal.js CSS: <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.css">
-- Theme: <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/theme/black.css"> (or white/moon/night — pick what fits)
+- reveal.js: <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.css">
+- Use the WHITE theme as base: <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/theme/white.css">
 - reveal.js JS: <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js"></script>
-- Google Fonts: pick 1 font that fits the vibe
+- Google Fonts: use 2 fonts — one elegant heading font (e.g. DM Serif Display, Fraunces, Playfair Display) + one clean body font (e.g. Inter, DM Sans, Plus Jakarta Sans)
 
-SEO (include in <head>):
-- <meta name="description" content="..."> with a concise summary of the presentation
-- <meta property="og:title" content="...">
-- <meta property="og:description" content="...">
-- <meta property="og:type" content="website">
-- <meta name="twitter:card" content="summary_large_image">
-- <meta name="twitter:title" content="...">
-- <meta name="twitter:description" content="...">
-- <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+CRITICAL DESIGN RULES — follow these strictly:
+
+  NEVER use emoji. Zero emoji anywhere. Use typography, whitespace, and color instead.
+
+  Color palette — pick ONE accent color (muted, sophisticated) + near-black text (#1a1a1a) + white/off-white bg:
+    Good accents: #4f46e5 (indigo), #0f766e (teal), #b91c1c (deep red), #7c3aed (purple), #0369a1 (blue)
+    BAD: pink, neon green, bright orange, rainbow gradients
+
+  Typography:
+    - Headings: the serif/display font, 2.5em-3em, font-weight 700, letter-spacing -0.02em
+    - Body text: the sans font, 1.2em, font-weight 400, line-height 1.6, color #374151
+    - Numbers/stats: the sans font, 4-6em, font-weight 800, accent color
+    - Captions: 0.9em, color #6b7280
+
+  Layout per slide:
+    - Max 60% of slide width for text (leave breathing room)
+    - Left-aligned text (NOT centered) for content slides. Only title slide is centered.
+    - One idea per slide. Max 3-4 bullet points. Short phrases, NOT sentences.
+    - Use thin horizontal lines (1px, #e5e7eb) as dividers
+
+  Visual hierarchy:
+    - Title slide: large heading + small subtitle + date. Nothing else.
+    - Data slides: ONE big number (4-6em) + one-line explanation below
+    - Content slides: heading + 2-4 short bullet points
+    - Quote slides: large italic text + attribution
+    - Final slide: "Thank you" or clear CTA. Clean, minimal.
+
+  Backgrounds:
+    - Most slides: white or #fafafa
+    - 1-2 accent slides: solid dark background (#1e293b or #0f172a) with white text
+    - NO gradients, NO patterns, NO neon
+
+  Slide transitions: data-transition="fade" (subtle, not distracting)
 
 STRUCTURE:
-- Title slide with bold headline, subtitle, date
-- 8-15 content slides
-- Each slide has ONE clear idea, minimal text
-- Use bullet points sparingly (max 4 per slide)
-- Include a "Thank you" / Q&A final slide
-- Add speaker notes where helpful: <aside class="notes">...</aside>
+- Title slide (centered)
+- 8-12 content slides (left-aligned)
+- Final "Thank you" or CTA slide
+- Speaker notes: <aside class="notes">...</aside>
 
-DESIGN:
-- Clean, modern, professional
-- Use emoji or Unicode symbols for visual interest
-- Background gradients or colors per section
-- Large font sizes, high contrast
-- Slide transitions: data-transition="slide" or "fade"
+CUSTOM CSS (override reveal.js defaults in <style>):
+  .reveal h1, .reveal h2 {{ font-family: 'HEADING_FONT', serif; color: #1a1a1a; }}
+  .reveal p, .reveal li {{ font-family: 'BODY_FONT', sans-serif; color: #374151; text-align: left; }}
+  .reveal .slides section {{ padding: 40px 80px; }}
+  .reveal ul {{ list-style: none; padding: 0; }}
+  .reveal li::before {{ content: "—"; color: ACCENT; margin-right: 12px; font-weight: 700; }}
+  .reveal .stat {{ font-size: 5em; font-weight: 800; color: ACCENT; line-height: 1; }}
 
 INIT (before </body>):
 <script>
 Reveal.initialize({{
   hash: true,
-  transition: 'slide',
-  center: true
+  transition: 'fade',
+  center: false,
+  width: 1200,
+  height: 700,
+  margin: 0.04
 }});
 </script>
 
@@ -89,7 +115,7 @@ async def build_presentation(
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=16384,
             messages=[
                 {

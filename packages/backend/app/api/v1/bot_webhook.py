@@ -824,7 +824,7 @@ async def _process_update(update: dict) -> None:
         try:
             client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
             response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-haiku-4-5",
                 max_tokens=1000,
                 messages=[
                     {
@@ -891,7 +891,7 @@ async def _process_update(update: dict) -> None:
                 else "Respond in the same language as the text."
             )
             response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-haiku-4-5",
                 max_tokens=800,
                 messages=[
                     {

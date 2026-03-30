@@ -143,7 +143,7 @@ async def _execute_agent(agent_id: UUID) -> dict:
             ]
 
             create_kwargs: dict = {
-                "model": "claude-haiku-4-5-20251001",
+                "model": "claude-haiku-4-5",
                 "max_tokens": agent.max_tokens_per_run,
                 "system": agent.system_prompt,
                 "messages": messages,
