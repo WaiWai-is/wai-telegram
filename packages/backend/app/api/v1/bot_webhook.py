@@ -423,6 +423,9 @@ async def _process_update(update: dict) -> None:
                 "Example:\n"
                 "`/build Landing page for cafe Sunrise. Menu: coffee $3, latte $4, croissant $2.50. "
                 "Address: 123 Main St. Phone: 555-0123`\n\n"
+                "Theme: `/build --theme dark-corporate My SaaS landing page`\n"
+                "Themes: default, dark-corporate, warm-organic, neon-startup, "
+                "clean-minimal, luxury-gold, fresh-modern, retro-vintage\n\n"
                 "I'll generate a beautiful website and publish it instantly!",
             )
             return
@@ -431,13 +434,16 @@ async def _process_update(update: dict) -> None:
 
         await send_typing_action(chat_id)
 
-        from app.services.agent.site_builder import build_site, store_site
+        from app.services.agent.site_builder import build_site, resolve_theme, store_site
+
+        # Resolve theme from --theme flag or auto-detect from keywords
+        theme, description = resolve_theme(description)
 
         # Extract name from first sentence or first few words
         name = (
             description.split(".")[0][:40] if "." in description else description[:40]
         )
-        result = await build_site(description, name=name)
+        result = await build_site(description, name=name, theme=theme)
 
         if result.success:
             # Store HTML for later /edit usage

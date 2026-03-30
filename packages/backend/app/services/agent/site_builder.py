@@ -48,13 +48,233 @@ SITE_EDIT_PROMPT = (
     "starting with <!DOCTYPE html>."
 )
 
+# ---------------------------------------------------------------------------
+# Theme presets — each provides Tailwind classes, Google Fonts, and color specs
+# that get injected into the generation prompt.
+# ---------------------------------------------------------------------------
+THEMES: dict[str, dict] = {
+    "default": {
+        "name": "default",
+        "description": "Let Claude pick the best color scheme based on the content.",
+        "prompt": "",
+        "keywords_en": [],
+        "keywords_ru": [],
+    },
+    "dark-corporate": {
+        "name": "dark-corporate",
+        "description": "Dark background with white text and blue accents — sleek, professional.",
+        "prompt": (
+            "THEME (override all default colors and fonts with these):\n"
+            "- Background: dark navy (#0f172a), cards: (#1e293b)\n"
+            "- Text: white (#f8fafc) for headings, slate-300 (#cbd5e1) for body\n"
+            "- Accents: blue-500 (#3b82f6) for CTAs, blue-400 (#60a5fa) for links\n"
+            "- Google Font: <link href='https://fonts.googleapis.com/css2?"
+            "family=Inter:wght@400;600;700&display=swap' rel='stylesheet'>\n"
+            "- Tailwind: body bg-slate-900 text-slate-300, headings text-white font-semibold\n"
+            "- Buttons: bg-blue-500 hover:bg-blue-600 text-white rounded-lg\n"
+            "- Cards: bg-slate-800 border border-slate-700 rounded-xl\n"
+            "- Footer: bg-slate-950 text-slate-400\n"
+        ),
+        "keywords_en": ["dark", "corporate", "professional", "dark theme", "navy"],
+        "keywords_ru": ["тёмная", "темная", "корпоративная", "тёмная тема", "темная тема"],
+    },
+    "warm-organic": {
+        "name": "warm-organic",
+        "description": "Cream background with brown/amber accents and serif headings.",
+        "prompt": (
+            "THEME (override all default colors and fonts with these):\n"
+            "- Background: warm cream (#faf7f2), cards: white (#ffffff)\n"
+            "- Text: brown-900 (#3b1f0b) for headings, brown-700 (#5c3a1e) for body\n"
+            "- Accents: amber-600 (#d97706) for CTAs, amber-700 (#b45309) for links\n"
+            "- Google Font: <link href='https://fonts.googleapis.com/css2?"
+            "family=Merriweather:wght@400;700&family=Source+Sans+3:wght@400;600&display=swap' "
+            "rel='stylesheet'>\n"
+            "- Headings: font-family 'Merriweather', serif. Body: 'Source Sans 3', sans-serif\n"
+            "- Tailwind: body bg-[#faf7f2] text-[#5c3a1e]\n"
+            "- Buttons: bg-amber-600 hover:bg-amber-700 text-white rounded-full\n"
+            "- Cards: bg-white shadow-md rounded-2xl border border-amber-100\n"
+        ),
+        "keywords_en": ["warm", "organic", "natural", "earthy", "cream"],
+        "keywords_ru": ["тёплая", "теплая", "органическая", "натуральная", "кремовая"],
+    },
+    "neon-startup": {
+        "name": "neon-startup",
+        "description": "Dark background with neon green/purple gradients and monospace accents.",
+        "prompt": (
+            "THEME (override all default colors and fonts with these):\n"
+            "- Background: near-black (#0a0a0a), cards: (#18181b)\n"
+            "- Text: white (#ffffff) for headings, zinc-400 (#a1a1aa) for body\n"
+            "- Accents: neon green (#22c55e) and purple (#a855f7), gradients green-to-purple\n"
+            "- Google Font: <link href='https://fonts.googleapis.com/css2?"
+            "family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@400;600;700"
+            "&display=swap' rel='stylesheet'>\n"
+            "- Headings: font-family 'Space Grotesk', sans-serif. "
+            "Code/accents: 'JetBrains Mono', monospace\n"
+            "- Tailwind: body bg-zinc-950 text-zinc-400\n"
+            "- Buttons: bg-gradient-to-r from-green-500 to-purple-500 text-white rounded-lg\n"
+            "- Cards: bg-zinc-900 border border-zinc-800 rounded-xl, subtle glow on hover\n"
+        ),
+        "keywords_en": ["neon", "startup", "tech", "cyberpunk", "glow"],
+        "keywords_ru": ["неон", "стартап", "технологичная", "киберпанк"],
+    },
+    "clean-minimal": {
+        "name": "clean-minimal",
+        "description": "White background, black text, lots of whitespace, Inter font.",
+        "prompt": (
+            "THEME (override all default colors and fonts with these):\n"
+            "- Background: white (#ffffff), cards: gray-50 (#f9fafb)\n"
+            "- Text: gray-900 (#111827) for headings, gray-600 (#4b5563) for body\n"
+            "- Accents: gray-900 (#111827) for CTAs, underline links instead of colored\n"
+            "- Google Font: <link href='https://fonts.googleapis.com/css2?"
+            "family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>\n"
+            "- Font: 'Inter', sans-serif everywhere\n"
+            "- Tailwind: body bg-white text-gray-600, generous py-24 px-6 spacing\n"
+            "- Buttons: bg-gray-900 hover:bg-gray-800 text-white rounded-md\n"
+            "- Cards: bg-gray-50 rounded-lg, minimal borders. Lots of whitespace.\n"
+        ),
+        "keywords_en": ["minimal", "minimalist", "clean", "simple", "white"],
+        "keywords_ru": ["минимализм", "минималистичная", "чистая", "простая", "белая"],
+    },
+    "luxury-gold": {
+        "name": "luxury-gold",
+        "description": "Black background with gold accents and elegant serif fonts.",
+        "prompt": (
+            "THEME (override all default colors and fonts with these):\n"
+            "- Background: black (#000000), cards: (#111111)\n"
+            "- Text: gold (#d4af37) for headings, gray-300 (#d1d5db) for body\n"
+            "- Accents: gold (#d4af37) for borders/highlights, white for CTAs\n"
+            "- Google Font: <link href='https://fonts.googleapis.com/css2?"
+            "family=Playfair+Display:wght@400;600;700&family=Lato:wght@300;400;700"
+            "&display=swap' rel='stylesheet'>\n"
+            "- Headings: 'Playfair Display', serif. Body: 'Lato', sans-serif, font-weight 300\n"
+            "- Tailwind: body bg-black text-gray-300\n"
+            "- Buttons: border-2 border-[#d4af37] text-[#d4af37] "
+            "hover:bg-[#d4af37] hover:text-black rounded-none uppercase tracking-widest\n"
+            "- Cards: bg-[#111111] border border-[#d4af37]/20 rounded-none\n"
+        ),
+        "keywords_en": ["luxury", "gold", "elegant", "premium", "luxurious"],
+        "keywords_ru": [
+            "люкс",
+            "золото",
+            "золотая",
+            "элегантная",
+            "премиум",
+            "роскошная",
+        ],
+    },
+    "fresh-modern": {
+        "name": "fresh-modern",
+        "description": "White background with vibrant blue/green, rounded corners, playful.",
+        "prompt": (
+            "THEME (override all default colors and fonts with these):\n"
+            "- Background: white (#ffffff), cards: blue-50 (#eff6ff) or green-50 (#f0fdf4)\n"
+            "- Text: gray-800 (#1f2937) for headings, gray-600 (#4b5563) for body\n"
+            "- Accents: vibrant blue (#2563eb) and teal (#0d9488), use gradients\n"
+            "- Google Font: <link href='https://fonts.googleapis.com/css2?"
+            "family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap' rel='stylesheet'>\n"
+            "- Font: 'Plus Jakarta Sans', sans-serif everywhere\n"
+            "- Tailwind: body bg-white text-gray-600\n"
+            "- Buttons: bg-blue-600 hover:bg-blue-700 text-white rounded-full px-8\n"
+            "- Cards: bg-blue-50 rounded-2xl shadow-sm, rounded-3xl for hero sections\n"
+        ),
+        "keywords_en": ["fresh", "modern", "vibrant", "colorful", "playful"],
+        "keywords_ru": ["свежая", "современная", "яркая", "красочная", "игривая"],
+    },
+    "retro-vintage": {
+        "name": "retro-vintage",
+        "description": "Warm sepia tones, vintage serif fonts, textured feel.",
+        "prompt": (
+            "THEME (override all default colors and fonts with these):\n"
+            "- Background: warm sepia (#f5f0e8), cards: (#fffdf7)\n"
+            "- Text: dark brown (#2d1b0e) for headings, brown (#5c4033) for body\n"
+            "- Accents: rust (#b7410e) for CTAs, dark olive (#556b2f) for secondary\n"
+            "- Google Font: <link href='https://fonts.googleapis.com/css2?"
+            "family=Libre+Baskerville:wght@400;700&family=Courier+Prime&display=swap' "
+            "rel='stylesheet'>\n"
+            "- Headings: 'Libre Baskerville', serif. Body accents: 'Courier Prime', monospace\n"
+            "- Tailwind: body bg-[#f5f0e8] text-[#5c4033]\n"
+            "- Buttons: bg-[#b7410e] hover:bg-[#8b3209] text-white rounded-sm "
+            "uppercase tracking-wider\n"
+            "- Cards: bg-[#fffdf7] border border-[#d4c5a9] rounded-sm shadow-sm\n"
+        ),
+        "keywords_en": ["retro", "vintage", "old-school", "classic", "nostalgic"],
+        "keywords_ru": [
+            "ретро",
+            "винтажная",
+            "классическая",
+            "старинная",
+            "ностальгическая",
+        ],
+    },
+}
+
+
+def detect_theme(text: str) -> str:
+    """Detect a theme from user text by matching keywords.
+
+    Scans for keyword matches in the description.
+    Returns the theme key, or "default" if nothing matches.
+    """
+    lower = text.lower()
+    for theme_key, theme in THEMES.items():
+        if theme_key == "default":
+            continue
+        for kw in theme["keywords_en"] + theme["keywords_ru"]:
+            if kw in lower:
+                return theme_key
+    return "default"
+
+
+def parse_theme_flag(text: str) -> tuple[str, str]:
+    """Parse --theme flag from the description text.
+
+    Returns (theme_key, remaining_description).
+    If --theme is not present or value is unknown, returns ("", original_text).
+    """
+    match = re.match(r"--theme\s+([\w-]+)\s*(.*)", text, re.DOTALL)
+    if match:
+        theme_key = match.group(1).lower()
+        remaining = match.group(2).strip()
+        if theme_key in THEMES:
+            return theme_key, remaining
+        return "", text
+    return "", text
+
+
+def resolve_theme(description: str) -> tuple[str, str]:
+    """Resolve the theme for a build request.
+
+    Checks --theme flag first, then auto-detects from keywords.
+    Returns (theme_key, cleaned_description).
+    """
+    # 1. Explicit --theme flag takes priority
+    theme_key, remaining = parse_theme_flag(description)
+    if theme_key:
+        return theme_key, remaining
+
+    # 2. Auto-detect from description keywords
+    detected = detect_theme(description)
+    return detected, description
+
+
+def get_theme_prompt(theme_key: str) -> str:
+    """Get the prompt injection text for a theme.
+
+    Returns empty string for "default" theme (let Claude decide).
+    """
+    theme = THEMES.get(theme_key)
+    if not theme or theme_key == "default":
+        return ""
+    return theme["prompt"]
+
+
 SITE_GENERATION_PROMPT = """Generate a stunning, modern single-page website.
 
 Description: {description}
-
+{theme_instructions}
 TECH STACK (use these CDNs in <head>):
 - Tailwind CSS: <script src="https://cdn.tailwindcss.com"></script>
-- Google Fonts: pick 1-2 fonts that fit the vibe
+- Google Fonts: pick 1-2 fonts that fit the vibe (or use the theme-specified fonts if a THEME section is provided above)
 - Lucide Icons: <script src="https://unpkg.com/lucide@latest"></script> then <i data-lucide="icon-name"></i>
 - Alpine.js + Intersect plugin (BOTH required):
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/intersect@3.x.x/dist/cdn.min.js"></script>
@@ -220,7 +440,7 @@ REQUIREMENTS:
 - Follow ANIMATION RULES — content always visible, animations are additive only
 - Follow FOOTER PATTERN with columns, links, social icons, and "Made with Wai ✨"
 - Mobile-responsive (Tailwind handles this)
-- Professional color scheme fitting the business
+- If a THEME section is provided above, strictly follow its color scheme, fonts, and styling. Otherwise pick a professional color scheme fitting the business.
 - End of <body> must include: <script>lucide.createIcons();</script> (inside the animation script or standalone)
 
 OUTPUT: Only the HTML starting with <!DOCTYPE html>. No markdown, no explanation."""
@@ -289,8 +509,15 @@ def generate_slug(name: str) -> str:
     return slug[:50] or f"site-{uuid4().hex[:8]}"
 
 
-async def build_site(description: str, name: str | None = None) -> SiteResult:
+async def build_site(
+    description: str, name: str | None = None, theme: str = "default"
+) -> SiteResult:
     """Generate and deploy a website from a text description.
+
+    Args:
+        description: User's site description.
+        name: Optional name for slug generation.
+        theme: Theme key from THEMES dict (default lets Claude choose).
 
     Strategy: Agent SDK (Claude Code-like) → Direct API call fallback.
     Deploy: Cloudflare Pages → local filesystem fallback.
@@ -306,6 +533,11 @@ async def build_site(description: str, name: str | None = None) -> SiteResult:
         slug = f"{slug}-{uuid4().hex[:4]}"
         site_dir = SITES_DIR / slug
 
+    # Build theme instructions for the prompt
+    theme_instructions = get_theme_prompt(theme)
+    if theme_instructions:
+        theme_instructions = "\n" + theme_instructions + "\n"
+
     # Generate HTML via Claude
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -316,7 +548,8 @@ async def build_site(description: str, name: str | None = None) -> SiteResult:
                 {
                     "role": "user",
                     "content": SITE_GENERATION_PROMPT.format(
-                        description=description[:3000]
+                        description=description[:3000],
+                        theme_instructions=theme_instructions,
                     ),
                 }
             ],
