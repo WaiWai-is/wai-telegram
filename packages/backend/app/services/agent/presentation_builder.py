@@ -17,75 +17,109 @@ from app.services.agent.site_builder import generate_slug
 
 logger = logging.getLogger(__name__)
 
-PRESENTATION_PROMPT = """Generate a sophisticated, minimalist reveal.js presentation.
+PRESENTATION_PROMPT = """Generate a reveal.js presentation. Follow the template EXACTLY.
 
 Topic: {description}
 
-TECH STACK (include in <head>):
-- reveal.js: <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.css">
-- Use the WHITE theme as base: <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/theme/white.css">
-- reveal.js JS: <script src="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js"></script>
-- Google Fonts: use 2 fonts — one elegant heading font (e.g. DM Serif Display, Fraunces, Playfair Display) + one clean body font (e.g. Inter, DM Sans, Plus Jakarta Sans)
+OUTPUT: Complete HTML starting with <!DOCTYPE html>. Use this EXACT structure:
 
-CRITICAL DESIGN RULES — follow these strictly:
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>[TITLE]</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/theme/white.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {{ --accent: #4f46e5; }}
+  .reveal {{ font-family: 'Inter', system-ui, sans-serif; }}
+  .reveal h1 {{ font-size: 2.2em; font-weight: 800; color: #111; letter-spacing: -0.03em; line-height: 1.1; margin-bottom: 0.3em; }}
+  .reveal h2 {{ font-size: 1.6em; font-weight: 700; color: #111; letter-spacing: -0.02em; margin-bottom: 0.5em; }}
+  .reveal h3 {{ font-size: 1.1em; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 1em; }}
+  .reveal p {{ font-size: 0.95em; color: #374151; line-height: 1.6; }}
+  .reveal .slides section {{ text-align: left; padding: 60px 80px; }}
+  .reveal ul {{ list-style: none; padding: 0; margin: 0; }}
+  .reveal li {{ font-size: 0.95em; color: #374151; padding: 0.4em 0; padding-left: 1.5em; position: relative; }}
+  .reveal li::before {{ content: ""; position: absolute; left: 0; top: 0.85em; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }}
+  .reveal .big-number {{ font-size: 4em; font-weight: 800; color: var(--accent); line-height: 1; }}
+  .reveal .subtitle {{ font-size: 0.85em; color: #9ca3af; font-weight: 400; }}
+  .reveal .dark-slide {{ background: #111 !important; color: #fff !important; }}
+  .reveal .dark-slide h1, .reveal .dark-slide h2 {{ color: #fff; }}
+  .reveal .dark-slide p, .reveal .dark-slide li {{ color: #d1d5db; }}
+  .reveal .dark-slide li::before {{ background: #818cf8; }}
+  .reveal .divider {{ width: 40px; height: 3px; background: var(--accent); margin: 1em 0; }}
+  .reveal .two-col {{ display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 1em; }}
+</style>
+</head>
+<body>
+<div class="reveal"><div class="slides">
 
-  NEVER use emoji. Zero emoji anywhere. Use typography, whitespace, and color instead.
+[GENERATE 8-12 <section> SLIDES HERE]
 
-  Color palette — pick ONE accent color (muted, sophisticated) + near-black text (#1a1a1a) + white/off-white bg:
-    Good accents: #4f46e5 (indigo), #0f766e (teal), #b91c1c (deep red), #7c3aed (purple), #0369a1 (blue)
-    BAD: pink, neon green, bright orange, rainbow gradients
+</div></div>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5/dist/reveal.js"></script>
+<script>Reveal.initialize({{ hash: true, transition: 'fade', center: false, width: 1200, height: 700, margin: 0.05 }});</script>
+</body>
+</html>
 
-  Typography:
-    - Headings: the serif/display font, 2.5em-3em, font-weight 700, letter-spacing -0.02em
-    - Body text: the sans font, 1.2em, font-weight 400, line-height 1.6, color #374151
-    - Numbers/stats: the sans font, 4-6em, font-weight 800, accent color
-    - Captions: 0.9em, color #6b7280
+SLIDE TEMPLATES — use ONLY these patterns:
 
-  Layout per slide:
-    - Max 60% of slide width for text (leave breathing room)
-    - Left-aligned text (NOT centered) for content slides. Only title slide is centered.
-    - One idea per slide. Max 3-4 bullet points. Short phrases, NOT sentences.
-    - Use thin horizontal lines (1px, #e5e7eb) as dividers
+TITLE SLIDE:
+<section style="text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;">
+  <h3>CATEGORY OR DATE</h3>
+  <h1>Main Title Here</h1>
+  <p class="subtitle">One-line subtitle</p>
+</section>
 
-  Visual hierarchy:
-    - Title slide: large heading + small subtitle + date. Nothing else.
-    - Data slides: ONE big number (4-6em) + one-line explanation below
-    - Content slides: heading + 2-4 short bullet points
-    - Quote slides: large italic text + attribution
-    - Final slide: "Thank you" or clear CTA. Clean, minimal.
+CONTENT SLIDE (bullets):
+<section>
+  <h2>Section Title</h2>
+  <div class="divider"></div>
+  <ul>
+    <li>Short point one</li>
+    <li>Short point two</li>
+    <li>Short point three</li>
+  </ul>
+</section>
 
-  Backgrounds:
-    - Most slides: white or #fafafa
-    - 1-2 accent slides: solid dark background (#1e293b or #0f172a) with white text
-    - NO gradients, NO patterns, NO neon
+STAT SLIDE (big number):
+<section>
+  <h3>LABEL</h3>
+  <div class="big-number">67%</div>
+  <p>One line explaining this number</p>
+</section>
 
-  Slide transitions: data-transition="fade" (subtle, not distracting)
+DARK SLIDE (for emphasis):
+<section class="dark-slide">
+  <h2>Key Message</h2>
+  <div class="divider" style="background:#818cf8"></div>
+  <p>Supporting text goes here</p>
+</section>
 
-STRUCTURE:
-- Title slide (centered)
-- 8-12 content slides (left-aligned)
-- Final "Thank you" or CTA slide
-- Speaker notes: <aside class="notes">...</aside>
+TWO-COLUMN SLIDE:
+<section>
+  <h2>Comparison Title</h2>
+  <div class="two-col">
+    <div><h3>LEFT</h3><ul><li>Point</li><li>Point</li></ul></div>
+    <div><h3>RIGHT</h3><ul><li>Point</li><li>Point</li></ul></div>
+  </div>
+</section>
 
-CUSTOM CSS (override reveal.js defaults in <style>):
-  .reveal h1, .reveal h2 {{ font-family: 'HEADING_FONT', serif; color: #1a1a1a; }}
-  .reveal p, .reveal li {{ font-family: 'BODY_FONT', sans-serif; color: #374151; text-align: left; }}
-  .reveal .slides section {{ padding: 40px 80px; }}
-  .reveal ul {{ list-style: none; padding: 0; }}
-  .reveal li::before {{ content: "—"; color: ACCENT; margin-right: 12px; font-weight: 700; }}
-  .reveal .stat {{ font-size: 5em; font-weight: 800; color: ACCENT; line-height: 1; }}
+END SLIDE:
+<section style="text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;">
+  <h1>Thank You</h1>
+  <p class="subtitle">contact@company.com</p>
+</section>
 
-INIT (before </body>):
-<script>
-Reveal.initialize({{
-  hash: true,
-  transition: 'fade',
-  center: false,
-  width: 1200,
-  height: 700,
-  margin: 0.04
-}});
-</script>
+RULES:
+- NEVER use emoji. Zero. None.
+- NEVER use gradients or bright colors.
+- Keep text SHORT: max 8 words per bullet, max 4 bullets per slide.
+- Use the EXACT CSS classes from above (.big-number, .dark-slide, .divider, .two-col, .subtitle).
+- Mix slide types: title, 3-4 content, 2 stat, 1 dark, 1 two-col, end.
+- All content must FIT within 1200x700px without overflow.
 
 OUTPUT: Only the HTML starting with <!DOCTYPE html>. No markdown wrapping."""
 
