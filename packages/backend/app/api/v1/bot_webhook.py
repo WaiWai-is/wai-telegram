@@ -443,6 +443,10 @@ async def _process_update(update: dict) -> None:
             # Store HTML for later /edit usage
             if result.html:
                 store_site(chat_id, result.slug, result.html)
+            # Track for /sites listing
+            from app.services.agent.site_builder import track_deployed_site
+
+            track_deployed_site(chat_id, result.slug, result.url, "site")
 
             # Try to send a screenshot preview
             caption = (
@@ -574,6 +578,9 @@ async def _process_update(update: dict) -> None:
         result = await build_presentation(description, name=name)
 
         if result.success:
+            from app.services.agent.site_builder import track_deployed_site
+
+            track_deployed_site(chat_id, result.slug, result.url, "slides")
             await send_telegram_message(
                 chat_id,
                 f"🎯 *Presentation ready!*\n\n"
@@ -614,6 +621,9 @@ async def _process_update(update: dict) -> None:
         result = await build_table(description, name=name)
 
         if result.success:
+            from app.services.agent.site_builder import track_deployed_site
+
+            track_deployed_site(chat_id, result.slug, result.url, "table")
             dims = ""
             if result.rows and result.columns:
                 dims = f"📏 {result.rows} rows x {result.columns} columns\n"
@@ -713,6 +723,9 @@ async def _process_update(update: dict) -> None:
         if result.success:
             if result.html:
                 store_document(chat_id, result.slug, result.html)
+            from app.services.agent.site_builder import track_deployed_site
+
+            track_deployed_site(chat_id, result.slug, result.url, "doc")
             await send_telegram_message(
                 chat_id,
                 f"📄 *Document ready!*\n\n"
@@ -730,18 +743,20 @@ async def _process_update(update: dict) -> None:
 
     # Handle /sites command — list deployed sites
     if text.strip() == "/sites":
-        from app.services.agent.site_builder import list_user_sites
+        from app.services.agent.site_builder import get_deployed_sites
 
-        sites = await list_user_sites()
+        sites = get_deployed_sites(chat_id)
         if sites:
-            lines = ["🌐 *Your sites:*\n"]
-            for s in sites[:10]:
-                lines.append(f"• [{s['slug']}]({s['url']}) — {s['size']} bytes")
+            lines = ["🌐 *Your deployments:*\n"]
+            type_icons = {"site": "🌐", "slides": "🎯", "table": "📊", "doc": "📄"}
+            for s in sites[:15]:
+                icon = type_icons.get(s.get("type", "site"), "🌐")
+                lines.append(f"{icon} `{s['slug'][:30]}` — {s['url']}")
             await send_telegram_message(chat_id, "\n".join(lines))
         else:
             await send_telegram_message(
                 chat_id,
-                "No sites deployed yet. Use `/build <description>` to create one!",
+                "No deployments yet. Use `/build <description>` to create one!",
             )
         return
 
