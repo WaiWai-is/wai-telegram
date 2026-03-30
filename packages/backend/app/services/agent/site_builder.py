@@ -463,7 +463,9 @@ FOOTER PATTERN:
 REQUIREMENTS:
 - Single HTML file, all content inline
 - Hero section following the HERO SECTION PATTERN above
-- At least 4 content sections (services/features, about, testimonials, contact)
+- At least 5 content sections (services/features, about, testimonials, contact FORM, FAQ accordion)
+- ALWAYS include a contact form section with name/email/message inputs and submit button
+- ALWAYS include a FAQ section using Alpine.js accordion (x-data, x-collapse)
 - Follow all DESIGN SYSTEM rules for spacing, typography, and containers
 - Follow all COMPONENT PATTERNS for cards, buttons, testimonials, etc.
 - Follow ANIMATION RULES — content always visible, animations are additive only
