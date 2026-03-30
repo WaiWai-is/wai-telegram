@@ -141,7 +141,14 @@ REQUIREMENTS:
 - Add a subtle header or footer with document title
 - Tables for any structured data (pricing, timelines, action items)
 - Signature lines where appropriate
-- A small "Print" button (class="no-print") that calls window.print()
+- A "Download PDF" button: position fixed, top 20px right 20px, z-index 9999, class="no-print"
+  - Calls window.print() on click (opens browser print dialog where user can save as PDF)
+  - Style: background #111, color #fff, border none, border-radius 8px, padding 10px 18px,
+    font-family Inter sans-serif, font-size 13px, font-weight 500, cursor pointer,
+    display flex, align-items center, gap 6px, box-shadow 0 2px 8px rgba(0,0,0,0.15)
+  - Hover: background #333
+  - Content: inline SVG download icon (16x16, stroke currentColor, stroke-width 2) + text "Download PDF"
+  - The button MUST have class="no-print" so @media print hides it
 
 OUTPUT: Only the HTML starting with <!DOCTYPE html>. No markdown wrapping."""
 
