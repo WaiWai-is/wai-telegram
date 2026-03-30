@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-import pytest
 
 from app.models.sync_job import SyncStatus
 from app.tasks.sync_tasks import DistributedLock
