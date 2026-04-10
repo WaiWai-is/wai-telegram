@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from datetime import UTC, date, datetime, time
 from typing import Any
 
@@ -209,7 +210,89 @@ async def _list_all_chats(api: TelegramAIClient) -> dict[str, Any]:
         "next_cursor": None,
     }
 
-    return "[Media]"
+
+def _normalize_chat_search_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().removeprefix("@").casefold()
+
+
+def _tokenize_chat_search(value: str) -> list[str]:
+    return [token for token in re.findall(r"\w+", value, flags=re.UNICODE) if token]
+
+
+def _chat_match_score(chat: dict[str, Any], query: str) -> int:
+    """Score a chat title/username match for search_chats."""
+    query_norm = _normalize_chat_search_text(query)
+    if not query_norm:
+        return 0
+
+    title = _normalize_chat_search_text(chat.get("title"))
+    username = _normalize_chat_search_text(chat.get("username"))
+    score = 0
+
+    if query_norm == title:
+        score += 220
+    if query_norm == username:
+        score += 240
+
+    if title and query_norm in title:
+        score += 140
+    if username and query_norm in username:
+        score += 180
+
+    query_tokens = _tokenize_chat_search(query_norm)
+    if not query_tokens:
+        return score
+
+    title_tokens = set(_tokenize_chat_search(title))
+    username_tokens = set(_tokenize_chat_search(username))
+
+    for token in query_tokens:
+        if token == title:
+            score += 80
+        if token == username:
+            score += 100
+        if token in title:
+            score += 35
+        if token in username:
+            score += 55
+        if token in title_tokens:
+            score += 25
+        if token in username_tokens:
+            score += 35
+
+    return score
+
+
+def _chat_sort_key(chat: dict[str, Any]) -> tuple[str, int, str]:
+    return (
+        str(chat.get("last_activity_at") or chat.get("last_sync_at") or ""),
+        int(chat.get("total_messages_synced") or 0),
+        str(chat.get("title") or ""),
+    )
+
+
+async def _search_chats(
+    api: TelegramAIClient,
+    query: str,
+    limit: int,
+) -> dict[str, Any]:
+    """Search chats by title/username using MCP-side filtering."""
+    chats_result = await _list_all_chats(api)
+    matches: list[tuple[int, dict[str, Any]]] = []
+
+    for chat in chats_result.get("chats", []):
+        score = _chat_match_score(chat, query)
+        if score > 0:
+            matches.append((score, chat))
+
+    matches.sort(key=lambda item: (item[0], *_chat_sort_key(item[1])), reverse=True)
+    return {
+        "query": query,
+        "total": len(matches),
+        "chats": [chat for _, chat in matches[:limit]],
+    }
 
 
 def _format_username_ref(username: Any) -> str:
@@ -258,7 +341,8 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Semantic search across all synced messages using vector embeddings. "
                 "Finds messages by meaning, not just keywords. Only searches already-synced data — "
-                "if results seem incomplete, sync the relevant chat first."
+                "if results seem incomplete, sync the relevant chat first. "
+                "If you're trying to find a person/chat by name or username, use search_chats first."
             ),
             inputSchema={
                 "type": "object",
@@ -289,12 +373,35 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="search_chats",
+            description=(
+                "Find a chat by title, person name, or Telegram username. "
+                "Use this before get_chat_messages when the user asks about a specific person/chat. "
+                "This is more reliable than search_messages for exact person or username lookup."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Chat/person name or Telegram username to find",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum chats to return (1-50, default: 10)",
+                        "default": 10,
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
             name="list_chats",
             description=(
                 "List synced Telegram chats with message counts, sync status, and freshness. "
                 "Returns paginated results — use the cursor from the response to load more pages. "
-                "Use to discover chat IDs. If you're looking for a specific chat, prefer "
-                "search_messages which searches across all chats at once."
+                "Use to discover chat IDs. If you're looking for a specific chat or person, prefer "
+                "search_chats first."
             ),
             inputSchema={
                 "type": "object",
@@ -539,6 +646,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
             )
             return format_search_results(result)
 
+        elif name == "search_chats":
+            query = _require_str(args, "query")
+            limit = _optional_int(args, "limit", default=10, minimum=1, maximum=50)
+            result = await _search_chats(api, query=query, limit=limit)
+            return format_chat_search_results(result)
+
         elif name == "list_chats":
             chat_type = args.get("chat_type")
             if chat_type is not None and not isinstance(chat_type, str):
@@ -739,6 +852,40 @@ def format_chat_list(result: dict, listener_active: bool = False) -> list[TextCo
         lines.append(
             f'\n--- More chats available. Use cursor="{next_cursor}" to load the next page ---'
         )
+
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+def format_chat_search_results(result: dict) -> list[TextContent]:
+    """Format chat search results for display."""
+    chats = result.get("chats", [])
+    query = result.get("query", "")
+    total = result.get("total", len(chats))
+
+    if not chats:
+        return [TextContent(type="text", text=f'No chats found for query: "{query}"')]
+
+    lines = [f'Found {total} chats for query: "{query}"\n']
+    for chat in chats:
+        title = chat.get("title", "Unknown")
+        chat_type = chat.get("chat_type", "unknown")
+        chat_id = chat.get("id", "unknown")
+        synced = chat.get("total_messages_synced", 0)
+        username_ref = _format_username_ref(chat.get("username"))
+        private_link = _private_chat_link(
+            chat_type,
+            chat.get("telegram_chat_id"),
+            chat.get("last_message_id"),
+        )
+        details = [
+            f"ID: {chat_id}",
+            f"Messages synced: {synced}",
+        ]
+        if username_ref:
+            details.append(f"Username: {username_ref}")
+        elif private_link:
+            details.append(f"Open: {private_link}")
+        lines.append(f"- {title} ({chat_type})\n  {' | '.join(details)}\n")
 
     return [TextContent(type="text", text="\n".join(lines))]
 

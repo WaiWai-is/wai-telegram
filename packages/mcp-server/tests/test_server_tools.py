@@ -14,6 +14,7 @@ class TestToolList:
         expected_tools = {
             "get_data_status",
             "search_messages",
+            "search_chats",
             "list_chats",
             "get_chat_messages",
             "sync_chat",
@@ -47,6 +48,14 @@ class TestCallTool:
     @pytest.mark.asyncio
     async def test_search_messages_requires_query(self):
         result = await server.call_tool("search_messages", {"query": ""})
+        assert isinstance(result, CallToolResult)
+        assert result.isError is True
+        assert len(result.content) == 1
+        assert "non-empty" in result.content[0].text.lower()
+
+    @pytest.mark.asyncio
+    async def test_search_chats_requires_query(self):
+        result = await server.call_tool("search_chats", {"query": ""})
         assert isinstance(result, CallToolResult)
         assert result.isError is True
         assert len(result.content) == 1
@@ -134,6 +143,51 @@ class TestCallTool:
         kwargs = mock_api.search_messages.await_args.kwargs
         assert kwargs["date_from"] == datetime(2026, 1, 29, 0, 0, tzinfo=UTC)
         assert kwargs["date_to"] == datetime(2026, 1, 29, 23, 59, 59, 999999, tzinfo=UTC)
+        mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_search_chats_matches_title_and_username(self):
+        mock_api = AsyncMock()
+        page_1 = {
+            "chats": [
+                {
+                    "title": "Not Alice",
+                    "id": "chat-1",
+                    "chat_type": "private",
+                    "username": "someone_else",
+                    "total_messages_synced": 10,
+                    "last_sync_at": "2026-04-01T00:00:00+00:00",
+                }
+            ],
+            "total": 2,
+            "next_cursor": "cursor-2",
+        }
+        page_2 = {
+            "chats": [
+                {
+                    "title": "Alice Example",
+                    "id": "chat-2",
+                    "chat_type": "private",
+                    "username": "alice_ush",
+                    "total_messages_synced": 50,
+                    "last_sync_at": "2026-04-10T00:00:00+00:00",
+                }
+            ],
+            "total": 2,
+            "next_cursor": None,
+        }
+        mock_api.list_chats.side_effect = [page_1, page_2]
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "search_chats",
+                {"query": "alice", "limit": 10},
+            )
+
+        assert "Found 2 chats for query: \"alice\"" in result[0].text
+        assert result[0].text.index("Alice Example") < result[0].text.index("Not Alice")
+        assert "@alice_ush" in result[0].text
+        assert mock_api.list_chats.await_count == 2
         mock_api.close.assert_awaited_once()
 
 
@@ -233,6 +287,32 @@ class TestFormatChatList:
         assert "Showing 1 of 50" in content[0].text
         assert "@chat_a" in content[0].text
         assert "https://t.me/chat_a" in content[0].text
+
+
+class TestFormatChatSearch:
+    def test_format_chat_search_results_with_results(self):
+        result = {
+            "query": "alice",
+            "total": 1,
+            "chats": [
+                {
+                    "title": "Alice Example",
+                    "id": "chat-1",
+                    "chat_type": "private",
+                    "username": "alice_ush",
+                    "total_messages_synced": 12,
+                }
+            ],
+        }
+        content = server.format_chat_search_results(result)
+        assert 'Found 1 chats for query: "alice"' in content[0].text
+        assert "@alice_ush" in content[0].text
+
+    def test_format_chat_search_results_empty(self):
+        content = server.format_chat_search_results(
+            {"query": "alice", "total": 0, "chats": []}
+        )
+        assert 'No chats found for query: "alice"' == content[0].text
 
     def test_shows_private_supergroup_link_when_username_missing(self):
         result = {
