@@ -189,7 +189,7 @@ async def _keyword_search(
         FROM telegram_messages m
         JOIN telegram_chats c ON m.chat_id = c.id
         WHERE {where_sql}
-        ORDER BY similarity DESC, m.sent_at DESC
+        ORDER BY similarity DESC, m.sent_at DESC, m.telegram_message_id DESC
         LIMIT :limit
     """)
 
@@ -284,7 +284,7 @@ async def semantic_search(
         FROM telegram_messages m
         JOIN telegram_chats c ON m.chat_id = c.id
         WHERE {where_sql}
-        ORDER BY similarity DESC
+        ORDER BY similarity DESC, m.sent_at DESC, m.telegram_message_id DESC
         LIMIT :limit
     """)
 
