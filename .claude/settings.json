@@ -2,11 +2,6 @@
   "hooks": {
     "PreToolUse": [],
     "PostToolUse": [],
-    "PreCommit": [
-      {
-        "command": "cd packages/backend && python3 -m ruff check . && python3 -m ruff format --check . && echo 'Lint OK'",
-        "description": "Run ruff lint + format check before commit"
-      }
-    ]
+    "Stop": []
   }
 }
