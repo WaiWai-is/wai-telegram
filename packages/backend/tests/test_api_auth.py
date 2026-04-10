@@ -139,7 +139,9 @@ class TestApiKeys:
         assert data["scopes"] == ["read"]
         assert data["expires_at"] is not None
 
-    async def test_create_api_key_limit_reached(self, auth_client, db_session, test_user):
+    async def test_create_api_key_limit_reached(
+        self, auth_client, db_session, test_user
+    ):
         for index in range(25):
             raw_key = f"wai_limit_{index:02d}_abcdefghijklmnopqrstuvwxyz"
             db_session.add(

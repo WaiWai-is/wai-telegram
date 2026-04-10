@@ -58,7 +58,10 @@ class TestSyncAll:
 
         with (
             patch("app.api.v1.sync.sync_all_chats_task", mock_task),
-            patch("app.api.v1.sync.redis_client", MagicMock(get=MagicMock(return_value=None))),
+            patch(
+                "app.api.v1.sync.redis_client",
+                MagicMock(get=MagicMock(return_value=None)),
+            ),
         ):
             response = await auth_client.post("/api/v1/sync/all")
             assert response.status_code == 200
@@ -151,7 +154,9 @@ class TestGetSyncProgress:
             assert data["status"] == "completed"
             assert data["messages_processed"] == 50
 
-    async def test_get_bulk_progress_from_redis(self, auth_client, db_session, test_user):
+    async def test_get_bulk_progress_from_redis(
+        self, auth_client, db_session, test_user
+    ):
         job = SyncJob(
             user_id=test_user.id,
             chat_id=None,
@@ -161,9 +166,7 @@ class TestGetSyncProgress:
         await db_session.flush()
 
         mock_redis = MagicMock()
-        mock_redis.get = MagicMock(
-            side_effect=[b"4", b"1", b"Chat A"]
-        )
+        mock_redis.get = MagicMock(side_effect=[b"4", b"1", b"Chat A"])
 
         with patch("app.api.v1.sync.redis_client", mock_redis):
             response = await auth_client.get(f"/api/v1/sync/jobs/{job.id}")

@@ -89,9 +89,7 @@ class TestSanitizeData:
             "user": {"id": "user-1", "email": "user@example.com"},
             "extra": {"telegram_user_id": 12345, "status": "failed"},
             "breadcrumbs": {
-                "values": [
-                    {"data": {"session_string": "secret", "phase": "startup"}}
-                ]
+                "values": [{"data": {"session_string": "secret", "phase": "startup"}}]
             },
         }
 

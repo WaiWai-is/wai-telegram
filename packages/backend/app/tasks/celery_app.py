@@ -71,6 +71,7 @@ def configure_celery_beat_observability(**_kwargs):
         ),
     )
 
+
 # Beat schedule
 celery_app.conf.beat_schedule = {
     "generate-daily-digests": {

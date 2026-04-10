@@ -107,10 +107,7 @@ def sanitize_data(value: Any, key: str | None = None) -> Any:
 def sanitize_mapping(mapping: Mapping[str, Any] | None) -> dict[str, Any]:
     if not mapping:
         return {}
-    return {
-        str(key): sanitize_data(value, str(key))
-        for key, value in mapping.items()
-    }
+    return {str(key): sanitize_data(value, str(key)) for key, value in mapping.items()}
 
 
 def _sanitize_request_payload(event: dict[str, Any]) -> None:
@@ -205,7 +202,9 @@ def _build_release_name(settings: Settings, service_name: str) -> str:
         return settings.sentry_release
     try:
         package_version = version("wai-telegram-backend")
-    except PackageNotFoundError:  # pragma: no cover - only during unusual packaging failures
+    except (
+        PackageNotFoundError
+    ):  # pragma: no cover - only during unusual packaging failures
         package_version = "0.0.0"
     return f"{service_name}@{package_version}"
 
