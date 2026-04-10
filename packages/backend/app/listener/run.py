@@ -6,17 +6,32 @@ Usage: python -m app.listener.run
 import asyncio
 import logging
 
+from app.core.config import get_settings
+from app.core.observability import (
+    build_runtime_summary,
+    configure_logging,
+    init_observability,
+    log_event,
+)
 from app.listener.main import TelegramListener
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-)
+configure_logging()
 logger = logging.getLogger(__name__)
+settings = get_settings()
+init_observability(settings, "wai-telegram-listener")
 
 
 def main():
-    logger.info("Starting WAI Telegram Listener")
+    log_event(
+        logger,
+        logging.INFO,
+        "Starting WAI Telegram Listener",
+        event_name="listener.bootstrap",
+        **build_runtime_summary(
+            service_name="wai-telegram-listener",
+            settings=settings,
+        ),
+    )
     listener = TelegramListener()
     asyncio.run(listener.run())
 

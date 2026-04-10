@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import CurrentUser, RequireWrite
 from app.core.database import get_db
 from app.core.limiter import limiter
+from app.core.observability import log_event
 from app.core.security import (
     compute_api_key_prefix,
     create_access_token,
@@ -37,6 +39,7 @@ from app.schemas.auth import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/register", response_model=TokenResponse)
@@ -50,6 +53,12 @@ async def register(
     # Check if email exists
     result = await db.execute(select(User).where(User.email == register_data.email))
     if result.scalar_one_or_none():
+        log_event(
+            logger,
+            logging.WARNING,
+            "Registration rejected because email is already registered",
+            event_name="auth.register.conflict",
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered",
@@ -66,6 +75,13 @@ async def register(
     # Generate tokens
     access_token = create_access_token({"sub": str(user.id)})
     refresh_token = create_refresh_token({"sub": str(user.id)})
+    log_event(
+        logger,
+        logging.INFO,
+        "User registered successfully",
+        event_name="auth.register.success",
+        user_id=user.id,
+    )
 
     return TokenResponse(access_token=access_token, refresh_token=refresh_token)
 
@@ -82,6 +98,12 @@ async def login(
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(form_data.password, user.password_hash):
+        log_event(
+            logger,
+            logging.WARNING,
+            "Login failed because credentials are invalid",
+            event_name="auth.login.failed",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -89,6 +111,13 @@ async def login(
 
     access_token = create_access_token({"sub": str(user.id)})
     refresh_token = create_refresh_token({"sub": str(user.id)})
+    log_event(
+        logger,
+        logging.INFO,
+        "User login succeeded",
+        event_name="auth.login.success",
+        user_id=user.id,
+    )
 
     return TokenResponse(access_token=access_token, refresh_token=refresh_token)
 
@@ -101,6 +130,12 @@ async def refresh_token(
     """Refresh access token."""
     payload = decode_token(request.refresh_token)
     if not payload or payload.get("type") != "refresh":
+        log_event(
+            logger,
+            logging.WARNING,
+            "Refresh token rejected",
+            event_name="auth.refresh.invalid_token",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token",
@@ -111,6 +146,12 @@ async def refresh_token(
     user = result.scalar_one_or_none()
 
     if not user:
+        log_event(
+            logger,
+            logging.WARNING,
+            "Refresh token user not found",
+            event_name="auth.refresh.user_not_found",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
@@ -118,6 +159,13 @@ async def refresh_token(
 
     access_token = create_access_token({"sub": str(user.id)})
     new_refresh_token = create_refresh_token({"sub": str(user.id)})
+    log_event(
+        logger,
+        logging.INFO,
+        "Access token refreshed successfully",
+        event_name="auth.refresh.success",
+        user_id=user.id,
+    )
 
     return TokenResponse(access_token=access_token, refresh_token=new_refresh_token)
 
@@ -182,6 +230,14 @@ async def create_api_key(
         )
     ).scalar()
     if count >= MAX_API_KEYS_PER_USER:
+        log_event(
+            logger,
+            logging.WARNING,
+            "API key creation rejected because user reached limit",
+            event_name="auth.api_key.create.limit_reached",
+            user_id=user.id,
+            existing_keys=count,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Maximum of {MAX_API_KEYS_PER_USER} API keys allowed per user",
@@ -206,6 +262,16 @@ async def create_api_key(
     )
     db.add(api_key)
     await db.flush()
+    log_event(
+        logger,
+        logging.INFO,
+        "API key created successfully",
+        event_name="auth.api_key.create.success",
+        user_id=user.id,
+        key_id=api_key.id,
+        scopes=body.scopes,
+        expires_in_days=body.expires_in_days,
+    )
 
     return ApiKeyCreateResponse(
         id=api_key.id,
@@ -263,11 +329,27 @@ async def revoke_api_key(
     )
     api_key = result.scalar_one_or_none()
     if not api_key:
+        log_event(
+            logger,
+            logging.WARNING,
+            "API key revocation requested for unknown key",
+            event_name="auth.api_key.revoke.not_found",
+            user_id=user.id,
+            key_id=key_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
         )
     await db.delete(api_key)
     await db.flush()
+    log_event(
+        logger,
+        logging.INFO,
+        "API key revoked successfully",
+        event_name="auth.api_key.revoke.success",
+        user_id=user.id,
+        key_id=key_id,
+    )
 
 
 @router.patch("/api-keys/{key_id}", response_model=ApiKeyResponse)
@@ -285,12 +367,29 @@ async def toggle_api_key(
     )
     api_key = result.scalar_one_or_none()
     if not api_key:
+        log_event(
+            logger,
+            logging.WARNING,
+            "API key toggle requested for unknown key",
+            event_name="auth.api_key.toggle.not_found",
+            user_id=user.id,
+            key_id=key_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
         )
 
     api_key.is_active = body.is_active
     await db.flush()
+    log_event(
+        logger,
+        logging.INFO,
+        "API key state updated",
+        event_name="auth.api_key.toggle.success",
+        user_id=user.id,
+        key_id=key_id,
+        is_active=body.is_active,
+    )
 
     return ApiKeyResponse(
         id=api_key.id,

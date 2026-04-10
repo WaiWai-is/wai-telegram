@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from app.core.security import (
@@ -96,3 +96,45 @@ class TestGetCurrentUserApiKey:
             headers={"Authorization": f"Bearer {raw_key}"},
         )
         assert response.status_code == 401
+
+    async def test_expired_api_key_returns_401(self, client, db_session, test_user):
+        raw_key = "wai_expiredkey1234567890abcdefghij"
+        api_key = ApiKey(
+            user_id=test_user.id,
+            name="Expired Key",
+            key_hash=hash_api_key(raw_key),
+            key_prefix=compute_api_key_prefix(raw_key),
+            key_hint=get_key_hint(raw_key),
+            is_active=True,
+            expires_at=datetime.now(UTC) - timedelta(days=1),
+        )
+        db_session.add(api_key)
+        await db_session.flush()
+
+        response = await client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {raw_key}"},
+        )
+        assert response.status_code == 401
+
+    async def test_read_only_api_key_cannot_access_write_routes(
+        self, client, db_session, test_user
+    ):
+        raw_key = "wai_readonlykey1234567890abcdefgh"
+        api_key = ApiKey(
+            user_id=test_user.id,
+            name="Read Only Key",
+            key_hash=hash_api_key(raw_key),
+            key_prefix=compute_api_key_prefix(raw_key),
+            key_hint=get_key_hint(raw_key),
+            is_active=True,
+            scopes="read",
+        )
+        db_session.add(api_key)
+        await db_session.flush()
+
+        response = await client.post(
+            "/api/v1/sync/all",
+            headers={"Authorization": f"Bearer {raw_key}"},
+        )
+        assert response.status_code == 403

@@ -2,11 +2,6 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
-try:
-    import sentry_sdk
-except ImportError:
-    sentry_sdk = None  # type: ignore[assignment]
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -17,24 +12,29 @@ from app.api.v1 import api_router
 from app.core.config import get_settings
 from app.core.database import async_session_factory, engine
 from app.core.limiter import limiter
+from app.core.observability import (
+    build_runtime_summary,
+    capture_exception,
+    configure_logging,
+    init_observability,
+    log_event,
+)
 from app.models.sync_job import SyncJob, SyncStatus
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
-)
+configure_logging()
 logger = logging.getLogger(__name__)
 settings = get_settings()
-
-# Initialize Sentry for error tracking
-if settings.sentry_dsn and sentry_sdk:
-    sentry_sdk.init(
-        dsn=settings.sentry_dsn,
-        traces_sample_rate=0.1,
-        environment=settings.environment,
-        release="wai-telegram@0.2.0",
-        send_default_pii=False,
-    )
-    logger.info("Sentry initialized")
+init_observability(settings, "wai-telegram-backend")
+log_event(
+    logger,
+    logging.INFO,
+    "Backend application bootstrapped",
+    event_name="app.bootstrap",
+    **build_runtime_summary(
+        service_name="wai-telegram-backend",
+        settings=settings,
+    ),
+)
 
 
 @asynccontextmanager
@@ -43,6 +43,12 @@ async def lifespan(app: FastAPI):
     try:
         import redis as redis_lib
 
+        log_event(
+            logger,
+            logging.INFO,
+            "Starting orphaned sync job cleanup",
+            event_name="app.startup.cleanup.begin",
+        )
         redis_client = redis_lib.from_url(settings.redis_url)
         updated_jobs = 0
         async with async_session_factory() as db:
@@ -68,11 +74,29 @@ async def lifespan(app: FastAPI):
                 )
                 updated_jobs += 1
             if updated_jobs > 0:
-                logger.warning(f"Marked {updated_jobs} orphaned sync jobs as FAILED")
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "Marked orphaned sync jobs as failed",
+                    event_name="app.startup.cleanup.orphans_found",
+                    updated_jobs=updated_jobs,
+                )
                 await db.commit()
+            else:
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "No orphaned sync jobs found",
+                    event_name="app.startup.cleanup.no_orphans",
+                )
         redis_client.close()
     except Exception as e:
-        logger.error(f"Failed to clean up orphaned jobs on startup: {e}")
+        logger.exception("Failed to clean up orphaned jobs on startup")
+        capture_exception(
+            e,
+            contexts={"startup_cleanup": {"redis_url": settings.redis_url}},
+            tags={"service": "wai-telegram-backend"},
+        )
 
     yield
 
@@ -80,14 +104,28 @@ async def lifespan(app: FastAPI):
     try:
         from app.api.v1.telegram import _auth_clients
 
+        disconnected_clients = 0
         for key, (client, _) in list(_auth_clients.items()):
             try:
                 await client.disconnect()
+                disconnected_clients += 1
             except Exception:
                 pass
         _auth_clients.clear()
-    except Exception:
-        pass
+        log_event(
+            logger,
+            logging.INFO,
+            "Temporary auth clients disconnected",
+            event_name="app.shutdown.auth_clients_cleared",
+            disconnected_clients=disconnected_clients,
+        )
+    except Exception as e:
+        logger.exception("Failed to disconnect temporary auth clients on shutdown")
+        capture_exception(
+            e,
+            contexts={"shutdown": {"phase": "auth_client_disconnect"}},
+            tags={"service": "wai-telegram-backend"},
+        )
 
 
 app = FastAPI(

@@ -18,6 +18,28 @@ class TestGetSettings:
             assert data["digest_timezone"] == "UTC"
             assert data["listener_active"] is False
 
+    async def test_get_existing_settings(self, auth_client, db_session, test_user):
+        db_session.add(
+            UserSettings(
+                user_id=test_user.id,
+                digest_enabled=False,
+                digest_hour_utc=18,
+                realtime_sync_enabled=True,
+            )
+        )
+        await db_session.flush()
+
+        mock_redis = MagicMock()
+        mock_redis.get = MagicMock(return_value=b"1")
+
+        with patch("app.api.v1.settings._redis", mock_redis):
+            response = await auth_client.get("/api/v1/settings")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["digest_enabled"] is False
+            assert data["digest_hour_utc"] == 18
+            assert data["listener_active"] is True
+
 
 class TestUpdateSettings:
     async def test_partial_update(self, auth_client):
@@ -56,6 +78,28 @@ class TestUpdateSettings:
             )
             assert response.status_code == 200
             mock_redis.publish.assert_called_once()
+
+    async def test_realtime_toggle_off_publishes_stop_user(
+        self, auth_client, db_session, test_user
+    ):
+        settings = UserSettings(
+            user_id=test_user.id,
+            realtime_sync_enabled=True,
+        )
+        db_session.add(settings)
+        await db_session.flush()
+
+        mock_redis = MagicMock()
+        mock_redis.get = MagicMock(return_value=None)
+        mock_redis.publish = MagicMock()
+
+        with patch("app.api.v1.settings._redis", mock_redis):
+            response = await auth_client.put(
+                "/api/v1/settings",
+                json={"realtime_sync_enabled": False},
+            )
+            assert response.status_code == 200
+            assert "stop_user" in mock_redis.publish.call_args.args[1]
 
     async def test_unauthenticated(self, client):
         response = await client.get("/api/v1/settings")

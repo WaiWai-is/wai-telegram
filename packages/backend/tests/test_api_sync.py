@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+from app.api.v1.sync import _parse_retry_after_seconds
 from app.models.chat import ChatType, TelegramChat
 from app.models.sync_job import SyncJob, SyncStatus
 
@@ -38,6 +39,32 @@ class TestSyncAll:
             response = await auth_client.post("/api/v1/sync/all")
             assert response.status_code == 409
 
+    async def test_sync_all_expires_stale_job_without_heartbeat(
+        self, auth_client, db_session, test_user
+    ):
+        stale_job = SyncJob(
+            user_id=test_user.id,
+            chat_id=None,
+            status=SyncStatus.IN_PROGRESS,
+            updated_at=datetime.now(UTC),
+        )
+        db_session.add(stale_job)
+        await db_session.flush()
+        stale_job.updated_at = datetime(2000, 1, 1, tzinfo=UTC)
+        await db_session.flush()
+
+        mock_task = MagicMock()
+        mock_task.delay = MagicMock()
+
+        with (
+            patch("app.api.v1.sync.sync_all_chats_task", mock_task),
+            patch("app.api.v1.sync.redis_client", MagicMock(get=MagicMock(return_value=None))),
+        ):
+            response = await auth_client.post("/api/v1/sync/all")
+            assert response.status_code == 200
+
+        assert stale_job.status == SyncStatus.FAILED
+
 
 class TestSyncChat:
     async def test_sync_chat_success(self, auth_client, db_session, test_user):
@@ -66,6 +93,32 @@ class TestSyncChat:
         with patch("app.api.v1.sync.redis_client", MagicMock()):
             response = await auth_client.post(f"/api/v1/sync/chats/{uuid4()}")
             assert response.status_code == 404
+
+    async def test_sync_chat_conflict(self, auth_client, db_session, test_user):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=222,
+            chat_type=ChatType.PRIVATE,
+            title="Conflict Chat",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+
+        db_session.add(
+            SyncJob(
+                user_id=test_user.id,
+                chat_id=chat.id,
+                status=SyncStatus.IN_PROGRESS,
+                updated_at=datetime.now(UTC),
+            )
+        )
+        await db_session.flush()
+
+        with patch(
+            "app.api.v1.sync.redis_client", MagicMock(get=MagicMock(return_value=b"1"))
+        ):
+            response = await auth_client.post(f"/api/v1/sync/chats/{chat.id}")
+            assert response.status_code == 409
 
 
 class TestGetSyncProgress:
@@ -98,6 +151,60 @@ class TestGetSyncProgress:
             assert data["status"] == "completed"
             assert data["messages_processed"] == 50
 
+    async def test_get_bulk_progress_from_redis(self, auth_client, db_session, test_user):
+        job = SyncJob(
+            user_id=test_user.id,
+            chat_id=None,
+            status=SyncStatus.IN_PROGRESS,
+        )
+        db_session.add(job)
+        await db_session.flush()
+
+        mock_redis = MagicMock()
+        mock_redis.get = MagicMock(
+            side_effect=[b"4", b"1", b"Chat A"]
+        )
+
+        with patch("app.api.v1.sync.redis_client", mock_redis):
+            response = await auth_client.get(f"/api/v1/sync/jobs/{job.id}")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total_chats"] == 4
+            assert data["chats_completed"] == 1
+            assert data["current_chat"] == "Chat A"
+            assert data["progress_percent"] == 25.0
+
+    async def test_get_single_chat_progress_from_redis(
+        self, auth_client, db_session, test_user
+    ):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=333,
+            chat_type=ChatType.PRIVATE,
+            title="Tracked Chat",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+
+        job = SyncJob(
+            user_id=test_user.id,
+            chat_id=chat.id,
+            status=SyncStatus.IN_PROGRESS,
+        )
+        db_session.add(job)
+        await db_session.flush()
+
+        mock_redis = MagicMock()
+        mock_redis.get = MagicMock(side_effect=[b"10", b"3"])
+
+        with patch("app.api.v1.sync.redis_client", mock_redis):
+            response = await auth_client.get(f"/api/v1/sync/jobs/{job.id}")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["messages_total"] == 10
+            assert data["messages_seen"] == 3
+            assert data["progress_percent"] == 30.0
+
     async def test_get_progress_not_found(self, auth_client):
         with patch("app.api.v1.sync.redis_client", MagicMock()):
             response = await auth_client.get(f"/api/v1/sync/jobs/{uuid4()}")
@@ -118,3 +225,10 @@ class TestListSyncJobs:
         assert response.status_code == 200
         data = response.json()
         assert len(data) >= 1
+
+
+class TestSyncHelpers:
+    def test_parse_retry_after_seconds(self):
+        assert _parse_retry_after_seconds("rate_limited: retry_after_seconds=12") == 12
+        assert _parse_retry_after_seconds("nothing useful") is None
+        assert _parse_retry_after_seconds(None) is None

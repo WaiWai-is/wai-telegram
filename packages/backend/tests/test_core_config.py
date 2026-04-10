@@ -41,6 +41,14 @@ class TestSettingsDefaults:
         s = Settings()
         assert s.async_database_url == s.database_url
 
+    def test_default_sentry_settings(self):
+        s = Settings()
+        assert s.sentry_release == ""
+        assert s.sentry_traces_sample_rate == 0.1
+        assert s.sentry_profiles_sample_rate == 0.0
+        assert s.sentry_enable_logs is True
+        assert s.sentry_debug is False
+
 
 class TestProductionValidation:
     def test_staging_requires_secret_key(self):

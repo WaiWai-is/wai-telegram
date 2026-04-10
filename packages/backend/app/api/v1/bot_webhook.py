@@ -14,6 +14,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
+from app.core.observability import capture_exception
 from app.services.agent.loop import AgentContext, AgentResult, run_agent
 from app.services.bot_service import send_telegram_message, send_telegram_photo
 
@@ -1069,21 +1070,17 @@ async def _process_update(update: dict) -> None:
         await send_telegram_message(chat_id, result.response)
     except Exception as e:
         logger.error(f"Agent failed: {e}", exc_info=True)
-        # Send to Sentry with context
-        try:
-            import sentry_sdk
-
-            sentry_sdk.set_context(
-                "agent",
-                {
-                    "user_id": str(user_id),
+        capture_exception(
+            e,
+            user_id=user_id,
+            contexts={
+                "agent": {
                     "intent": "unknown",
                     "text_length": len(text),
-                },
-            )
-            sentry_sdk.capture_exception(e)
-        except Exception as _sentry_err:
-            logger.debug(f"Sentry not configured: {_sentry_err}")
+                }
+            },
+            tags={"surface": "telegram_bot"},
+        )
         lang = _detect_language(text)
         if lang == "ru":
             await send_telegram_message(

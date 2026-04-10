@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import CurrentUser, RequireWrite
 from app.core.database import get_db
 from app.core.limiter import limiter
+from app.core.observability import log_event
 from app.models.chat import TelegramChat
 from app.models.sync_job import SyncJob, SyncStatus
 from app.schemas.sync import SyncJobResponse, SyncProgressResponse
@@ -17,6 +19,7 @@ from app.services.sync_service import create_sync_job
 from app.tasks.sync_tasks import redis_client, sync_all_chats_task, sync_chat_task
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 _RETRY_SECONDS_RE = re.compile(r"retry_after_seconds=(\d+)")
 
 
@@ -56,14 +59,25 @@ async def _expire_stale_jobs(
         query = query.where(SyncJob.chat_id.is_(None))
     stale_jobs = (await db.execute(query)).scalars().all()
     updated = False
+    expired_jobs = 0
     for job in stale_jobs:
         if redis_client.get(_job_heartbeat_key(job)):
             continue
         job.status = SyncStatus.FAILED
         job.error_message = "Automatically expired: no progress for 15 minutes"
         updated = True
+        expired_jobs += 1
     if updated:
         await db.flush()
+        log_event(
+            logger,
+            logging.WARNING,
+            "Expired stale sync jobs without heartbeat",
+            event_name="sync.jobs.expired_stale",
+            user_id=user_id,
+            chat_id=chat_id,
+            expired_jobs=expired_jobs,
+        )
 
 
 @router.post("/all", response_model=SyncJobResponse)
@@ -88,6 +102,13 @@ async def sync_all_chats(
         )
     )
     if result.scalar_one_or_none():
+        log_event(
+            logger,
+            logging.WARNING,
+            "Bulk sync rejected because another job is already in progress",
+            event_name="sync.bulk.conflict",
+            user_id=user.id,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Bulk sync already in progress"
         )
@@ -96,6 +117,15 @@ async def sync_all_chats(
     await db.commit()
 
     sync_all_chats_task.delay(str(user.id), str(job.id), limit_per_chat)
+    log_event(
+        logger,
+        logging.INFO,
+        "Bulk sync job created",
+        event_name="sync.bulk.created",
+        user_id=user.id,
+        job_id=job.id,
+        limit_per_chat=limit_per_chat,
+    )
 
     return SyncJobResponse.model_validate(job)
 
@@ -120,6 +150,14 @@ async def sync_chat(
     )
     chat = result.scalar_one_or_none()
     if not chat:
+        log_event(
+            logger,
+            logging.WARNING,
+            "Sync requested for unknown chat",
+            event_name="sync.chat.not_found",
+            user_id=user.id,
+            chat_id=chat_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found"
         )
@@ -136,6 +174,14 @@ async def sync_chat(
         )
     )
     if result.scalar_one_or_none():
+        log_event(
+            logger,
+            logging.WARNING,
+            "Chat sync rejected because a job is already in progress",
+            event_name="sync.chat.conflict",
+            user_id=user.id,
+            chat_id=chat_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Sync already in progress for this chat",
@@ -146,6 +192,16 @@ async def sync_chat(
     await db.commit()
 
     sync_chat_task.delay(str(user.id), str(chat_id), str(job.id), limit)
+    log_event(
+        logger,
+        logging.INFO,
+        "Chat sync job created",
+        event_name="sync.chat.created",
+        user_id=user.id,
+        chat_id=chat_id,
+        job_id=job.id,
+        limit=limit,
+    )
 
     return SyncJobResponse.model_validate(job)
 
@@ -165,6 +221,14 @@ async def get_sync_progress(
     )
     job = result.scalar_one_or_none()
     if not job:
+        log_event(
+            logger,
+            logging.WARNING,
+            "Sync progress requested for unknown job",
+            event_name="sync.progress.not_found",
+            user_id=user.id,
+            job_id=job_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
         )
@@ -241,4 +305,13 @@ async def list_sync_jobs(
         .limit(limit)
     )
     jobs = result.scalars().all()
+    log_event(
+        logger,
+        logging.INFO,
+        "Sync jobs listed",
+        event_name="sync.jobs.listed",
+        user_id=user.id,
+        limit=limit,
+        returned_jobs=len(jobs),
+    )
     return [SyncJobResponse.model_validate(job) for job in jobs]

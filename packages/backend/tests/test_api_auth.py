@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.core.security import (
@@ -8,6 +9,8 @@ from app.core.security import (
     hash_api_key,
 )
 from app.models.api_key import ApiKey
+from app.models.chat import ChatType, TelegramChat
+from app.models.message import TelegramMessage
 
 
 class TestRegister:
@@ -126,6 +129,37 @@ class TestApiKeys:
         assert data["api_key"].startswith("wai_")
         assert "key_hint" in data
 
+    async def test_create_api_key_with_expiration_and_scopes(self, auth_client):
+        response = await auth_client.post(
+            "/api/v1/auth/api-keys",
+            json={"name": "Scoped Key", "expires_in_days": 7, "scopes": ["read"]},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["scopes"] == ["read"]
+        assert data["expires_at"] is not None
+
+    async def test_create_api_key_limit_reached(self, auth_client, db_session, test_user):
+        for index in range(25):
+            raw_key = f"wai_limit_{index:02d}_abcdefghijklmnopqrstuvwxyz"
+            db_session.add(
+                ApiKey(
+                    user_id=test_user.id,
+                    name=f"Key {index}",
+                    key_hash=hash_api_key(raw_key),
+                    key_prefix=compute_api_key_prefix(raw_key),
+                    key_hint=get_key_hint(raw_key),
+                )
+            )
+        await db_session.flush()
+
+        response = await auth_client.post(
+            "/api/v1/auth/api-keys",
+            json={"name": "Overflow Key"},
+        )
+        assert response.status_code == 400
+        assert "Maximum of 25 API keys allowed" in response.json()["detail"]
+
     async def test_list_api_keys(self, auth_client, db_session, test_user):
         raw_key = "wai_listtest123456789012345678901"
         api_key = ApiKey(
@@ -183,6 +217,40 @@ class TestApiKeys:
         assert response.status_code == 200
         data = response.json()
         assert data["is_active"] is False
+
+    async def test_toggle_nonexistent_api_key(self, auth_client):
+        response = await auth_client.patch(
+            f"/api/v1/auth/api-keys/{uuid4()}",
+            json={"is_active": False},
+        )
+        assert response.status_code == 404
+
+    async def test_test_mcp_connection(self, auth_client, db_session, test_user):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=999,
+            chat_type=ChatType.PRIVATE,
+            title="Observability Chat",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+
+        db_session.add(
+            TelegramMessage(
+                chat_id=chat.id,
+                telegram_message_id=1,
+                text="Hello",
+                has_media=False,
+                is_outgoing=False,
+                sent_at=datetime.now(UTC),
+            )
+        )
+        await db_session.flush()
+
+        response = await auth_client.post("/api/v1/auth/api-keys/test")
+        assert response.status_code == 200
+        assert response.json()["chat_count"] == 1
+        assert response.json()["message_count"] == 1
 
     async def test_api_keys_unauthenticated(self, client):
         response = await client.get("/api/v1/auth/api-keys")

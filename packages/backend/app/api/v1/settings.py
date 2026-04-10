@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import CurrentUser, RequireWrite
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.observability import log_event
 from app.models.session import TelegramSession
 from app.models.settings import UserSettings
 from app.schemas.settings import (
@@ -46,6 +47,15 @@ async def get_settings_endpoint(
     """Get user settings."""
     settings = await _get_or_create_settings(db, user.id)
     listener_active = bool(_redis.get(f"listener:active:{user.id}"))
+    log_event(
+        logger,
+        logging.INFO,
+        "User settings loaded",
+        event_name="settings.read.success",
+        user_id=user.id,
+        listener_active=listener_active,
+        realtime_sync_enabled=settings.realtime_sync_enabled,
+    )
     return UserSettingsResponse(
         digest_enabled=settings.digest_enabled,
         digest_hour_utc=settings.digest_hour_utc,
@@ -87,8 +97,26 @@ async def update_settings(
             "listener:cmd:global",
             json.dumps({"command": command, "user_id": str(user.id)}),
         )
+        log_event(
+            logger,
+            logging.INFO,
+            "Realtime sync state changed and listener command published",
+            event_name="settings.update.realtime_toggle",
+            user_id=user.id,
+            command=command,
+            realtime_sync_enabled=new_realtime_value,
+        )
 
     listener_active = bool(_redis.get(f"listener:active:{user.id}"))
+    log_event(
+        logger,
+        logging.INFO,
+        "User settings updated",
+        event_name="settings.update.success",
+        user_id=user.id,
+        updated_fields=sorted(updates.keys()),
+        listener_active=listener_active,
+    )
     return UserSettingsResponse(
         digest_enabled=settings.digest_enabled,
         digest_hour_utc=settings.digest_hour_utc,
@@ -106,6 +134,13 @@ async def test_bot(
 ) -> TestBotResponse:
     """Send a test message via the Telegram bot."""
     if not config.telegram_bot_token:
+        log_event(
+            logger,
+            logging.WARNING,
+            "Test bot request rejected because bot token is not configured",
+            event_name="settings.test_bot.misconfigured",
+            user_id=ctx.user.id,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Bot token not configured",
@@ -120,6 +155,13 @@ async def test_bot(
     )
     session = result.scalar_one_or_none()
     if not session or not session.telegram_user_id:
+        log_event(
+            logger,
+            logging.WARNING,
+            "Test bot request rejected because user has no active Telegram session",
+            event_name="settings.test_bot.no_session",
+            user_id=ctx.user.id,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No Telegram session found. Connect Telegram first.",
@@ -128,5 +170,12 @@ async def test_bot(
     await send_telegram_message(
         session.telegram_user_id,
         "This is a test message from WAI Telegram AI. If you see this, bot delivery is working!",
+    )
+    log_event(
+        logger,
+        logging.INFO,
+        "Test bot message sent successfully",
+        event_name="settings.test_bot.success",
+        user_id=ctx.user.id,
     )
     return TestBotResponse(success=True, message="Test message sent successfully")

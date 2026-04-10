@@ -52,6 +52,11 @@ class Settings(BaseSettings):
 
     # Sentry (error tracking)
     sentry_dsn: str = Field(default="")
+    sentry_release: str = Field(default="")
+    sentry_traces_sample_rate: float = Field(default=0.1, ge=0.0, le=1.0)
+    sentry_profiles_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    sentry_enable_logs: bool = True
+    sentry_debug: bool = False
 
     # Cloudflare (site deployment)
     cloudflare_api_token: str = Field(default="")

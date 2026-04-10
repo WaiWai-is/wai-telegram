@@ -1,7 +1,17 @@
-from celery import Celery
+import logging
+
+from celery import Celery, signals
 
 from app.core.config import get_settings
+from app.core.observability import (
+    build_runtime_summary,
+    configure_logging,
+    init_observability,
+    log_event,
+)
 
+configure_logging()
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 celery_app = Celery(
@@ -22,6 +32,44 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
 )
+
+
+@signals.celeryd_init.connect
+def configure_celery_worker_observability(**_kwargs):
+    init_observability(
+        settings,
+        "wai-telegram-celery-worker",
+        enable_celery_monitoring=True,
+    )
+    log_event(
+        logger,
+        logging.INFO,
+        "Celery worker observability initialized",
+        event_name="celery.worker.bootstrap",
+        **build_runtime_summary(
+            service_name="wai-telegram-celery-worker",
+            settings=settings,
+        ),
+    )
+
+
+@signals.beat_init.connect
+def configure_celery_beat_observability(**_kwargs):
+    init_observability(
+        settings,
+        "wai-telegram-celery-beat",
+        enable_celery_monitoring=True,
+    )
+    log_event(
+        logger,
+        logging.INFO,
+        "Celery beat observability initialized",
+        event_name="celery.beat.bootstrap",
+        **build_runtime_summary(
+            service_name="wai-telegram-celery-beat",
+            settings=settings,
+        ),
+    )
 
 # Beat schedule
 celery_app.conf.beat_schedule = {

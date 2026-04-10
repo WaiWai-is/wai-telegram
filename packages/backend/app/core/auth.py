@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.observability import log_event, set_user_context
 from app.core.security import compute_api_key_prefix, decode_token, verify_api_key
 from app.models.api_key import ApiKey
 from app.models.user import User
@@ -59,6 +60,14 @@ async def get_auth_context(
                 result = await db.execute(select(User).where(User.id == UUID(user_id)))
                 user = result.scalar_one_or_none()
                 if user:
+                    set_user_context(user_id=user.id, auth_type="jwt")
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "JWT authentication succeeded",
+                        event_name="auth.context.jwt_authenticated",
+                        user_id=user.id,
+                    )
                     return AuthContext(
                         user=user, scopes={"read", "write"}, auth_type="jwt"
                     )
@@ -80,10 +89,13 @@ async def get_auth_context(
                     api_key_record.expires_at
                     and api_key_record.expires_at < datetime.now(UTC)
                 ):
-                    logger.warning(
-                        "Expired API key used: %s (expired %s)",
-                        api_key_record.key_hint,
-                        api_key_record.expires_at.isoformat(),
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "Expired API key was used",
+                        event_name="auth.context.api_key_expired",
+                        key_hint=api_key_record.key_hint,
+                        expires_at=api_key_record.expires_at.isoformat(),
                     )
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -99,6 +111,15 @@ async def get_auth_context(
                 if user:
                     # Parse scopes from the stored comma-separated string
                     key_scopes = set(api_key_record.scopes.split(",")) & ALL_SCOPES
+                    set_user_context(user_id=user.id, auth_type="api_key")
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "API key authentication succeeded",
+                        event_name="auth.context.api_key_authenticated",
+                        user_id=user.id,
+                        scopes=sorted(key_scopes),
+                    )
                     return AuthContext(
                         user=user,
                         scopes=key_scopes,
