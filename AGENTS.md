@@ -40,6 +40,8 @@ Rollback after one restart cycle if backend is still not ready, any worker/liste
 
 ## Workflow
 - Commit after each completed functional block.
+- After pushing to `main`, verify that the latest GitHub Actions `CI / Deploy` run completed with `success` before treating the deploy as done.
+- Check with: `gh run list -R WaiWai-is/wai-telegram --workflow 'CI / Deploy' --limit 1` and, if needed, `gh run view <run-id> -R WaiWai-is/wai-telegram`
 - Prefer tests first, then implementation, then refactor.
 - Backend: `cd packages/backend && uv run pytest tests -q`
 - Frontend: `cd packages/frontend && npm run test`

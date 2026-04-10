@@ -180,7 +180,9 @@ jobs:
           [ -z "${DATABASE_URL:-}" ] && MISSING="$MISSING DATABASE_URL"
           [ -z "${REDIS_URL:-}" ] && MISSING="$MISSING REDIS_URL"
           [ -z "${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}" ] && MISSING="$MISSING NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"
+          [ -z "${NEXT_PUBLIC_API_URL:-}" ] && MISSING="$MISSING NEXT_PUBLIC_API_URL"
           [ -z "${SECRET_KEY:-}" ] && MISSING="$MISSING SECRET_KEY"
+          [ -z "${SENTRY_DSN:-}" ] && MISSING="$MISSING SENTRY_DSN"
           if [ -n "$MISSING" ]; then
             echo "FATAL: Missing required env vars:$MISSING"
             exit 1
@@ -430,3 +432,15 @@ jobs:
           done
           echo "Health check failed after 6 attempts"
           exit 1
+
+      - name: Verify MCP endpoint
+        run: |
+          status=$(curl -sS -o /tmp/mcp_probe.out -w '%{http_code}' https://telegram.waiwai.is/mcp)
+          cat /tmp/mcp_probe.out
+          if [ "$status" != "401" ]; then
+            echo ""
+            echo "Expected MCP endpoint to require authentication with HTTP 401, got: $status"
+            exit 1
+          fi
+          echo ""
+          echo "MCP endpoint is reachable and enforcing API key auth"
