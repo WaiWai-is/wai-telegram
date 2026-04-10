@@ -273,6 +273,70 @@ def _chat_sort_key(chat: dict[str, Any]) -> tuple[str, int, str]:
     )
 
 
+def _normalize_search_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.strip().casefold().split())
+
+
+def _tokenize_search_text(value: str) -> list[str]:
+    return [token for token in re.findall(r"\w+", value, flags=re.UNICODE) if token]
+
+
+def _search_fetch_limit(requested_limit: int, chat_id: str | None) -> int:
+    minimum = 50 if chat_id else 100
+    return min(100, max(requested_limit, minimum))
+
+
+def _search_result_lexical_score(result: dict[str, Any], query: str) -> int:
+    query_norm = _normalize_search_text(query)
+    if not query_norm:
+        return 0
+
+    query_tokens = _tokenize_search_text(query_norm)
+    text = _normalize_search_text(result.get("text"))
+    sender = _normalize_search_text(result.get("sender_name"))
+    chat_title = _normalize_search_text(result.get("chat_title"))
+    username = _normalize_search_text(result.get("chat_username")).removeprefix("@")
+
+    score = 0
+    if query_norm and query_norm in text:
+        score += 220
+    if query_norm and query_norm in sender:
+        score += 420
+    if query_norm and query_norm in chat_title:
+        score += 420
+    if query_norm and query_norm in username:
+        score += 460
+
+    for token in query_tokens:
+        if len(token) < 3:
+            continue
+        if token in username:
+            score += 180
+        if token in sender:
+            score += 150
+        if token in chat_title:
+            score += 150
+        if token in text:
+            score += 35
+
+    return score
+
+
+def _rerank_search_results(
+    query: str, results: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
+    def sort_key(result: dict[str, Any]) -> tuple[int, float, str]:
+        lexical_score = _search_result_lexical_score(result, query)
+        similarity = float(result.get("similarity") or 0)
+        sent_at = str(result.get("sent_at") or "")
+        return (lexical_score, similarity, sent_at)
+
+    reranked = sorted(results, key=sort_key, reverse=True)
+    return reranked[:limit]
+
+
 async def _search_chats(
     api: TelegramAIClient,
     query: str,
@@ -637,13 +701,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
             chat_id = args.get("chat_id")
             if chat_id is not None and not isinstance(chat_id, str):
                 raise ValueError('"chat_id" must be a string UUID')
+            fetch_limit = _search_fetch_limit(limit, chat_id)
             result = await api.search_messages(
                 query=query,
                 chat_ids=[chat_id] if chat_id else None,
-                limit=limit,
+                limit=fetch_limit,
                 date_from=date_from,
                 date_to=date_to,
             )
+            result["results"] = _rerank_search_results(query, result.get("results", []), limit)
             return format_search_results(result)
 
         elif name == "search_chats":

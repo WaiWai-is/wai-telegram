@@ -143,6 +143,7 @@ class TestCallTool:
         kwargs = mock_api.search_messages.await_args.kwargs
         assert kwargs["date_from"] == datetime(2026, 1, 29, 0, 0, tzinfo=UTC)
         assert kwargs["date_to"] == datetime(2026, 1, 29, 23, 59, 59, 999999, tzinfo=UTC)
+        assert kwargs["limit"] == 100
         mock_api.close.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -188,6 +189,106 @@ class TestCallTool:
         assert result[0].text.index("Alice Example") < result[0].text.index("Not Alice")
         assert "@alice_ush" in result[0].text
         assert mock_api.list_chats.await_count == 2
+        mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_search_messages_reranks_exact_text_match_within_chat(self):
+        mock_api = AsyncMock()
+        mock_api.search_messages.return_value = {
+            "results": [
+                {
+                    "text": "Да кто же спорит",
+                    "chat_title": "Алиса Лисичкаааааа",
+                    "chat_username": "alice_ush",
+                    "sender_name": "Алиса Лисичкаааааа",
+                    "sent_at": "2026-04-10T10:00:00Z",
+                    "similarity": 0.28,
+                    "is_outgoing": False,
+                    "has_media": False,
+                    "chat_id": "chat-1",
+                    "telegram_message_id": 1,
+                },
+                {
+                    "text": "В Псковской области застрелили двух собак поисково-спасательного отряда «ЛизаАлерт»",
+                    "chat_title": "Алиса Лисичкаааааа",
+                    "chat_username": "alice_ush",
+                    "sender_name": "Алиса Лисичкаааааа",
+                    "sent_at": "2026-04-10T11:00:00Z",
+                    "similarity": 0.24,
+                    "is_outgoing": False,
+                    "has_media": False,
+                    "chat_id": "chat-1",
+                    "telegram_message_id": 2,
+                },
+            ],
+            "total": 2,
+            "query": "ЛизаАлерт",
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "search_messages",
+                {
+                    "query": "ЛизаАлерт",
+                    "chat_id": "chat-1",
+                    "limit": 1,
+                    "date_from": "2026-04-10",
+                    "date_to": "2026-04-10",
+                },
+            )
+
+        assert "ЛизаАлерт" in result[0].text
+        kwargs = mock_api.search_messages.await_args.kwargs
+        assert kwargs["limit"] == 50
+        mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_search_messages_reranks_person_match_globally(self):
+        mock_api = AsyncMock()
+        mock_api.search_messages.return_value = {
+            "results": [
+                {
+                    "text": "а альта сегодня работает ещё, кто знает?",
+                    "chat_title": "Белградские бродяги",
+                    "sender_name": "beautiful james",
+                    "sent_at": "2026-04-10T09:00:00Z",
+                    "similarity": 0.41,
+                    "is_outgoing": False,
+                    "has_media": False,
+                    "chat_id": "chat-2",
+                    "telegram_message_id": 3,
+                },
+                {
+                    "text": "Сижу сдерживаюсь, чтобы не плакать",
+                    "chat_title": "Алиса Лисичкаааааа",
+                    "chat_username": "alice_ush",
+                    "sender_name": "Алиса Лисичкаааааа",
+                    "sent_at": "2026-04-10T11:00:00Z",
+                    "similarity": 0.27,
+                    "is_outgoing": False,
+                    "has_media": False,
+                    "chat_id": "chat-1",
+                    "telegram_message_id": 4,
+                },
+            ],
+            "total": 2,
+            "query": "что мне писала Алиса сегодня",
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "search_messages",
+                {
+                    "query": "что мне писала Алиса сегодня",
+                    "limit": 1,
+                    "date_from": "2026-04-10",
+                    "date_to": "2026-04-10",
+                },
+            )
+
+        assert "Алиса Лисичкаааааа" in result[0].text
+        kwargs = mock_api.search_messages.await_args.kwargs
+        assert kwargs["limit"] == 100
         mock_api.close.assert_awaited_once()
 
 
