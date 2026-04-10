@@ -1,6 +1,6 @@
 import asyncio
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime, time
 from typing import Any
 
 from mcp.server import Server
@@ -123,13 +123,22 @@ def _optional_int(
     return max(minimum, min(maximum, raw))
 
 
-def _optional_iso_datetime(arguments: dict[str, Any], key: str) -> datetime | None:
+def _optional_iso_datetime(
+    arguments: dict[str, Any],
+    key: str,
+    *,
+    end_of_day: bool = False,
+) -> datetime | None:
     value = arguments.get(key)
     if value is None:
         return None
     if not isinstance(value, str):
         raise ValueError(f'"{key}" must be an ISO 8601 datetime string')
     try:
+        if len(value) == 10:
+            parsed_date = date.fromisoformat(value)
+            boundary = time.max if end_of_day else time.min
+            return datetime.combine(parsed_date, boundary, tzinfo=UTC)
         return datetime.fromisoformat(value)
     except ValueError as e:
         raise ValueError(f'"{key}" must be an ISO 8601 datetime string') from e
@@ -175,6 +184,30 @@ def _format_media_label(msg: dict) -> str:
     if media_type:
         label = MEDIA_LABELS.get(media_type, "Media")
         return f"[{label}]"
+
+    return "[Media]"
+
+
+async def _list_all_chats(api: TelegramAIClient) -> dict[str, Any]:
+    """Collect all chats through cursor pagination for summary tools."""
+    chats: list[dict[str, Any]] = []
+    cursor: str | None = None
+    total = 0
+
+    while True:
+        page = await api.list_chats(limit=200, cursor=cursor)
+        chats.extend(page.get("chats", []))
+        total = page.get("total", total)
+        cursor = page.get("next_cursor")
+        if not cursor:
+            break
+
+    return {
+        "chats": chats,
+        "total": total or len(chats),
+        "has_more": False,
+        "next_cursor": None,
+    }
 
     return "[Media]"
 
@@ -486,14 +519,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
         api = get_client()
         if name == "get_data_status":
             settings = await api.get_settings()
-            chats_result = await api.list_chats(limit=100)
+            chats_result = await _list_all_chats(api)
             return format_data_status(settings, chats_result)
 
         elif name == "search_messages":
             query = _require_str(args, "query")
             limit = _optional_int(args, "limit", default=20, minimum=1, maximum=100)
             date_from = _optional_iso_datetime(args, "date_from")
-            date_to = _optional_iso_datetime(args, "date_to")
+            date_to = _optional_iso_datetime(args, "date_to", end_of_day=True)
             chat_id = args.get("chat_id")
             if chat_id is not None and not isinstance(chat_id, str):
                 raise ValueError('"chat_id" must be a string UUID')
@@ -618,7 +651,7 @@ def format_search_results(result: dict) -> list[TextContent]:
     lines = [f'Found {total} messages for query: "{query}"\n']
     for r in result.get("results", []):
         sender = r.get("sender_name") or ("You" if r.get("is_outgoing") else "Unknown")
-        text = _format_media_label(r)[:200]
+        text = _format_media_label(r)
         similarity = r.get("similarity", 0) * 100
         sent_at = _format_date(r.get("sent_at"))
         chat_title = r.get("chat_title") or "Unknown"
@@ -722,7 +755,7 @@ def format_chat_messages(result: dict) -> list[TextContent]:
     lines = [f"Messages ({len(messages)} returned):\n"]
     for msg in messages:
         sender = msg.get("sender_name") or ("You" if msg.get("is_outgoing") else "Unknown")
-        text = _format_media_label(msg)[:200]
+        text = _format_media_label(msg)
         sent_at = _format_date(msg.get("sent_at"))
         msg_id = msg.get("telegram_message_id", "")
         lines.append(f"[{sent_at}] {sender} (msg#{msg_id}): {text}\n")

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -69,6 +70,72 @@ class TestCallTool:
         assert "Backend returned HTTP 400" in result.content[0].text
         mock_api.close.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_get_data_status_paginates_all_chats(self):
+        mock_api = AsyncMock()
+        page_1 = {
+            "chats": [
+                {
+                    "title": f"Chat {i}",
+                    "id": f"id-{i}",
+                    "chat_type": "private",
+                    "total_messages_synced": 1,
+                    "last_sync_at": "2026-04-01T00:00:00+00:00",
+                }
+                for i in range(1, 201)
+            ],
+            "total": 250,
+            "next_cursor": "cursor-2",
+        }
+        page_2 = {
+            "chats": [
+                {
+                    "title": f"Chat {i}",
+                    "id": f"id-{i}",
+                    "chat_type": "private",
+                    "total_messages_synced": 1,
+                    "last_sync_at": "2026-04-01T00:00:00+00:00",
+                }
+                for i in range(201, 251)
+            ],
+            "total": 250,
+            "next_cursor": None,
+        }
+        mock_api.get_settings.return_value = {
+            "listener_active": True,
+            "realtime_sync_enabled": True,
+        }
+        mock_api.list_chats.side_effect = [page_1, page_2]
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool("get_data_status", {})
+
+        assert "Total chats: 250" in result[0].text
+        assert "Total messages synced: 250" in result[0].text
+        assert mock_api.list_chats.await_count == 2
+        mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_search_messages_date_filters_expand_date_only_inputs(self):
+        mock_api = AsyncMock()
+        mock_api.search_messages.return_value = {"results": [], "total": 0, "query": "test"}
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "search_messages",
+                {
+                    "query": "test",
+                    "date_from": "2026-01-29",
+                    "date_to": "2026-01-29",
+                },
+            )
+
+        assert result[0].text.startswith("No messages found")
+        kwargs = mock_api.search_messages.await_args.kwargs
+        assert kwargs["date_from"] == datetime(2026, 1, 29, 0, 0, tzinfo=UTC)
+        assert kwargs["date_to"] == datetime(2026, 1, 29, 23, 59, 59, 999999, tzinfo=UTC)
+        mock_api.close.assert_awaited_once()
+
 
 class TestFormatHelpers:
     def test_format_search_results_with_results(self):
@@ -125,6 +192,26 @@ class TestFormatHelpers:
         result = {"results": [{"text": "hello"}]}
         content = server.format_search_results(result)
         assert len(content) >= 1
+
+    def test_format_search_results_keeps_full_text(self):
+        long_text = "A" * 320
+        result = {
+            "results": [
+                {
+                    "text": long_text,
+                    "chat_title": "Test Chat",
+                    "sender_name": "John",
+                    "sent_at": "2024-01-01T12:00:00Z",
+                    "similarity": 0.95,
+                    "is_outgoing": False,
+                    "has_media": False,
+                }
+            ],
+            "total": 1,
+            "query": "hello",
+        }
+        content = server.format_search_results(result)
+        assert long_text in content[0].text
 
 
 class TestFormatChatList:
@@ -240,3 +327,24 @@ class TestFormatDataStatus:
         settings = {"listener_active": False, "realtime_sync_enabled": False}
         content = server.format_data_status(settings, result)
         assert "No chats synced" in content[0].text
+
+
+class TestFormatChatMessages:
+    def test_keeps_full_text(self):
+        long_text = "B" * 360
+        result = {
+            "messages": [
+                {
+                    "telegram_message_id": 123,
+                    "text": long_text,
+                    "sender_name": "Jane",
+                    "sent_at": "2024-01-01T12:00:00Z",
+                    "is_outgoing": False,
+                }
+            ],
+            "has_more": False,
+            "total_messages_synced": 1,
+            "last_sync_at": "2024-01-01T12:00:00Z",
+        }
+        content = server.format_chat_messages(result)
+        assert long_text in content[0].text
