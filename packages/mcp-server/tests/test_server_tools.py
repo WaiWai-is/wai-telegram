@@ -184,7 +184,7 @@ class TestCallTool:
                 {"query": "alice", "limit": 10},
             )
 
-        assert "Found 2 chats for query: \"alice\"" in result[0].text
+        assert 'Found 2 chats for query: "alice"' in result[0].text
         assert result[0].text.index("Alice Example") < result[0].text.index("Not Alice")
         assert "@alice_ush" in result[0].text
         assert mock_api.list_chats.await_count == 2
@@ -309,9 +309,7 @@ class TestFormatChatSearch:
         assert "@alice_ush" in content[0].text
 
     def test_format_chat_search_results_empty(self):
-        content = server.format_chat_search_results(
-            {"query": "alice", "total": 0, "chats": []}
-        )
+        content = server.format_chat_search_results({"query": "alice", "total": 0, "chats": []})
         assert 'No chats found for query: "alice"' == content[0].text
 
     def test_shows_private_supergroup_link_when_username_missing(self):
