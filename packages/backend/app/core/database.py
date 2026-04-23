@@ -1,6 +1,7 @@
 import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -17,6 +18,19 @@ settings = get_settings()
 _engine: AsyncEngine | None = None
 _engine_pid: int | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+class _EngineProxy:
+    def __getattr__(self, name: str) -> Any:
+        return getattr(get_engine(), name)
+
+
+class _SessionFactoryProxy:
+    def __call__(self, *args: Any, **kwargs: Any) -> AsyncSession:
+        return get_session_factory()(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(get_session_factory(), name)
 
 
 def _create_engine() -> AsyncEngine:
@@ -56,6 +70,11 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 class Base(DeclarativeBase):
     pass
+
+
+# Backwards-compatible lazy proxies for modules that import these names directly.
+engine = cast(AsyncEngine, _EngineProxy())
+async_session_factory = cast(async_sessionmaker[AsyncSession], _SessionFactoryProxy())
 
 
 async def dispose_engine() -> None:
