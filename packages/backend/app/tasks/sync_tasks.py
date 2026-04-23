@@ -216,7 +216,9 @@ def sync_chat_task(
                 str(e),
             )
         )
-        logger.warning("Sync disabled for chat %s due to unauthorized session: %s", chat_id, e)
+        logger.warning(
+            "Sync disabled for chat %s due to unauthorized session: %s", chat_id, e
+        )
         return {"status": "failed", "reason": "unauthorized_session"}
     except FloodWaitError as e:
         countdown = max(1, int(e.seconds * settings.flood_wait_multiplier))

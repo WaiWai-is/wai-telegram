@@ -56,7 +56,9 @@ class TestGenerateAllDigests:
     @patch("app.tasks.digest_tasks.group")
     @patch("app.tasks.digest_tasks.generate_user_digest")
     @patch("app.tasks.digest_tasks.run_async")
-    def test_result_contains_yesterday_date(self, mock_run_async, mock_task, mock_group):
+    def test_result_contains_yesterday_date(
+        self, mock_run_async, mock_task, mock_group
+    ):
         """The returned date field should be yesterday in ISO format."""
         mock_run_async.return_value = [uuid4()]
         mock_task.s = MagicMock(return_value=MagicMock())
