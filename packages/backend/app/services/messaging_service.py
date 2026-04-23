@@ -239,11 +239,11 @@ async def send_message(
     except (
         FloodWaitError,
         ChatWriteForbiddenError,
-            UserBannedInChannelError,
-            RPCError,
-            ConnectionError,
-            OSError,
-        ) as e:
+        UserBannedInChannelError,
+        RPCError,
+        ConnectionError,
+        OSError,
+    ) as e:
         if is_session_authorization_error(e):
             await invalidate_client_authorization(client, user_id, e)
             raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE) from e

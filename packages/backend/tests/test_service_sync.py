@@ -137,7 +137,9 @@ class TestSyncChats:
                 new_callable=AsyncMock,
             ) as mock_invalidate,
         ):
-            with pytest.raises(TelegramSessionUnauthorizedError, match="Reconnect Telegram"):
+            with pytest.raises(
+                TelegramSessionUnauthorizedError, match="Reconnect Telegram"
+            ):
                 await sync_chats(db_session, test_user.id)
 
         mock_invalidate.assert_awaited_once_with(mock_client, test_user.id, ANY)

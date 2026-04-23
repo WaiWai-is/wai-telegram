@@ -311,8 +311,7 @@ class TestInvalidateUnauthorizedSession:
         assert user_settings.realtime_sync_enabled is True
         assert mock_redis.publish.await_count == 2
         published_commands = [
-            call.args[1]
-            for call in mock_redis.publish.await_args_list
+            call.args[1] for call in mock_redis.publish.await_args_list
         ]
         assert '"command": "stop_user"' in published_commands[0]
         assert '"command": "start_user"' in published_commands[1]

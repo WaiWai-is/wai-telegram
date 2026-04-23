@@ -43,7 +43,7 @@ class TestSendMessageEndpoint:
             response = await auth_client.post(
                 f"/api/v1/messages/{uuid4()}/send",
                 json={"text": "Hello"},
-        )
+            )
         assert response.status_code == 400
         assert "not found" in response.json()["detail"]
 

@@ -416,7 +416,9 @@ class TelegramListener:
         except Exception as e:
             if is_session_authorization_error(e):
                 await self._handle_unauthorized_client(user_id, client, e)
-                error_message = "Telegram session expired. Reconnect Telegram and try again."
+                error_message = (
+                    "Telegram session expired. Reconnect Telegram and try again."
+                )
                 logger.warning(
                     "Listener sync failed due to expired Telegram session for user %s: %s",
                     user_id,

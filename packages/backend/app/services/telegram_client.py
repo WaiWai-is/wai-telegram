@@ -66,13 +66,17 @@ async def invalidate_unauthorized_session(
 
     async with get_db_context() as db:
         active_sessions = (
-            await db.execute(
-                select(TelegramSession).where(
-                    TelegramSession.user_id == user_id,
-                    TelegramSession.is_active == True,
+            (
+                await db.execute(
+                    select(TelegramSession).where(
+                        TelegramSession.user_id == user_id,
+                        TelegramSession.is_active == True,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         if session_id is not None:
             target_session = next(
@@ -96,13 +100,17 @@ async def invalidate_unauthorized_session(
         invalidated_session_id = target_session.id
 
         remaining_active_sessions = (
-            await db.execute(
-                select(TelegramSession.id).where(
-                    TelegramSession.user_id == user_id,
-                    TelegramSession.is_active == True,
+            (
+                await db.execute(
+                    select(TelegramSession.id).where(
+                        TelegramSession.user_id == user_id,
+                        TelegramSession.is_active == True,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         result = await db.execute(
             select(UserSettings).where(UserSettings.user_id == user_id)
