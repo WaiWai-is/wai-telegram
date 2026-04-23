@@ -4,27 +4,14 @@ The run_due_agents task checks every minute for agents whose next_run_at
 has passed, and dispatches execute_agent for each one.
 """
 
-import asyncio
 import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
 from celery import shared_task
 
+from app.core.async_runner import run_async
 from app.core.config import get_settings
-
-
-def _run_async(coro):
-    """Run async code in Celery worker without EventLoop conflicts.
-
-    Celery fork workers inherit a closed event loop from the parent.
-    Creating a fresh loop avoids 'Future attached to a different loop'.
-    """
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 logger = logging.getLogger(__name__)
@@ -73,14 +60,13 @@ async def _execute_tool_call(tool_name: str, tool_input: dict) -> str:
 @shared_task
 def run_due_agents():
     """Find and execute all agents whose next_run_at <= now."""
-    return _run_async(_run_due_agents())
+    return run_async(_run_due_agents())
 
 
 async def _run_due_agents() -> dict:
-    from app.core.database import dispose_engine, get_db_context
+    from app.core.database import get_db_context
     from app.models.digital_agent import DigitalAgent
 
-    await dispose_engine()
     now = datetime.now(UTC)
     dispatched = 0
 
@@ -106,18 +92,16 @@ async def _run_due_agents() -> dict:
 @shared_task(bind=True, max_retries=2)
 def execute_agent(self, agent_id: str):
     """Execute a single digital agent run."""
-    return _run_async(_execute_agent(UUID(agent_id)))
+    return run_async(_execute_agent(UUID(agent_id)))
 
 
 async def _execute_agent(agent_id: UUID) -> dict:
     import anthropic
 
-    from app.core.database import dispose_engine, get_db_context
+    from app.core.database import get_db_context
     from app.models.digital_agent import DigitalAgent
     from app.services.agent.digital_agents import compute_next_run
     from app.services.bot_service import send_telegram_message
-
-    await dispose_engine()
 
     async with get_db_context() as db:
         from sqlalchemy import select

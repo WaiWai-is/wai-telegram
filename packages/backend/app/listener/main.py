@@ -9,7 +9,6 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
-from telethon.sessions import StringSession
 from telethon.tl.types import (
     Channel,
     MessageMediaDocument,
@@ -24,14 +23,16 @@ from telethon.tl.types import (
 
 from app.core.config import get_settings
 from app.core.database import get_db_context
-from app.core.security import decrypt_session
 from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
-from app.models.session import TelegramSession
 from app.models.settings import UserSettings
 from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
 from app.services.sync_service import sync_messages
+from app.services.telegram_client import (
+    TelegramSessionUnauthorizedError,
+    get_client,
+)
 from app.services.transcription_service import (
     TRANSCRIBABLE_MEDIA_TYPES,
     download_and_transcribe,
@@ -108,6 +109,12 @@ class TelegramListener:
             for user_settings in result.scalars().all():
                 try:
                     await self._start_user(user_settings.user_id)
+                except TelegramSessionUnauthorizedError as e:
+                    logger.warning(
+                        "Skipped listener startup for unauthorized user %s: %s",
+                        user_settings.user_id,
+                        e,
+                    )
                 except Exception as e:
                     logger.error(
                         f"Failed to start listener for user {user_settings.user_id}: {e}"
@@ -120,35 +127,7 @@ class TelegramListener:
             return
 
         async with get_db_context() as db:
-            result = await db.execute(
-                select(TelegramSession).where(
-                    TelegramSession.user_id == user_id,
-                    TelegramSession.is_active == True,
-                )
-            )
-            session = result.scalar_one_or_none()
-            if not session:
-                logger.warning(f"No active Telegram session for user {user_id}")
-                return
-
-            session_string = decrypt_session(session.session_string)
-
-        client = TelegramClient(
-            StringSession(session_string),
-            settings.telegram_api_id,
-            settings.telegram_api_hash,
-            device_model=settings.telegram_device_model,
-            system_version=settings.telegram_system_version,
-            app_version=settings.telegram_app_version,
-            flood_sleep_threshold=settings.telegram_flood_sleep_threshold,
-            receive_updates=True,
-        )
-        await client.connect()
-
-        if not await client.is_user_authorized():
-            logger.error(f"Telethon session not authorized for user {user_id}")
-            await client.disconnect()
-            return
+            client = await get_client(user_id, db, receive_updates=True)
 
         @client.on(events.NewMessage)
         async def on_message(event):
@@ -441,6 +420,8 @@ class TelegramListener:
                         await self._handle_sync(cmd)
                     case _:
                         logger.warning(f"Unknown listener command: {cmd}")
+            except TelegramSessionUnauthorizedError as e:
+                logger.warning("Ignored listener start for unauthorized session: %s", e)
             except Exception as e:
                 logger.error(f"Error processing listener command: {e}")
 

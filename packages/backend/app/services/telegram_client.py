@@ -1,6 +1,8 @@
+import json
 import logging
 from uuid import UUID
 
+import redis.asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
@@ -8,14 +10,64 @@ from telethon.errors import FloodWaitError, SessionPasswordNeededError
 from telethon.sessions import StringSession
 
 from app.core.config import get_settings
+from app.core.database import get_db_context
 from app.core.security import decrypt_session, encrypt_session
 from app.models.session import TelegramSession
+from app.models.settings import UserSettings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-async def get_client(user_id: UUID, db: AsyncSession) -> TelegramClient:
+class TelegramSessionUnauthorizedError(RuntimeError):
+    """Raised when a persisted Telethon session is no longer authorized."""
+
+
+async def invalidate_unauthorized_session(user_id: UUID, reason: str) -> None:
+    """Disable an invalid Telegram session and stop realtime sync for the user."""
+    async with get_db_context() as db:
+        result = await db.execute(
+            select(TelegramSession).where(
+                TelegramSession.user_id == user_id,
+                TelegramSession.is_active == True,
+            )
+        )
+        for session in result.scalars().all():
+            session.is_active = False
+
+        result = await db.execute(
+            select(UserSettings).where(UserSettings.user_id == user_id)
+        )
+        user_settings = result.scalar_one_or_none()
+        if user_settings is None:
+            user_settings = UserSettings(user_id=user_id, realtime_sync_enabled=False)
+            db.add(user_settings)
+        else:
+            user_settings.realtime_sync_enabled = False
+
+    redis = aioredis.from_url(settings.redis_url)
+    try:
+        await redis.delete(f"listener:active:{user_id}")
+        await redis.publish(
+            "listener:cmd:global",
+            json.dumps({"command": "stop_user", "user_id": str(user_id)}),
+        )
+    finally:
+        await redis.aclose()
+
+    logger.warning(
+        "Disabled Telegram session and realtime sync for user %s: %s",
+        user_id,
+        reason,
+    )
+
+
+async def get_client(
+    user_id: UUID,
+    db: AsyncSession,
+    *,
+    receive_updates: bool = False,
+) -> TelegramClient:
     """Create a fresh Telegram client for a user.
 
     Clients are intentionally not cached globally to avoid cross-event-loop reuse.
@@ -38,9 +90,18 @@ async def get_client(user_id: UUID, db: AsyncSession) -> TelegramClient:
         system_version=settings.telegram_system_version,
         app_version=settings.telegram_app_version,
         flood_sleep_threshold=settings.telegram_flood_sleep_threshold,
-        receive_updates=False,
+        receive_updates=receive_updates,
     )
     await client.connect()
+    if not await client.is_user_authorized():
+        await client.disconnect()
+        await invalidate_unauthorized_session(
+            user_id,
+            "Telethon session is no longer authorized",
+        )
+        raise TelegramSessionUnauthorizedError(
+            f"Telethon session not authorized for user {user_id}"
+        )
     return client
 
 

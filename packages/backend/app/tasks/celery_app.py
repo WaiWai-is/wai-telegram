@@ -2,7 +2,9 @@ import logging
 
 from celery import Celery, signals
 
+from app.core.async_runner import run_async, start_async_runner, stop_async_runner
 from app.core.config import get_settings
+from app.core.database import dispose_engine
 from app.core.observability import (
     build_runtime_summary,
     configure_logging,
@@ -51,6 +53,20 @@ def configure_celery_worker_observability(**_kwargs):
             settings=settings,
         ),
     )
+
+
+@signals.worker_process_init.connect
+def init_worker_process_runtime(**_kwargs):
+    start_async_runner()
+
+
+@signals.worker_process_shutdown.connect
+def shutdown_worker_process_runtime(**_kwargs):
+    try:
+        start_async_runner()
+        run_async(dispose_engine())
+    finally:
+        stop_async_runner()
 
 
 @signals.beat_init.connect

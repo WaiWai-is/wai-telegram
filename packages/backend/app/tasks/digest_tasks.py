@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
@@ -7,6 +6,7 @@ from celery import group, shared_task
 from sqlalchemy import or_, select
 from sqlalchemy.sql import and_
 
+from app.core.async_runner import run_async
 from app.core.database import get_db_context
 from app.models.session import TelegramSession
 from app.models.settings import UserSettings
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def generate_all_digests():
     """Dispatch per-user digest tasks for users whose digest_hour_utc matches now."""
     current_hour = datetime.now(UTC).hour
-    result = asyncio.run(_get_eligible_user_ids(current_hour))
+    result = run_async(_get_eligible_user_ids(current_hour))
     yesterday = (date.today() - timedelta(days=1)).isoformat()
 
     if not result:
@@ -69,7 +69,7 @@ async def _get_eligible_user_ids(current_hour: int) -> list[UUID]:
 @shared_task
 def generate_user_digest(user_id: str, digest_date: str | None = None):
     """Generate digest for a specific user."""
-    return asyncio.run(_generate_user_digest(UUID(user_id), digest_date))
+    return run_async(_generate_user_digest(UUID(user_id), digest_date))
 
 
 async def _generate_user_digest(user_id: UUID, digest_date: str | None) -> dict:

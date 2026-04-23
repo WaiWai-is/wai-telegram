@@ -17,13 +17,13 @@ from app.models.user import User
 class TestGenerateAllDigests:
     @patch("app.tasks.digest_tasks.group")
     @patch("app.tasks.digest_tasks.generate_user_digest")
-    @patch("app.tasks.digest_tasks.asyncio")
+    @patch("app.tasks.digest_tasks.run_async")
     def test_dispatches_tasks_for_eligible_users(
-        self, mock_asyncio, mock_task, mock_group
+        self, mock_run_async, mock_task, mock_group
     ):
         """When eligible users exist, a Celery group is dispatched."""
         uid1, uid2 = uuid4(), uuid4()
-        mock_asyncio.run.return_value = [uid1, uid2]
+        mock_run_async.return_value = [uid1, uid2]
 
         mock_sig = MagicMock()
         mock_task.s = MagicMock(return_value=mock_sig)
@@ -38,11 +38,12 @@ class TestGenerateAllDigests:
         assert "date" in result
         assert "hour" in result
         mock_group.return_value.apply_async.assert_called_once()
+        mock_run_async.call_args.args[0].close()
 
-    @patch("app.tasks.digest_tasks.asyncio")
-    def test_returns_zero_when_no_eligible_users(self, mock_asyncio):
+    @patch("app.tasks.digest_tasks.run_async")
+    def test_returns_zero_when_no_eligible_users(self, mock_run_async):
         """When no users are eligible, dispatched == 0."""
-        mock_asyncio.run.return_value = []
+        mock_run_async.return_value = []
 
         from app.tasks.digest_tasks import generate_all_digests
 
@@ -50,13 +51,14 @@ class TestGenerateAllDigests:
 
         assert result["users_processed"] == 0
         assert result["dispatched"] == 0
+        mock_run_async.call_args.args[0].close()
 
     @patch("app.tasks.digest_tasks.group")
     @patch("app.tasks.digest_tasks.generate_user_digest")
-    @patch("app.tasks.digest_tasks.asyncio")
-    def test_result_contains_yesterday_date(self, mock_asyncio, mock_task, mock_group):
+    @patch("app.tasks.digest_tasks.run_async")
+    def test_result_contains_yesterday_date(self, mock_run_async, mock_task, mock_group):
         """The returned date field should be yesterday in ISO format."""
-        mock_asyncio.run.return_value = [uuid4()]
+        mock_run_async.return_value = [uuid4()]
         mock_task.s = MagicMock(return_value=MagicMock())
         mock_group.return_value = MagicMock()
 
@@ -65,16 +67,17 @@ class TestGenerateAllDigests:
         result = generate_all_digests()
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         assert result["date"] == yesterday
+        mock_run_async.call_args.args[0].close()
 
     @patch("app.tasks.digest_tasks.group")
     @patch("app.tasks.digest_tasks.generate_user_digest")
-    @patch("app.tasks.digest_tasks.asyncio")
+    @patch("app.tasks.digest_tasks.run_async")
     def test_dispatches_correct_number_of_signatures(
-        self, mock_asyncio, mock_task, mock_group
+        self, mock_run_async, mock_task, mock_group
     ):
         """Each eligible user gets a separate task signature."""
         uids = [uuid4() for _ in range(5)]
-        mock_asyncio.run.return_value = uids
+        mock_run_async.return_value = uids
         mock_group.return_value = MagicMock()
 
         from app.tasks.digest_tasks import generate_all_digests
@@ -86,6 +89,7 @@ class TestGenerateAllDigests:
         # group() is called with a generator; verify it was invoked
         mock_group.assert_called_once()
         mock_group.return_value.apply_async.assert_called_once()
+        mock_run_async.call_args.args[0].close()
 
 
 # ---------------------------------------------------------------------------
@@ -168,10 +172,10 @@ class TestGetEligibleUserIdsMocked:
 # generate_user_digest (Celery per-user task)
 # ---------------------------------------------------------------------------
 class TestGenerateUserDigest:
-    @patch("app.tasks.digest_tasks.asyncio")
-    def test_calls_async_helper(self, mock_asyncio):
-        """generate_user_digest passes args to _generate_user_digest via asyncio.run."""
-        mock_asyncio.run.return_value = {"digest_id": "abc", "date": "2025-01-01"}
+    @patch("app.tasks.digest_tasks.run_async")
+    def test_calls_async_helper(self, mock_run_async):
+        """generate_user_digest passes args to _generate_user_digest via the async runner."""
+        mock_run_async.return_value = {"digest_id": "abc", "date": "2025-01-01"}
 
         from app.tasks.digest_tasks import generate_user_digest
 
@@ -179,17 +183,19 @@ class TestGenerateUserDigest:
         result = generate_user_digest(uid, "2025-01-01")
 
         assert result["digest_id"] == "abc"
-        mock_asyncio.run.assert_called_once()
+        mock_run_async.assert_called_once()
+        mock_run_async.call_args.args[0].close()
 
-    @patch("app.tasks.digest_tasks.asyncio")
-    def test_accepts_none_date(self, mock_asyncio):
+    @patch("app.tasks.digest_tasks.run_async")
+    def test_accepts_none_date(self, mock_run_async):
         """generate_user_digest works when digest_date is None."""
-        mock_asyncio.run.return_value = {"digest_id": "x", "date": "2025-01-01"}
+        mock_run_async.return_value = {"digest_id": "x", "date": "2025-01-01"}
 
         from app.tasks.digest_tasks import generate_user_digest
 
         result = generate_user_digest(str(uuid4()), None)
         assert "digest_id" in result
+        mock_run_async.call_args.args[0].close()
 
 
 # ---------------------------------------------------------------------------

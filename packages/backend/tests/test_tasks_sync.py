@@ -318,10 +318,7 @@ class TestMarkJobState:
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
-        with (
-            patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db),
-            patch("app.core.database.dispose_engine", new_callable=AsyncMock),
-        ):
+        with patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db):
             from app.tasks.sync_tasks import _mark_job_state
 
             await _mark_job_state(job_id, SyncStatus.FAILED, "sync_error: timeout")
@@ -348,10 +345,7 @@ class TestMarkJobState:
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
-        with (
-            patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db),
-            patch("app.core.database.dispose_engine", new_callable=AsyncMock),
-        ):
+        with patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db):
             from app.tasks.sync_tasks import _mark_job_state
 
             await _mark_job_state(job_id, SyncStatus.COMPLETED)
@@ -376,10 +370,7 @@ class TestMarkJobState:
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
-        with (
-            patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db),
-            patch("app.core.database.dispose_engine", new_callable=AsyncMock),
-        ):
+        with patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db):
             from app.tasks.sync_tasks import _mark_job_state
 
             await _mark_job_state(job_id, SyncStatus.PENDING, "retry")
@@ -400,10 +391,7 @@ class TestMarkJobState:
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
-        with (
-            patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db),
-            patch("app.core.database.dispose_engine", new_callable=AsyncMock),
-        ):
+        with patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db):
             from app.tasks.sync_tasks import _mark_job_state
 
             await _mark_job_state(job_id, SyncStatus.FAILED, "gone")
@@ -415,16 +403,17 @@ class TestMarkJobState:
 # reap_stale_sync_jobs (Celery task + async helper)
 # ---------------------------------------------------------------------------
 class TestReapStaleSyncJobs:
-    @patch("app.tasks.sync_tasks.asyncio")
-    def test_celery_wrapper_calls_async(self, mock_asyncio):
-        """reap_stale_sync_jobs delegates to asyncio.run."""
-        mock_asyncio.run.return_value = {"scanned": 0, "expired": 0}
+    @patch("app.tasks.sync_tasks.run_async")
+    def test_celery_wrapper_calls_async(self, mock_run_async):
+        """reap_stale_sync_jobs delegates to the shared async runner."""
+        mock_run_async.return_value = {"scanned": 0, "expired": 0}
 
         from app.tasks.sync_tasks import reap_stale_sync_jobs
 
         result = reap_stale_sync_jobs()
         assert result == {"scanned": 0, "expired": 0}
-        mock_asyncio.run.assert_called_once()
+        mock_run_async.assert_called_once()
+        mock_run_async.call_args.args[0].close()
 
     async def test_expires_stale_job_without_heartbeat(self, monkeypatch):
         """A stale IN_PROGRESS job with no heartbeat is marked FAILED."""
@@ -454,10 +443,7 @@ class TestReapStaleSyncJobs:
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
-        with (
-            patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db),
-            patch("app.core.database.dispose_engine", new_callable=AsyncMock),
-        ):
+        with patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db):
             from app.tasks.sync_tasks import _reap_stale_sync_jobs
 
             result = await _reap_stale_sync_jobs()
@@ -496,10 +482,7 @@ class TestReapStaleSyncJobs:
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
-        with (
-            patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db),
-            patch("app.core.database.dispose_engine", new_callable=AsyncMock),
-        ):
+        with patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db):
             from app.tasks.sync_tasks import _reap_stale_sync_jobs
 
             result = await _reap_stale_sync_jobs()
@@ -526,10 +509,7 @@ class TestReapStaleSyncJobs:
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
-        with (
-            patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db),
-            patch("app.core.database.dispose_engine", new_callable=AsyncMock),
-        ):
+        with patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db):
             from app.tasks.sync_tasks import _reap_stale_sync_jobs
 
             result = await _reap_stale_sync_jobs()
@@ -563,10 +543,7 @@ class TestReapStaleSyncJobs:
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
-        with (
-            patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db),
-            patch("app.core.database.dispose_engine", new_callable=AsyncMock),
-        ):
+        with patch("app.tasks.sync_tasks.get_db_context", return_value=mock_db):
             from app.tasks.sync_tasks import _reap_stale_sync_jobs
 
             result = await _reap_stale_sync_jobs()
@@ -616,11 +593,13 @@ class TestReleaseLockIfOwned:
 # listener_health_check
 # ---------------------------------------------------------------------------
 class TestListenerHealthCheck:
-    @patch("app.tasks.sync_tasks.asyncio")
-    def test_celery_wrapper_calls_async(self, mock_asyncio):
-        mock_asyncio.run.return_value = {"checked": 0, "restarted": 0}
+    @patch("app.tasks.sync_tasks.run_async")
+    def test_celery_wrapper_calls_async(self, mock_run_async):
+        mock_run_async.return_value = {"checked": 0, "restarted": 0}
 
         from app.tasks.sync_tasks import listener_health_check
 
         result = listener_health_check()
         assert result == {"checked": 0, "restarted": 0}
+        mock_run_async.assert_called_once()
+        mock_run_async.call_args.args[0].close()

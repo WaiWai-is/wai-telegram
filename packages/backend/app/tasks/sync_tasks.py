@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import threading
@@ -10,6 +9,7 @@ from celery import shared_task
 from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import select
 
+from app.core.async_runner import run_async
 from app.core.config import get_settings
 from app.core.database import get_db_context
 from app.models.sync_job import SyncJob, SyncStatus
@@ -181,6 +181,7 @@ def sync_chat_task(
 ):
     """Celery task to sync messages for a chat."""
     from telethon.errors import FloodWaitError
+    from app.services.telegram_client import TelegramSessionUnauthorizedError
 
     user_uuid = UUID(user_id)
     chat_uuid = UUID(chat_id)
@@ -195,7 +196,7 @@ def sync_chat_task(
     if not lock.acquire():
         logger.info("Sync already in progress for user %s", user_id)
         if job_uuid:
-            asyncio.run(
+            run_async(
                 _mark_job_state(
                     job_uuid,
                     SyncStatus.FAILED,
@@ -205,11 +206,21 @@ def sync_chat_task(
         return {"status": "skipped", "reason": "sync_in_progress"}
 
     try:
-        result = asyncio.run(_run_sync(user_uuid, chat_uuid, limit, job_uuid))
+        result = run_async(_run_sync(user_uuid, chat_uuid, limit, job_uuid))
         return result
+    except TelegramSessionUnauthorizedError as e:
+        run_async(
+            _mark_job_state(
+                job_uuid,
+                SyncStatus.FAILED,
+                str(e),
+            )
+        )
+        logger.warning("Sync disabled for chat %s due to unauthorized session: %s", chat_id, e)
+        return {"status": "failed", "reason": "unauthorized_session"}
     except FloodWaitError as e:
         countdown = max(1, int(e.seconds * settings.flood_wait_multiplier))
-        asyncio.run(
+        run_async(
             _mark_job_state(
                 job_uuid,
                 SyncStatus.PENDING,
@@ -220,7 +231,7 @@ def sync_chat_task(
         try:
             raise self.retry(exc=e, countdown=countdown)
         except MaxRetriesExceededError:
-            asyncio.run(
+            run_async(
                 _mark_job_state(
                     job_uuid,
                     SyncStatus.FAILED,
@@ -231,7 +242,7 @@ def sync_chat_task(
     except Exception as e:
         backoff = 60 * (3**self.request.retries)
         will_retry = self.request.retries < self.max_retries
-        asyncio.run(
+        run_async(
             _mark_job_state(
                 job_uuid,
                 SyncStatus.PENDING if will_retry else SyncStatus.FAILED,
@@ -246,7 +257,7 @@ def sync_chat_task(
             try:
                 raise self.retry(exc=e, countdown=backoff)
             except MaxRetriesExceededError:
-                asyncio.run(
+                run_async(
                     _mark_job_state(
                         job_uuid,
                         SyncStatus.FAILED,
@@ -268,9 +279,6 @@ async def _run_sync(
     job_id: UUID | None = None,
 ) -> dict:
     """Run single chat sync operation."""
-    from app.core.database import dispose_engine
-
-    await dispose_engine()  # Clear stale pool connections from parent process
     async with get_db_context() as db:
         if job_id:
             result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
@@ -312,13 +320,15 @@ async def _run_sync(
 @shared_task(bind=True, max_retries=0)
 def sync_all_chats_task(self, user_id: str, job_id: str, limit_per_chat: int = 500):
     """Bulk sync: sequentially sync messages for all user chats."""
+    from app.services.telegram_client import TelegramSessionUnauthorizedError
+
     user_uuid = UUID(user_id)
     job_uuid = UUID(job_id)
 
     lock = DistributedLock(user_uuid, owner=f"bulk:{job_uuid}")
     if not lock.acquire():
         logger.info("Bulk sync skipped — another sync in progress for user %s", user_id)
-        asyncio.run(
+        run_async(
             _mark_job_state(
                 job_uuid, SyncStatus.FAILED, "Another sync is already in progress"
             )
@@ -326,10 +336,18 @@ def sync_all_chats_task(self, user_id: str, job_id: str, limit_per_chat: int = 5
         return {"status": "skipped", "reason": "sync_in_progress"}
 
     try:
-        asyncio.run(_run_bulk_sync(user_uuid, job_uuid, limit_per_chat))
+        run_async(_run_bulk_sync(user_uuid, job_uuid, limit_per_chat))
         return {"status": "completed", "job_id": job_id}
+    except TelegramSessionUnauthorizedError as e:
+        run_async(_mark_job_state(job_uuid, SyncStatus.FAILED, str(e)))
+        logger.warning(
+            "Bulk sync disabled for user %s due to unauthorized session: %s",
+            user_id,
+            e,
+        )
+        return {"status": "failed", "reason": "unauthorized_session"}
     except Exception as e:
-        asyncio.run(_mark_job_state(job_uuid, SyncStatus.FAILED, str(e)))
+        run_async(_mark_job_state(job_uuid, SyncStatus.FAILED, str(e)))
         logger.error("Bulk sync failed for user %s: %s", user_id, e)
         raise
     finally:
@@ -339,10 +357,8 @@ def sync_all_chats_task(self, user_id: str, job_id: str, limit_per_chat: int = 5
 
 async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> None:
     """Run bulk sync for all user chats sequentially."""
-    from app.core.database import dispose_engine
     from app.models.chat import TelegramChat
 
-    await dispose_engine()
     async with get_db_context() as db:
         result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
         job = result.scalar_one()
@@ -451,15 +467,13 @@ async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> No
 @shared_task
 def listener_health_check():
     """Check listener health for users with realtime sync enabled."""
-    return asyncio.run(_listener_health_check())
+    return run_async(_listener_health_check())
 
 
 async def _listener_health_check() -> dict:
     """Ensure listener heartbeats exist for users with realtime sync enabled."""
-    from app.core.database import dispose_engine
     from app.models.settings import UserSettings
 
-    await dispose_engine()
     checked = 0
     restarted = 0
 
@@ -487,13 +501,10 @@ async def _listener_health_check() -> dict:
 @shared_task
 def reap_stale_sync_jobs() -> dict:
     """Mark stale IN_PROGRESS jobs as FAILED when heartbeat is missing."""
-    return asyncio.run(_reap_stale_sync_jobs())
+    return run_async(_reap_stale_sync_jobs())
 
 
 async def _reap_stale_sync_jobs() -> dict:
-    from app.core.database import dispose_engine
-
-    await dispose_engine()
     stale_cutoff = datetime.now(UTC) - STALE_JOB_THRESHOLD
     scanned = 0
     expired = 0
@@ -545,10 +556,6 @@ async def _mark_job_state(
     """Update sync job status in a standalone transaction."""
     if not job_id:
         return
-
-    from app.core.database import dispose_engine
-
-    await dispose_engine()
     terminal = {SyncStatus.COMPLETED, SyncStatus.FAILED, SyncStatus.CANCELLED}
 
     async with get_db_context() as db:
