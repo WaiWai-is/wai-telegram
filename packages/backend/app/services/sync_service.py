@@ -28,7 +28,13 @@ from app.models.message import TelegramMessage
 from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
 from app.services.rate_limiter import record_request
-from app.services.telegram_client import get_client
+from app.services.telegram_client import (
+    SESSION_EXPIRED_MESSAGE,
+    TelegramSessionUnauthorizedError,
+    get_client,
+    invalidate_client_authorization,
+    is_session_authorization_error,
+)
 from app.services.transcription_service import (
     TRANSCRIBABLE_MEDIA_TYPES,
     download_and_transcribe,
@@ -185,6 +191,11 @@ async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
             chats.append(chat)
 
         await db.flush()
+    except Exception as e:
+        if is_session_authorization_error(e):
+            await invalidate_client_authorization(client, user_id, e)
+            raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE) from e
+        raise
     finally:
         await client.disconnect()
     return chats
@@ -302,6 +313,8 @@ async def sync_messages(
                         msg_values["transcribed_at"] = datetime.now(UTC)
                         already_transcribed.add(message.id)
                 except Exception as e:
+                    if is_session_authorization_error(e):
+                        raise
                     logger.warning(
                         f"Transcription failed for message {message.id}: {e}"
                     )
@@ -423,6 +436,11 @@ async def sync_messages(
         await db.commit()
 
         return messages_synced
+    except Exception as e:
+        if owns_client and is_session_authorization_error(e):
+            await invalidate_client_authorization(client, user_id, e)
+            raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE) from e
+        raise
     finally:
         if owns_client:
             await client.disconnect()

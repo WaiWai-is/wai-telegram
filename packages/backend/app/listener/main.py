@@ -31,7 +31,10 @@ from app.services.embedding_service import embed_messages
 from app.services.sync_service import sync_messages
 from app.services.telegram_client import (
     TelegramSessionUnauthorizedError,
+    get_client_session_id,
     get_client,
+    invalidate_client_authorization,
+    is_session_authorization_error,
 )
 from app.services.transcription_service import (
     TRANSCRIBABLE_MEDIA_TYPES,
@@ -134,7 +137,16 @@ class TelegramListener:
             await self._handle_message(user_id, event)
 
         # Start receiving updates
-        await client.catch_up()
+        try:
+            await client.catch_up()
+        except Exception as e:
+            if is_session_authorization_error(e):
+                await invalidate_client_authorization(client, user_id, e)
+                raise TelegramSessionUnauthorizedError(
+                    "Telegram session expired. Reconnect Telegram and try again."
+                ) from e
+            await client.disconnect()
+            raise
 
         self.clients[user_id] = client
         await self.redis.set(f"listener:active:{user_id}", "1", ex=ACTIVE_KEY_TTL)
@@ -147,6 +159,21 @@ class TelegramListener:
             await client.disconnect()
         await self.redis.delete(f"listener:active:{user_id}")
         logger.info(f"Listener stopped for user {user_id}")
+
+    async def _handle_unauthorized_client(
+        self,
+        user_id: UUID,
+        client: TelegramClient,
+        error: Exception,
+    ) -> None:
+        logger.warning(
+            "Listener client lost authorization for user %s (session_id=%s): %s",
+            user_id,
+            get_client_session_id(client),
+            error,
+        )
+        await invalidate_client_authorization(client, user_id, error)
+        await self._stop_user(user_id)
 
     async def _auto_create_chat(
         self, db, user_id: UUID, entity, chat_id_tg: int
@@ -233,6 +260,8 @@ class TelegramListener:
                         if not chat:
                             return
                     except Exception as e:
+                        if is_session_authorization_error(e):
+                            raise
                         logger.warning(f"Could not auto-create chat {chat_id_tg}: {e}")
                         return
 
@@ -268,6 +297,8 @@ class TelegramListener:
                             values["text"] = transcript
                             values["transcribed_at"] = datetime.now(UTC)
                     except Exception as e:
+                        if is_session_authorization_error(e):
+                            raise
                         logger.warning(
                             f"Transcription failed for message {message.id}: {e}"
                         )
@@ -307,6 +338,10 @@ class TelegramListener:
                     logger.debug(f"Embedding failed for real-time message: {e}")
 
         except Exception as e:
+            client = self.clients.get(user_id)
+            if client is not None and is_session_authorization_error(e):
+                await self._handle_unauthorized_client(user_id, client, e)
+                return
             logger.error(f"Error handling real-time message for user {user_id}: {e}")
 
     async def _handle_sync(self, cmd: dict):
@@ -379,13 +414,23 @@ class TelegramListener:
                     f"Listener sync completed: chat {chat_id}, {count} messages"
                 )
         except Exception as e:
-            logger.error(f"Listener sync failed for chat {chat_id}: {e}")
+            if is_session_authorization_error(e):
+                await self._handle_unauthorized_client(user_id, client, e)
+                error_message = "Telegram session expired. Reconnect Telegram and try again."
+                logger.warning(
+                    "Listener sync failed due to expired Telegram session for user %s: %s",
+                    user_id,
+                    e,
+                )
+            else:
+                error_message = str(e)[:500]
+                logger.error(f"Listener sync failed for chat {chat_id}: {e}")
             async with get_db_context() as db:
                 result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
                 job = result.scalar_one_or_none()
                 if job:
                     job.status = SyncStatus.FAILED
-                    job.error_message = str(e)[:500]
+                    job.error_message = error_message
                     await db.commit()
             await self.redis.delete(
                 f"sync:{job_id}:total",
@@ -453,4 +498,7 @@ class TelegramListener:
                             f"Health check catch_up completed for user {user_id}"
                         )
                 except Exception as e:
-                    logger.error(f"Health check failed for user {user_id}: {e}")
+                    if is_session_authorization_error(e):
+                        await self._handle_unauthorized_client(user_id, client, e)
+                    else:
+                        logger.error(f"Health check failed for user {user_id}: {e}")

@@ -8,6 +8,7 @@ from app.services.telegram_client import (
     TelegramSessionUnauthorizedError,
     _get_code_type_name,
     get_client,
+    invalidate_unauthorized_session,
     request_code,
     verify_code,
 )
@@ -142,7 +143,7 @@ class TestGetClient:
 
         mock_client = AsyncMock()
         mock_client.connect = AsyncMock()
-        mock_client.is_user_authorized = AsyncMock(return_value=False)
+        mock_client.get_me = AsyncMock(return_value=None)
         mock_client.disconnect = AsyncMock()
 
         mock_redis = AsyncMock()
@@ -186,3 +187,132 @@ class TestGetClient:
         mock_redis.delete.assert_awaited_once()
         mock_redis.publish.assert_awaited_once()
         mock_redis.aclose.assert_awaited_once()
+
+    async def test_transient_rpc_error_does_not_disable_session(
+        self, db_session, test_user
+    ):
+        from telethon.errors import FloodWaitError
+
+        active_session = TelegramSession(
+            user_id=test_user.id,
+            phone_number="+1234567890",
+            session_string="encrypted",
+            telegram_user_id=12345,
+            is_active=True,
+        )
+        user_settings = UserSettings(
+            user_id=test_user.id,
+            realtime_sync_enabled=True,
+        )
+        db_session.add_all([active_session, user_settings])
+        await db_session.flush()
+
+        flood_wait = FloodWaitError(request=None, capture=30)
+        flood_wait.seconds = 30
+
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.get_me = AsyncMock(side_effect=flood_wait)
+        mock_client.disconnect = AsyncMock()
+        mock_redis = AsyncMock()
+
+        @asynccontextmanager
+        async def fake_get_db_context():
+            yield db_session
+            await db_session.flush()
+
+        with (
+            patch(
+                "app.services.telegram_client.TelegramClient",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.services.telegram_client.StringSession",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "app.services.telegram_client.decrypt_session",
+                return_value="decrypted-session",
+            ),
+            patch(
+                "app.services.telegram_client.get_db_context",
+                fake_get_db_context,
+            ),
+            patch(
+                "app.services.telegram_client.aioredis.from_url",
+                return_value=mock_redis,
+            ),
+        ):
+            with pytest.raises(FloodWaitError):
+                await get_client(test_user.id, db_session)
+
+        await db_session.refresh(active_session)
+        await db_session.refresh(user_settings)
+
+        assert active_session.is_active is True
+        assert user_settings.realtime_sync_enabled is True
+        mock_redis.delete.assert_not_called()
+        mock_redis.publish.assert_not_called()
+
+
+class TestInvalidateUnauthorizedSession:
+    async def test_only_matching_session_is_disabled(self, db_session, test_user):
+        stale_session = TelegramSession(
+            user_id=test_user.id,
+            phone_number="+1111111111",
+            session_string="stale",
+            telegram_user_id=1,
+            is_active=True,
+        )
+        fresh_session = TelegramSession(
+            user_id=test_user.id,
+            phone_number="+2222222222",
+            session_string="fresh",
+            telegram_user_id=2,
+            is_active=True,
+        )
+        user_settings = UserSettings(
+            user_id=test_user.id,
+            realtime_sync_enabled=True,
+        )
+        db_session.add_all([stale_session, fresh_session, user_settings])
+        await db_session.flush()
+
+        mock_redis = AsyncMock()
+
+        @asynccontextmanager
+        async def fake_get_db_context():
+            yield db_session
+            await db_session.flush()
+
+        with (
+            patch(
+                "app.services.telegram_client.get_db_context",
+                fake_get_db_context,
+            ),
+            patch(
+                "app.services.telegram_client.aioredis.from_url",
+                return_value=mock_redis,
+            ),
+        ):
+            changed = await invalidate_unauthorized_session(
+                test_user.id,
+                "session revoked",
+                session_id=stale_session.id,
+            )
+
+        assert changed is True
+        await db_session.refresh(stale_session)
+        await db_session.refresh(fresh_session)
+        await db_session.refresh(user_settings)
+
+        assert stale_session.is_active is False
+        assert fresh_session.is_active is True
+        assert user_settings.realtime_sync_enabled is True
+        assert mock_redis.publish.await_count == 2
+        published_commands = [
+            call.args[1]
+            for call in mock_redis.publish.await_args_list
+        ]
+        assert '"command": "stop_user"' in published_commands[0]
+        assert '"command": "start_user"' in published_commands[1]

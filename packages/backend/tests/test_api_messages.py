@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+from app.services.telegram_client import TelegramSessionUnauthorizedError
 from tests.factories import TelegramChatFactory
 
 
@@ -42,9 +43,24 @@ class TestSendMessageEndpoint:
             response = await auth_client.post(
                 f"/api/v1/messages/{uuid4()}/send",
                 json={"text": "Hello"},
-            )
+        )
         assert response.status_code == 400
         assert "not found" in response.json()["detail"]
+
+    async def test_send_message_expired_session_returns_400(self, auth_client):
+        with patch(
+            "app.api.v1.messages.send_message",
+            new_callable=AsyncMock,
+            side_effect=TelegramSessionUnauthorizedError(
+                "Telegram session expired. Reconnect Telegram and try again."
+            ),
+        ):
+            response = await auth_client.post(
+                f"/api/v1/messages/{uuid4()}/send",
+                json={"text": "Hello"},
+            )
+        assert response.status_code == 400
+        assert "Reconnect Telegram" in response.json()["detail"]
 
     async def test_send_message_unauthenticated(self, client):
         response = await client.post(
@@ -93,6 +109,21 @@ class TestSendFileEndpoint:
             )
         assert response.status_code == 400
 
+    async def test_send_file_expired_session_returns_400(self, auth_client):
+        with patch(
+            "app.api.v1.messages.send_file",
+            new_callable=AsyncMock,
+            side_effect=TelegramSessionUnauthorizedError(
+                "Telegram session expired. Reconnect Telegram and try again."
+            ),
+        ):
+            response = await auth_client.post(
+                f"/api/v1/messages/{uuid4()}/send-file",
+                json={"file_url": "https://example.com/file.pdf"},
+            )
+        assert response.status_code == 400
+        assert "Reconnect Telegram" in response.json()["detail"]
+
 
 class TestReplyMessageEndpoint:
     async def test_reply_success(self, auth_client, db_session, test_user):
@@ -126,3 +157,18 @@ class TestReplyMessageEndpoint:
             json={"telegram_message_id": 100, "text": "Reply text"},
         )
         assert response.status_code == 401
+
+    async def test_reply_expired_session_returns_400(self, auth_client):
+        with patch(
+            "app.api.v1.messages.reply_to_message",
+            new_callable=AsyncMock,
+            side_effect=TelegramSessionUnauthorizedError(
+                "Telegram session expired. Reconnect Telegram and try again."
+            ),
+        ):
+            response = await auth_client.post(
+                f"/api/v1/messages/{uuid4()}/reply",
+                json={"telegram_message_id": 100, "text": "Reply text"},
+            )
+        assert response.status_code == 400
+        assert "Reconnect Telegram" in response.json()["detail"]

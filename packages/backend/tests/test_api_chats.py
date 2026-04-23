@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
+from app.services.telegram_client import TelegramSessionUnauthorizedError
 
 
 class TestListChats:
@@ -139,3 +140,15 @@ class TestRefreshChats:
             assert response.status_code == 200
             data = response.json()
             assert data["chats"] == []
+
+    async def test_refresh_chats_expired_session_returns_400(self, auth_client):
+        with patch(
+            "app.api.v1.chats.sync_chats",
+            new_callable=AsyncMock,
+            side_effect=TelegramSessionUnauthorizedError(
+                "Telegram session expired. Reconnect Telegram and try again."
+            ),
+        ):
+            response = await auth_client.post("/api/v1/chats/refresh")
+        assert response.status_code == 400
+        assert "Reconnect Telegram" in response.json()["detail"]

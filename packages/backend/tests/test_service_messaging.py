@@ -222,6 +222,48 @@ class TestSendMessage:
         with pytest.raises(ValueError, match="not found"):
             await send_message(db_session, test_user.id, uuid4(), "Hello")
 
+    async def test_send_message_auth_error_invalidates_client(
+        self, db_session, test_user
+    ):
+        from app.services.messaging_service import send_message
+        from app.services.telegram_client import TelegramSessionUnauthorizedError
+        from telethon.errors import SessionRevokedError
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(user_id=test_user.id)
+        db_session.add(chat)
+        await db_session.flush()
+
+        mock_client = AsyncMock()
+        mock_client.disconnect = AsyncMock()
+        mock_client.send_message = AsyncMock(
+            side_effect=SessionRevokedError(request=None)
+        )
+        resolved_entity = object()
+
+        with (
+            patch(
+                "app.services.messaging_service.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.services.messaging_service._resolve_chat_entity",
+                new_callable=AsyncMock,
+                return_value=resolved_entity,
+            ),
+            patch(
+                "app.services.messaging_service.invalidate_client_authorization",
+                new_callable=AsyncMock,
+            ) as mock_invalidate,
+        ):
+            with pytest.raises(
+                TelegramSessionUnauthorizedError,
+                match="Reconnect Telegram",
+            ):
+                await send_message(db_session, test_user.id, chat.id, "Hello")
+
+        mock_invalidate.assert_awaited_once()
+
 
 # ---------------------------------------------------------------------------
 # _resolve_chat_entity

@@ -157,7 +157,13 @@ async def refresh_chats(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ChatListResponse:
     """Refresh chat list from Telegram."""
-    chats = await sync_chats(db, ctx.user.id)
+    try:
+        chats = await sync_chats(db, ctx.user.id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     return ChatListResponse(
         chats=[ChatResponse.model_validate(chat) for chat in chats],
         has_more=False,

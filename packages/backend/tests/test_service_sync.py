@@ -1,11 +1,14 @@
-from unittest.mock import MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import pytest
 from app.models.chat import ChatType
 from app.services.sync_service import (
+    TelegramSessionUnauthorizedError,
     _get_chat_title,
     _get_chat_type,
     _get_media_type,
     _get_sender_name,
+    sync_chats,
 )
 
 
@@ -109,3 +112,33 @@ class TestGetMediaType:
         doc.attributes = [voice_attr]
         message.media.document = doc
         assert _get_media_type(message) == "voice"
+
+
+class TestSyncChats:
+    async def test_auth_error_invalidates_client(self, db_session, test_user):
+        from telethon.errors import SessionRevokedError
+
+        async def broken_iter_dialogs(*_args, **_kwargs):
+            raise SessionRevokedError(request=None)
+            yield
+
+        mock_client = AsyncMock()
+        mock_client.iter_dialogs = MagicMock(return_value=broken_iter_dialogs())
+        mock_client.disconnect = AsyncMock()
+
+        with (
+            patch(
+                "app.services.sync_service.get_client",
+                new_callable=AsyncMock,
+                return_value=mock_client,
+            ),
+            patch(
+                "app.services.sync_service.invalidate_client_authorization",
+                new_callable=AsyncMock,
+            ) as mock_invalidate,
+        ):
+            with pytest.raises(TelegramSessionUnauthorizedError, match="Reconnect Telegram"):
+                await sync_chats(db_session, test_user.id)
+
+        mock_invalidate.assert_awaited_once_with(mock_client, test_user.id, ANY)
+        mock_client.disconnect.assert_awaited()

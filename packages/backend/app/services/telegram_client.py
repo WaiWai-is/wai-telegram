@@ -6,7 +6,17 @@ import redis.asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
-from telethon.errors import FloodWaitError, SessionPasswordNeededError
+from telethon.errors import (
+    AuthKeyUnregisteredError,
+    FloodWaitError,
+    InputUserDeactivatedError,
+    SessionExpiredError,
+    SessionPasswordNeededError,
+    SessionRevokedError,
+    UnauthorizedError,
+    UserDeactivatedBanError,
+    UserDeactivatedError,
+)
 from telethon.sessions import StringSession
 
 from app.core.config import get_settings
@@ -17,33 +27,101 @@ from app.models.settings import UserSettings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+CLIENT_SESSION_ATTR = "_wai_session_id"
+SESSION_EXPIRED_MESSAGE = "Telegram session expired. Reconnect Telegram and try again."
+
+AUTH_SESSION_ERRORS = (
+    UnauthorizedError,
+    AuthKeyUnregisteredError,
+    SessionRevokedError,
+    SessionExpiredError,
+    UserDeactivatedError,
+    UserDeactivatedBanError,
+    InputUserDeactivatedError,
+)
 
 
-class TelegramSessionUnauthorizedError(RuntimeError):
+class TelegramSessionUnauthorizedError(ValueError):
     """Raised when a persisted Telethon session is no longer authorized."""
 
 
-async def invalidate_unauthorized_session(user_id: UUID, reason: str) -> None:
-    """Disable an invalid Telegram session and stop realtime sync for the user."""
+def is_session_authorization_error(exc: BaseException) -> bool:
+    return isinstance(exc, AUTH_SESSION_ERRORS)
+
+
+def get_client_session_id(client: TelegramClient) -> UUID | None:
+    session_id = getattr(client, CLIENT_SESSION_ATTR, None)
+    return session_id if isinstance(session_id, UUID) else None
+
+
+async def invalidate_unauthorized_session(
+    user_id: UUID,
+    reason: str,
+    *,
+    session_id: UUID | None = None,
+) -> bool:
+    """Disable the invalid session and remediate listener state safely."""
+    restart_listener = False
+    invalidated_session_id: UUID | None = None
+
     async with get_db_context() as db:
-        result = await db.execute(
-            select(TelegramSession).where(
-                TelegramSession.user_id == user_id,
-                TelegramSession.is_active == True,
+        active_sessions = (
+            await db.execute(
+                select(TelegramSession).where(
+                    TelegramSession.user_id == user_id,
+                    TelegramSession.is_active == True,
+                )
             )
-        )
-        for session in result.scalars().all():
-            session.is_active = False
+        ).scalars().all()
+
+        if session_id is not None:
+            target_session = next(
+                (session for session in active_sessions if session.id == session_id),
+                None,
+            )
+        elif len(active_sessions) == 1:
+            target_session = active_sessions[0]
+        else:
+            target_session = None
+
+        if target_session is None:
+            logger.warning(
+                "Skipped Telegram session invalidation for user %s: no matching active session (session_id=%s)",
+                user_id,
+                session_id,
+            )
+            return False
+
+        target_session.is_active = False
+        invalidated_session_id = target_session.id
+
+        remaining_active_sessions = (
+            await db.execute(
+                select(TelegramSession.id).where(
+                    TelegramSession.user_id == user_id,
+                    TelegramSession.is_active == True,
+                )
+            )
+        ).scalars().all()
 
         result = await db.execute(
             select(UserSettings).where(UserSettings.user_id == user_id)
         )
         user_settings = result.scalar_one_or_none()
-        if user_settings is None:
-            user_settings = UserSettings(user_id=user_id, realtime_sync_enabled=False)
-            db.add(user_settings)
+
+        if remaining_active_sessions:
+            restart_listener = bool(
+                user_settings is not None and user_settings.realtime_sync_enabled
+            )
         else:
-            user_settings.realtime_sync_enabled = False
+            if user_settings is None:
+                user_settings = UserSettings(
+                    user_id=user_id,
+                    realtime_sync_enabled=False,
+                )
+                db.add(user_settings)
+            else:
+                user_settings.realtime_sync_enabled = False
 
     redis = aioredis.from_url(settings.redis_url)
     try:
@@ -52,14 +130,59 @@ async def invalidate_unauthorized_session(user_id: UUID, reason: str) -> None:
             "listener:cmd:global",
             json.dumps({"command": "stop_user", "user_id": str(user_id)}),
         )
+        if restart_listener:
+            await redis.publish(
+                "listener:cmd:global",
+                json.dumps({"command": "start_user", "user_id": str(user_id)}),
+            )
     finally:
         await redis.aclose()
 
     logger.warning(
-        "Disabled Telegram session and realtime sync for user %s: %s",
+        "Disabled Telegram session %s for user %s: %s (listener_restart=%s)",
+        invalidated_session_id,
         user_id,
         reason,
+        restart_listener,
     )
+    return True
+
+
+async def invalidate_client_authorization(
+    client: TelegramClient,
+    user_id: UUID,
+    reason: Exception | str,
+) -> None:
+    try:
+        await client.disconnect()
+    except Exception:
+        logger.debug("Failed to disconnect unauthorized Telegram client", exc_info=True)
+
+    await invalidate_unauthorized_session(
+        user_id,
+        str(reason),
+        session_id=get_client_session_id(client),
+    )
+
+
+async def _ensure_client_authorized(
+    client: TelegramClient,
+    user_id: UUID,
+    session_id: UUID,
+) -> None:
+    try:
+        me = await client.get_me()
+    except AUTH_SESSION_ERRORS as exc:
+        await invalidate_client_authorization(client, user_id, exc)
+        raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE) from exc
+
+    if me is None:
+        await invalidate_client_authorization(
+            client,
+            user_id,
+            "Telegram session is no longer authorized",
+        )
+        raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE)
 
 
 async def get_client(
@@ -93,15 +216,8 @@ async def get_client(
         receive_updates=receive_updates,
     )
     await client.connect()
-    if not await client.is_user_authorized():
-        await client.disconnect()
-        await invalidate_unauthorized_session(
-            user_id,
-            "Telethon session is no longer authorized",
-        )
-        raise TelegramSessionUnauthorizedError(
-            f"Telethon session not authorized for user {user_id}"
-        )
+    setattr(client, CLIENT_SESSION_ATTR, session.id)
+    await _ensure_client_authorized(client, user_id, session.id)
     return client
 
 

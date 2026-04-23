@@ -28,6 +28,12 @@ from telethon.utils import get_peer_id
 
 from app.models.chat import ChatType, TelegramChat
 from app.services.telegram_client import get_client
+from app.services.telegram_client import (
+    SESSION_EXPIRED_MESSAGE,
+    TelegramSessionUnauthorizedError,
+    invalidate_client_authorization,
+    is_session_authorization_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +196,9 @@ async def _resolve_chat_entity(
             entity = await client.get_input_entity(normalized_username)
             await _remember_access_hash(db, chat, entity)
             return entity
-        except (RPCError, ValueError):
+        except (RPCError, ValueError) as e:
+            if is_session_authorization_error(e):
+                raise
             pass
 
     hint = chat.title or normalized_username or str(chat.telegram_chat_id)
@@ -231,11 +239,14 @@ async def send_message(
     except (
         FloodWaitError,
         ChatWriteForbiddenError,
-        UserBannedInChannelError,
-        RPCError,
-        ConnectionError,
-        OSError,
-    ) as e:
+            UserBannedInChannelError,
+            RPCError,
+            ConnectionError,
+            OSError,
+        ) as e:
+        if is_session_authorization_error(e):
+            await invalidate_client_authorization(client, user_id, e)
+            raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE) from e
         _handle_telethon_error(e)
     finally:
         await client.disconnect()
@@ -305,6 +316,9 @@ async def send_file(
             ConnectionError,
             OSError,
         ) as e:
+            if is_session_authorization_error(e):
+                await invalidate_client_authorization(client, user_id, e)
+                raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE) from e
             _handle_telethon_error(e)
         finally:
             await client.disconnect()
@@ -340,6 +354,9 @@ async def reply_to_message(
         ConnectionError,
         OSError,
     ) as e:
+        if is_session_authorization_error(e):
+            await invalidate_client_authorization(client, user_id, e)
+            raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE) from e
         _handle_telethon_error(e)
     finally:
         await client.disconnect()
