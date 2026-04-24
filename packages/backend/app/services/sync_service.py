@@ -11,9 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telethon.tl.types import (
     Channel,
     Chat,
-    InputPeerChannel,
-    InputPeerChat,
-    InputPeerUser,
     Message,
     MessageMediaDocument,
     MessageMediaPhoto,
@@ -27,6 +24,7 @@ from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
 from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
+from app.services.messaging_service import _resolve_chat_entity
 from app.services.rate_limiter import record_request
 from app.services.telegram_client import (
     SESSION_EXPIRED_MESSAGE,
@@ -101,23 +99,6 @@ def _get_media_type(message: Message) -> str | None:
                 return "audio"
         return "document"
     return "other"
-
-
-def _build_peer(chat: "TelegramChat"):
-    """Build Telethon InputPeer from stored chat data using access_hash.
-
-    Passing a bare numeric ID fails for private users/bots when Telethon
-    doesn't have the entity cached in its session. Using InputPeer with the
-    stored access_hash resolves the entity correctly without a cache lookup.
-    """
-    if chat.access_hash is not None:
-        if chat.chat_type == ChatType.PRIVATE:
-            return InputPeerUser(chat.telegram_chat_id, chat.access_hash)
-        if chat.chat_type in (ChatType.SUPERGROUP, ChatType.CHANNEL):
-            return InputPeerChannel(chat.telegram_chat_id, chat.access_hash)
-    if chat.chat_type == ChatType.GROUP:
-        return InputPeerChat(chat.telegram_chat_id)
-    return chat.telegram_chat_id
 
 
 async def _jittered_sleep(base: float, jitter: float) -> None:
@@ -274,7 +255,12 @@ async def sync_messages(
     total_reported = False
 
     try:
-        iterator = client.iter_messages(_build_peer(chat), **iter_kwargs)
+        # Resolve a proper InputPeer (with fresh access_hash) before GetHistoryRequest.
+        # Passing a bare chat_id fails for channels/supergroups when the worker's
+        # Telethon client has no warm entity cache — the listener and the worker
+        # are separate clients, so the worker must resolve itself.
+        peer = await _resolve_chat_entity(client, db, chat)
+        iterator = client.iter_messages(peer, **iter_kwargs)
         async for message in iterator:
             messages_seen += 1
 

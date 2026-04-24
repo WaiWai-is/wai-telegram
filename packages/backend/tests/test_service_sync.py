@@ -1,7 +1,8 @@
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
-from app.models.chat import ChatType
+from app.models.chat import ChatType, TelegramChat
+from app.models.sync_job import SyncJob, SyncStatus
 from app.services.sync_service import (
     TelegramSessionUnauthorizedError,
     _get_chat_title,
@@ -9,6 +10,7 @@ from app.services.sync_service import (
     _get_media_type,
     _get_sender_name,
     sync_chats,
+    sync_messages,
 )
 
 
@@ -144,3 +146,55 @@ class TestSyncChats:
 
         mock_invalidate.assert_awaited_once_with(mock_client, test_user.id, ANY)
         mock_client.disconnect.assert_awaited()
+
+
+class TestSyncMessagesResolvesEntity:
+    """Regression: sync_messages must resolve a proper InputPeer before
+    GetHistoryRequest, otherwise channels with missing/stale access_hash
+    fail with 'Invalid channel object'."""
+
+    async def test_resolves_chat_entity_before_iter_messages(
+        self, db_session, test_user
+    ):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=1234567890,
+            access_hash=None,  # stale — the exact case that used to fail
+            chat_type=ChatType.CHANNEL,
+            title="Some Channel",
+        )
+        db_session.add(chat)
+        job = SyncJob(user_id=test_user.id, chat_id=None, status=SyncStatus.PENDING)
+        db_session.add(job)
+        await db_session.flush()
+        job.chat_id = chat.id
+        await db_session.flush()
+
+        resolved_peer = object()  # marker
+
+        class EmptyAsyncIter:
+            total = 0
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        mock_client = MagicMock()
+        mock_client.iter_messages = MagicMock(return_value=EmptyAsyncIter())
+
+        with patch(
+            "app.services.sync_service._resolve_chat_entity",
+            new_callable=AsyncMock,
+            return_value=resolved_peer,
+        ) as mock_resolve:
+            await sync_messages(
+                db_session, test_user.id, chat.id, job.id, client=mock_client
+            )
+
+        mock_resolve.assert_awaited_once()
+        # First positional arg to iter_messages must be the resolved peer,
+        # NOT the bare chat.telegram_chat_id.
+        call_args, _ = mock_client.iter_messages.call_args
+        assert call_args[0] is resolved_peer
