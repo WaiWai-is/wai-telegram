@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser, RequireWrite
+from app.core.auth import CurrentUser
 from app.core.database import get_db
 from app.core.limiter import limiter
 from app.core.observability import log_event
@@ -84,12 +84,11 @@ async def _expire_stale_jobs(
 @limiter.limit("3/minute")
 async def sync_all_chats(
     request: Request,
-    ctx: RequireWrite,
+    user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     limit_per_chat: int = Query(default=500, ge=0, le=10000),
 ) -> SyncJobResponse:
     """Start bulk sync of all chats. limit_per_chat=0 means unlimited."""
-    user = ctx.user
     # Expire stale jobs before checking for conflicts
     await _expire_stale_jobs(db, user.id, chat_id=None)
 
@@ -135,12 +134,11 @@ async def sync_all_chats(
 async def sync_chat(
     request: Request,
     chat_id: UUID,
-    ctx: RequireWrite,
+    user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int | None = None,
 ) -> SyncJobResponse:
     """Start syncing messages for a chat."""
-    user = ctx.user
     # Verify chat ownership
     result = await db.execute(
         select(TelegramChat).where(

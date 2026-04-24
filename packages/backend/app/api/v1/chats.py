@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser, RequireWrite
+from app.core.auth import CurrentUser
 from app.core.cursor import (
     CursorError,
     decode_cursor,
@@ -153,12 +153,12 @@ async def list_chats(
 @limiter.limit("10/minute")
 async def refresh_chats(
     request: Request,
-    ctx: RequireWrite,
+    user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ChatListResponse:
     """Refresh chat list from Telegram."""
     try:
-        chats = await sync_chats(db, ctx.user.id)
+        chats = await sync_chats(db, user.id)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

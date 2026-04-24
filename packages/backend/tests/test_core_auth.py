@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from app.core.security import (
@@ -133,8 +134,42 @@ class TestGetCurrentUserApiKey:
         db_session.add(api_key)
         await db_session.flush()
 
+        # Outbound-effect endpoint (sends a message to Telegram) must stay gated.
         response = await client.post(
-            "/api/v1/sync/all",
+            f"/api/v1/messages/{uuid4()}/send",
             headers={"Authorization": f"Bearer {raw_key}"},
+            json={"text": "hello"},
         )
         assert response.status_code == 403
+        assert response.json()["detail"] == "API key lacks 'write' permission"
+
+    async def test_read_only_api_key_can_trigger_sync(
+        self, client, db_session, test_user
+    ):
+        """Local-cache data pulls (sync) are read-level — no write scope needed."""
+        raw_key = "wai_readonlysync1234567890abcdef"
+        api_key = ApiKey(
+            user_id=test_user.id,
+            name="Read Only Sync Key",
+            key_hash=hash_api_key(raw_key),
+            key_prefix=compute_api_key_prefix(raw_key),
+            key_hint=get_key_hint(raw_key),
+            is_active=True,
+            scopes="read",
+        )
+        db_session.add(api_key)
+        await db_session.flush()
+
+        mock_task = MagicMock()
+        mock_task.delay = MagicMock()
+        with (
+            patch("app.api.v1.sync.sync_all_chats_task", mock_task),
+            patch("app.api.v1.sync.redis_client", MagicMock()),
+        ):
+            response = await client.post(
+                "/api/v1/sync/all",
+                headers={"Authorization": f"Bearer {raw_key}"},
+            )
+        assert response.status_code == 200
+        assert response.json()["status"] == "pending"
+        mock_task.delay.assert_called_once()
