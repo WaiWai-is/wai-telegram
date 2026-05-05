@@ -45,6 +45,10 @@ class TelegramSessionUnauthorizedError(ValueError):
     """Raised when a persisted Telethon session is no longer authorized."""
 
 
+class NoActiveTelegramSessionError(TelegramSessionUnauthorizedError):
+    """Raised when there is no active Telegram session row for a user."""
+
+
 def is_session_authorization_error(exc: BaseException) -> bool:
     return isinstance(exc, AUTH_SESSION_ERRORS)
 
@@ -210,7 +214,7 @@ async def get_client(
     )
     session = result.scalar_one_or_none()
     if not session:
-        raise ValueError("No active Telegram session found")
+        raise NoActiveTelegramSessionError("No active Telegram session found")
 
     session_string = decrypt_session(session.session_string)
     client = TelegramClient(

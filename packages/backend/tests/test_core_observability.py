@@ -110,6 +110,43 @@ class TestSanitizeData:
             == observability.REDACTED
         )
 
+    def test_before_send_drops_event_loop_is_closed(self):
+        event = {
+            "exception": {
+                "values": [{"type": "RuntimeError", "value": "Event loop is closed"}]
+            }
+        }
+        assert observability.before_send(event, {}) is None
+
+    def test_before_send_drops_telethon_session_not_authorized_log_event(self):
+        event = {
+            "logentry": {
+                "formatted": "Telethon session not authorized for user abc-123"
+            }
+        }
+        assert observability.before_send(event, {}) is None
+
+    def test_before_send_drops_no_active_telegram_session(self):
+        event = {
+            "exception": {
+                "values": [
+                    {
+                        "type": "NoActiveTelegramSessionError",
+                        "value": "No active Telegram session found",
+                    }
+                ]
+            }
+        }
+        assert observability.before_send(event, {}) is None
+
+    def test_before_send_keeps_unrelated_event(self):
+        event = {
+            "exception": {
+                "values": [{"type": "ValueError", "value": "Something else broke"}]
+            }
+        }
+        assert observability.before_send(event, {}) is event
+
     def test_before_send_log_scrubs_attributes(self):
         log = {
             "body": "Login failed",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from importlib.metadata import PackageNotFoundError, version
+from collections.abc import Iterable
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -169,7 +170,43 @@ def _sanitize_event(event: dict[str, Any]) -> dict[str, Any]:
     return event
 
 
-def before_send(event: dict[str, Any], _hint: dict[str, Any]) -> dict[str, Any]:
+NOISY_EVENT_PATTERNS: tuple[str, ...] = (
+    "Event loop is closed",
+    "Telethon session not authorized",
+    "No active Telegram session found",
+)
+
+
+def _event_text_fragments(event: Mapping[str, Any]) -> Iterable[str]:
+    exception = event.get("exception")
+    if isinstance(exception, Mapping):
+        for value in exception.get("values") or ():
+            if isinstance(value, Mapping):
+                msg = value.get("value")
+                if isinstance(msg, str):
+                    yield msg
+    logentry = event.get("logentry")
+    if isinstance(logentry, Mapping):
+        for key in ("formatted", "message"):
+            msg = logentry.get(key)
+            if isinstance(msg, str):
+                yield msg
+    top_message = event.get("message")
+    if isinstance(top_message, str):
+        yield top_message
+
+
+def _is_known_noise(event: Mapping[str, Any]) -> bool:
+    return any(
+        pattern in fragment
+        for fragment in _event_text_fragments(event)
+        for pattern in NOISY_EVENT_PATTERNS
+    )
+
+
+def before_send(event: dict[str, Any], _hint: dict[str, Any]) -> dict[str, Any] | None:
+    if _is_known_noise(event):
+        return None
     return _sanitize_event(event)
 
 

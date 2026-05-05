@@ -5,6 +5,7 @@ import pytest
 from app.models.session import TelegramSession
 from app.models.settings import UserSettings
 from app.services.telegram_client import (
+    NoActiveTelegramSessionError,
     TelegramSessionUnauthorizedError,
     _get_code_type_name,
     get_client,
@@ -126,6 +127,18 @@ class TestVerifyCode:
 
 
 class TestGetClient:
+    async def test_no_active_session_raises_no_active_error(
+        self, db_session, test_user
+    ):
+        with pytest.raises(NoActiveTelegramSessionError):
+            await get_client(test_user.id, db_session)
+
+    async def test_no_active_session_error_is_unauthorized_subclass(
+        self, db_session, test_user
+    ):
+        with pytest.raises(TelegramSessionUnauthorizedError):
+            await get_client(test_user.id, db_session)
+
     async def test_unauthorized_session_is_disabled(self, db_session, test_user):
         active_session = TelegramSession(
             user_id=test_user.id,
