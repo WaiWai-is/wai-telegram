@@ -10,6 +10,14 @@ settings = get_settings()
 MAX_MESSAGE_LENGTH = 4096
 
 
+def _redact(text: str) -> str:
+    """Strip the bot token from text so it never reaches logs or Sentry."""
+    token = settings.telegram_bot_token
+    if token and token in text:
+        text = text.replace(token, "***")
+    return text
+
+
 def _split_message(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list[str]:
     """Split text into chunks that fit within Telegram's message limit."""
     if len(text) <= max_length:
@@ -55,7 +63,13 @@ async def send_telegram_message(
                     url,
                     json={"chat_id": chat_id, "text": chunk},
                 )
-            resp.raise_for_status()
+            # Raise a token-free error: httpx's raise_for_status() would embed the
+            # full request URL (including the bot token) in the exception message.
+            if resp.status_code >= 400:
+                raise RuntimeError(
+                    f"Telegram sendMessage failed with status {resp.status_code}: "
+                    f"{_redact(resp.text)[:200]}"
+                )
 
 
 async def send_telegram_photo(chat_id: int, photo_url: str, caption: str = "") -> bool:
@@ -80,8 +94,10 @@ async def send_telegram_photo(chat_id: int, photo_url: str, caption: str = "") -
             resp = await client.post(url, json=payload)
             if resp.status_code == 200:
                 return True
-            logger.warning(f"sendPhoto failed ({resp.status_code}): {resp.text[:200]}")
+            logger.warning(
+                f"sendPhoto failed ({resp.status_code}): {_redact(resp.text)[:200]}"
+            )
             return False
     except Exception as e:
-        logger.warning(f"sendPhoto error: {e}")
+        logger.warning(f"sendPhoto error: {_redact(str(e))}")
         return False

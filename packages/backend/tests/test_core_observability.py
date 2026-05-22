@@ -147,6 +147,41 @@ class TestSanitizeData:
         }
         assert observability.before_send(event, {}) is event
 
+    def test_before_send_redacts_bot_token_in_exception(self):
+        token = "8759392549:AAGhrnMPOI0rijnXQswljKGMkSCXWxYP_HA"
+        event = {
+            "exception": {
+                "values": [
+                    {
+                        "type": "RuntimeError",
+                        "value": (
+                            "Failed to send digest: Client error '401 Unauthorized' "
+                            f"for url 'https://api.telegram.org/bot{token}/sendMessage'"
+                        ),
+                    }
+                ]
+            }
+        }
+
+        sanitized = observability.before_send(event, {})
+
+        assert sanitized is not None
+        scrubbed = sanitized["exception"]["values"][0]["value"]
+        assert token not in scrubbed
+        assert observability.REDACTED in scrubbed
+
+    def test_before_send_redacts_bot_token_in_logentry(self):
+        token = "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ0123456789"
+        event = {"logentry": {"formatted": f"boom bot{token}/sendMessage"}}
+
+        sanitized = observability.before_send(event, {})
+
+        assert token not in sanitized["logentry"]["formatted"]
+
+    def test_scrub_secret_text_keeps_ordinary_text(self):
+        text = "Login failed for user 2ab635cc-3f48-47ed-b07a-44dd9b0e6406"
+        assert observability._scrub_secret_text(text) == text
+
     def test_before_send_log_scrubs_attributes(self):
         log = {
             "body": "Login failed",

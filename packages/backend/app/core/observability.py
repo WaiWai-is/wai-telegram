@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from importlib.metadata import PackageNotFoundError, version
 from collections.abc import Iterable
 from typing import Any, Mapping
@@ -65,6 +66,13 @@ SENSITIVE_SUBSTRINGS = (
     "text",
     "token",
     "transcript",
+)
+
+# Patterns for secrets that can appear inside free-text messages/exceptions
+# (where key-based scrubbing does not reach). Telegram bot tokens look like
+# "<bot_id>:<35-char base64url secret>" and leak via API URLs in httpx errors.
+_SECRET_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\d{6,}:[A-Za-z0-9_-]{30,}"),
 )
 
 
@@ -158,6 +166,28 @@ def _sanitize_breadcrumbs(event: dict[str, Any]) -> None:
             breadcrumb["data"] = sanitize_mapping(data)
 
 
+def _scrub_secret_text(text: str) -> str:
+    for pattern in _SECRET_TEXT_PATTERNS:
+        text = pattern.sub(REDACTED, text)
+    return text
+
+
+def _sanitize_event_text(event: dict[str, Any]) -> None:
+    """Redact secrets embedded in free-text exception/log/message fields."""
+    exception = event.get("exception")
+    if isinstance(exception, Mapping):
+        for value in exception.get("values") or ():
+            if isinstance(value, dict) and isinstance(value.get("value"), str):
+                value["value"] = _scrub_secret_text(value["value"])
+    logentry = event.get("logentry")
+    if isinstance(logentry, dict):
+        for key in ("formatted", "message"):
+            if isinstance(logentry.get(key), str):
+                logentry[key] = _scrub_secret_text(logentry[key])
+    if isinstance(event.get("message"), str):
+        event["message"] = _scrub_secret_text(event["message"])
+
+
 def _sanitize_event(event: dict[str, Any]) -> dict[str, Any]:
     for top_level_key in ("contexts", "extra", "tags"):
         value = event.get(top_level_key)
@@ -167,6 +197,7 @@ def _sanitize_event(event: dict[str, Any]) -> dict[str, Any]:
     _sanitize_request_payload(event)
     _sanitize_user_payload(event)
     _sanitize_breadcrumbs(event)
+    _sanitize_event_text(event)
     return event
 
 
