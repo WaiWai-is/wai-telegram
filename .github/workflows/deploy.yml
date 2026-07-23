@@ -183,6 +183,8 @@ jobs:
           [ -z "${NEXT_PUBLIC_API_URL:-}" ] && MISSING="$MISSING NEXT_PUBLIC_API_URL"
           [ -z "${SECRET_KEY:-}" ] && MISSING="$MISSING SECRET_KEY"
           [ -z "${SENTRY_DSN:-}" ] && MISSING="$MISSING SENTRY_DSN"
+          [ -z "${OPENAI_API_KEY:-}" ] && MISSING="$MISSING OPENAI_API_KEY"
+          [ -z "${DEEPGRAM_API_KEY:-}" ] && MISSING="$MISSING DEEPGRAM_API_KEY"
           if [ -n "$MISSING" ]; then
             echo "FATAL: Missing required env vars:$MISSING"
             exit 1
@@ -292,8 +294,22 @@ jobs:
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
           # Stop services that hold DB connections so migrations can run
-          systemctl stop wai-backend wai-celery wai-celery-beat wai-listener wai-mcp-sse || true
+          systemctl stop wai-backend wai-celery wai-celery-beat wai-media wai-listener wai-mcp-sse || true
           sleep 2
+          EOF
+
+      - name: Install media system dependency
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
+          set -e
+          if ! command -v ffmpeg > /dev/null 2>&1; then
+            apt-get update
+            apt-get install -y ffmpeg
+          fi
+          ffmpeg -version | head -n 1
           EOF
 
       - name: Install Python dependencies
@@ -341,10 +357,12 @@ jobs:
           cp systemd/wai-backend.service /etc/systemd/system/
           cp systemd/wai-celery.service /etc/systemd/system/
           cp systemd/wai-celery-beat.service /etc/systemd/system/
+          cp systemd/wai-media.service /etc/systemd/system/
           cp systemd/wai-frontend.service /etc/systemd/system/
           cp systemd/wai-listener.service /etc/systemd/system/
           cp systemd/wai-mcp-sse.service /etc/systemd/system/
           systemctl daemon-reload
+          systemctl enable wai-media
           EOF
 
       - name: Restart services
@@ -355,7 +373,7 @@ jobs:
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
           set -e
           systemctl restart wai-backend
-          systemctl restart wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
+          systemctl restart wai-celery wai-celery-beat wai-media wai-frontend wai-listener wai-mcp-sse
 
           # Reload nginx config
           cd /opt/wai-telegram
@@ -371,7 +389,7 @@ jobs:
           USER: ${{ secrets.DEPLOY_USER }}
         run: |
           ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          SERVICES="wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse"
+          SERVICES="wai-backend wai-celery wai-celery-beat wai-media wai-frontend wai-listener wai-mcp-sse"
 
           # Wait for all systemd services
           for attempt in 1 2 3 4 5 6; do
