@@ -97,25 +97,10 @@ def upgrade():
         ["media_processing_status"],
     )
 
-    op.execute(
-        """
-        UPDATE telegram_messages
-        SET content_text = text,
-            text = NULL
-        WHERE transcribed_at IS NOT NULL
-          AND content_text IS NULL
-        """
-    )
-    op.execute(
-        """
-        UPDATE telegram_messages
-        SET media_processing_status = 'pending'
-        WHERE has_media = true
-          AND media_type IN (
-              'voice', 'video_note', 'audio', 'video', 'photo', 'document'
-          )
-        """
-    )
+    # Historical rows remain untouched here. Rewriting large transcript TOAST
+    # values would hold an exclusive migration lock for the entire backlog.
+    # The durable dispatcher claims NULL-status media in small batches, and
+    # each worker moves a legacy transcript from text to content_text atomically.
 
     op.create_table(
         "message_content_chunks",

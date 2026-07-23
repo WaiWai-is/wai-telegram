@@ -8,6 +8,7 @@ from app.services.media_processing_service import (
     ClaimedMediaMessage,
     claim_media_message,
     process_local_media,
+    split_audio_for_transcription,
     summarize_existing_transcript,
 )
 
@@ -45,6 +46,39 @@ async def test_claim_is_atomic_and_prevents_duplicate_billable_work(
     assert duplicate is None
     assert message.media_processing_status == MediaProcessingStatus.PROCESSING
     assert message.media_processing_attempts == 1
+
+
+async def test_claim_reuses_legacy_transcript_stored_in_text(
+    db_session,
+    test_user,
+):
+    chat = TelegramChat(
+        user_id=test_user.id,
+        telegram_chat_id=124,
+        chat_type="private",
+        title="Legacy media",
+    )
+    db_session.add(chat)
+    await db_session.flush()
+    message = TelegramMessage(
+        chat_id=chat.id,
+        telegram_message_id=457,
+        text="Старая расшифровка.",
+        has_media=True,
+        media_type="voice",
+        media_processing_status=MediaProcessingStatus.PENDING,
+        transcribed_at=datetime.now(UTC),
+        sent_at=chat.created_at,
+    )
+    db_session.add(message)
+    await db_session.flush()
+
+    claimed = await claim_media_message(db_session, message.id)
+
+    assert claimed is not None
+    assert claimed.caption is None
+    assert claimed.existing_content_text == "Старая расшифровка."
+    assert claimed.legacy_transcript_in_text is True
 
 
 async def test_audio_is_transcribed_once_then_summarized(tmp_path):
@@ -133,6 +167,29 @@ async def test_long_audio_is_chunked_to_avoid_provider_request_timeout(tmp_path)
     split.assert_awaited_once_with(source)
     assert transcribe.await_count == 2
     assert all(call.args[1] == "audio/ogg" for call in transcribe.await_args_list)
+
+
+async def test_audio_split_has_only_one_output_target(tmp_path):
+    source = tmp_path / "meeting.m4a"
+    source.write_bytes(b"audio")
+
+    async def create_fake_process(*args, **_kwargs):
+        bitrate_index = args.index("-b:a")
+        assert args[bitrate_index + 1] == "32k"
+        assert args[bitrate_index + 2] == "-f"
+        (tmp_path / "chunk-0000.ogg").write_bytes(b"chunk")
+        process = AsyncMock()
+        process.returncode = 0
+        process.communicate.return_value = (b"", b"")
+        return process
+
+    with patch(
+        "app.services.media_processing_service.asyncio.create_subprocess_exec",
+        side_effect=create_fake_process,
+    ):
+        chunks = await split_audio_for_transcription(source)
+
+    assert chunks == [tmp_path / "chunk-0000.ogg"]
 
 
 async def test_document_text_is_extracted_then_summarized(tmp_path):

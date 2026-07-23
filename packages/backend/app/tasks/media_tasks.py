@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from celery import shared_task
-from sqlalchemy import case, func, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 
 from app.core.async_runner import run_async
 from app.core.config import get_settings
@@ -104,11 +104,20 @@ async def _find_pending_and_reap_stale() -> list[UUID]:
             (TelegramMessage.media_type == "photo", 3),
             else_=4,
         )
+        eligible_uninitialized = and_(
+            TelegramMessage.media_processing_status.is_(None),
+            TelegramMessage.has_media.is_(True),
+            TelegramMessage.media_type.in_(
+                ("voice", "video_note", "audio", "video", "photo", "document")
+            ),
+        )
+        dispatchable = or_(
+            TelegramMessage.media_processing_status == MediaProcessingStatus.PENDING,
+            eligible_uninitialized,
+        )
         pending_subquery = (
             select(TelegramMessage.id)
-            .where(
-                TelegramMessage.media_processing_status == MediaProcessingStatus.PENDING
-            )
+            .where(dispatchable)
             .order_by(
                 priority.asc(),
                 TelegramMessage.sent_at.desc(),
@@ -123,8 +132,7 @@ async def _find_pending_and_reap_stale() -> list[UUID]:
                     update(TelegramMessage)
                     .where(
                         TelegramMessage.id.in_(pending_subquery),
-                        TelegramMessage.media_processing_status
-                        == MediaProcessingStatus.PENDING,
+                        dispatchable,
                     )
                     .values(
                         media_processing_status=MediaProcessingStatus.QUEUED,

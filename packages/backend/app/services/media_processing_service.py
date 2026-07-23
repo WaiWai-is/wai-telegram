@@ -75,6 +75,7 @@ class ClaimedMediaMessage:
     duration_seconds: int | None
     existing_content_text: str | None
     transcribed_at: datetime | None
+    legacy_transcript_in_text: bool = False
 
 
 @dataclass(frozen=True)
@@ -137,19 +138,28 @@ async def claim_media_message(
             .where(TelegramMessage.id == claimed_id)
         )
     ).one()
+    legacy_transcript_in_text = bool(
+        row.transcribed_at is not None
+        and row.content_text is None
+        and row.text
+        and row.media_type in MEDIA_TRANSCRIPTION_TYPES
+    )
     return ClaimedMediaMessage(
         id=row.id,
         user_id=row.user_id,
         chat_id=row.chat_id,
         telegram_message_id=row.telegram_message_id,
-        caption=row.text,
+        caption=None if legacy_transcript_in_text else row.text,
         media_type=row.media_type or "other",
         file_name=row.media_file_name,
         mime_type=row.media_mime_type,
         file_size=row.media_file_size,
         duration_seconds=row.media_duration_seconds,
-        existing_content_text=row.content_text,
+        existing_content_text=(
+            row.text if legacy_transcript_in_text else row.content_text
+        ),
         transcribed_at=row.transcribed_at,
+        legacy_transcript_in_text=legacy_transcript_in_text,
     )
 
 
@@ -475,6 +485,8 @@ async def _finalize_media(
         message.media_file_size = info.file_size
         message.media_duration_seconds = info.duration_seconds
         message.content_text = content.content_text
+        if job.legacy_transcript_in_text:
+            message.text = None
         message.content_summary = content.content_summary
         message.content_model = content.content_model
         message.summary_model = content.summary_model
