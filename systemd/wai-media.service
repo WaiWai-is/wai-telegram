@@ -14,7 +14,7 @@ Environment="PATH=/home/wai/.local/bin:/usr/local/bin:/usr/bin"
 EnvironmentFile=/opt/wai-telegram/.env.production
 
 ExecStartPre=+/bin/sh -c 'n=0; until docker exec wai-telegram-redis redis-cli ping >/dev/null 2>&1; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 2; done'
-ExecStart=/opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app worker --loglevel=info --queues=media --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=20
+ExecStart=/opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app worker --hostname=media@%H --loglevel=info --queues=media --concurrency=2 --prefetch-multiplier=1 --max-tasks-per-child=20
 
 Restart=always
 RestartSec=10

@@ -173,9 +173,35 @@ fi
 
 # Service and endpoint verification
 echo "Verifying service health..."
-systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-media wai-frontend wai-listener wai-mcp-sse
-su - wai -c 'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app inspect ping --timeout=10' | grep -q pong
-curl -sf --max-time 10 http://127.0.0.1:8000/health/live > /dev/null
+HEALTHY=false
+for attempt in $(seq 1 30); do
+    if systemctl is-active --quiet \
+        wai-backend wai-celery wai-celery-beat wai-media \
+        wai-frontend wai-listener wai-mcp-sse \
+        && curl -sf --max-time 5 http://127.0.0.1:8000/health/live > /dev/null \
+        && [ "$(
+            su - wai -c "cd /opt/wai-telegram/packages/backend \
+                && set -a \
+                && source /opt/wai-telegram/.env.production \
+                && set +a \
+                && /opt/wai-telegram/.venv/bin/celery \
+                    -A app.tasks.celery_app:celery_app inspect ping \
+                    --destination celery@$(hostname),media@$(hostname) \
+                    --timeout=5" 2>/dev/null | grep -c pong
+        )" -eq 2 ]
+    then
+        HEALTHY=true
+        break
+    fi
+    sleep 2
+done
+if [ "$HEALTHY" != true ]; then
+    echo "Services did not become ready within 60 seconds"
+    systemctl --no-pager --full status \
+        wai-backend wai-celery wai-celery-beat wai-media \
+        wai-frontend wai-listener wai-mcp-sse || true
+    exit 1
+fi
 curl -sf --max-time 10 http://127.0.0.1:8000/health/ready > /dev/null
 curl -sf --max-time 10 https://telegram.waiwai.is/health/ready > /dev/null
 
