@@ -65,6 +65,20 @@ class Settings(BaseSettings):
     # DeepGram (voice transcription)
     deepgram_api_key: str = Field(default="")
     deepgram_model: str = "nova-3"
+    deepgram_language: str = "multi"
+    deepgram_timeout_seconds: float = 600.0
+    media_transcription_chunk_seconds: int = 600
+
+    # Background media processing
+    media_summary_model: str = "gpt-5.6-luna"
+    media_summary_max_output_tokens: int = 500
+    media_summary_chunk_chars: int = 120_000
+    media_embedding_chunk_chars: int = 6_000
+    media_embedding_chunk_overlap_chars: int = 600
+    document_extraction_timeout_seconds: float = 180.0
+    media_dispatch_target_depth: int = 20
+    media_queue_stale_minutes: int = 360
+    media_processing_stale_minutes: int = 120
 
     # Sync settings
     sync_batch_size: int = 100

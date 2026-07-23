@@ -1115,7 +1115,9 @@ async def _process_update(update: dict) -> None:
 async def _transcribe_voice(message: dict) -> str | None:
     """Transcribe a voice message using Deepgram."""
     try:
-        from app.services.transcription_service import transcribe_voice_message
+        import asyncio
+        import tempfile
+        from pathlib import Path
 
         # Download voice file from Telegram
         voice = message["voice"]
@@ -1123,23 +1125,26 @@ async def _transcribe_voice(message: dict) -> str | None:
 
         import httpx
 
-        # Get file path from Telegram
+        from app.services.media_content_service import transcribe_media_file
+
         bot_token = _get_bot_token()
         url = f"https://api.telegram.org/bot{bot_token}/getFile"
         async with httpx.AsyncClient() as client:
             resp = await client.get(url, params={"file_id": file_id})
+            resp.raise_for_status()
             file_path = resp.json()["result"]["file_path"]
 
-            # Download the file
             download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
             audio_resp = await client.get(download_url)
-            audio_data = audio_resp.content
+            audio_resp.raise_for_status()
 
-        # Transcribe with Deepgram
-        transcript = await transcribe_voice_message(audio_data)
-        return transcript
+        with tempfile.TemporaryDirectory(prefix="wai-bot-voice-") as temp_dir:
+            audio_path = Path(temp_dir) / "voice.ogg"
+            await asyncio.to_thread(audio_path.write_bytes, audio_resp.content)
+            return await transcribe_media_file(audio_path, "audio/ogg")
     except Exception as e:
-        logger.error(f"Voice transcription failed: {e}", exc_info=True)
+        # Telegram file URLs include the bot token, so never log exception text.
+        logger.error("Voice transcription failed (%s)", type(e).__name__)
         return None
 
 

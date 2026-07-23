@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import UUID
 
 import redis.asyncio as aioredis
@@ -9,11 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
-from telethon.tl.types import (
-    Channel,
-    MessageMediaDocument,
-    MessageMediaPhoto,
-)
+from telethon.tl.types import Channel
 from telethon.tl.types import (
     Chat as TelegramGroupChat,
 )
@@ -24,21 +21,19 @@ from telethon.tl.types import (
 from app.core.config import get_settings
 from app.core.database import get_db_context
 from app.models.chat import ChatType, TelegramChat
-from app.models.message import TelegramMessage
+from app.models.message import MediaProcessingStatus, TelegramMessage
 from app.models.settings import UserSettings
 from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
+from app.services.media_content_service import get_media_info
 from app.services.sync_service import sync_messages
+from app.tasks.media_tasks import enqueue_media_processing
 from app.services.telegram_client import (
     TelegramSessionUnauthorizedError,
     get_client_session_id,
     get_client,
     invalidate_client_authorization,
     is_session_authorization_error,
-)
-from app.services.transcription_service import (
-    TRANSCRIBABLE_MEDIA_TYPES,
-    download_and_transcribe,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,27 +48,8 @@ SYNC_HEARTBEAT_TTL = 180
 
 def _get_media_type(media) -> str | None:
     """Get media type from message media."""
-    if not media:
-        return None
-    if isinstance(media, MessageMediaPhoto):
-        return "photo"
-    if isinstance(media, MessageMediaDocument):
-        doc = media.document
-        if doc:
-            for attr in doc.attributes:
-                if hasattr(attr, "voice") and attr.voice:
-                    return "voice"
-                if hasattr(attr, "round_message") and attr.round_message:
-                    return "video_note"
-                if hasattr(attr, "file_name"):
-                    return "document"
-            mime = getattr(doc, "mime_type", "")
-            if mime.startswith("video/"):
-                return "video"
-            if mime.startswith("audio/"):
-                return "audio"
-        return "document"
-    return "other"
+    info = get_media_info(SimpleNamespace(media=media))
+    return info.media_type if info else None
 
 
 def _get_sender_name(sender) -> str | None:
@@ -274,34 +250,30 @@ class TelegramListener:
                     await asyncio.sleep(e.seconds)
                     sender = await event.get_sender()
 
-                media_type = _get_media_type(message.media)
+                media_info = get_media_info(message)
+                media_type = media_info.media_type if media_info else None
                 values = {
                     "chat_id": chat.id,
                     "telegram_message_id": message.id,
                     "text": message.text,
-                    "has_media": bool(message.media),
+                    "has_media": media_info is not None,
                     "media_type": media_type,
+                    "media_file_name": media_info.file_name if media_info else None,
+                    "media_mime_type": media_info.mime_type if media_info else None,
+                    "media_file_size": media_info.file_size if media_info else None,
+                    "media_duration_seconds": (
+                        media_info.duration_seconds if media_info else None
+                    ),
+                    "media_processing_status": (
+                        MediaProcessingStatus.PENDING
+                        if media_info and media_info.media_type != "other"
+                        else None
+                    ),
                     "sender_id": message.sender_id,
                     "sender_name": _get_sender_name(sender),
                     "is_outgoing": message.out,
                     "sent_at": message.date,
                 }
-
-                # Transcribe voice/video_note messages
-                if media_type in TRANSCRIBABLE_MEDIA_TYPES:
-                    try:
-                        transcript = await download_and_transcribe(
-                            self.clients[user_id], message
-                        )
-                        if transcript:
-                            values["text"] = transcript
-                            values["transcribed_at"] = datetime.now(UTC)
-                    except Exception as e:
-                        if is_session_authorization_error(e):
-                            raise
-                        logger.warning(
-                            f"Transcription failed for message {message.id}: {e}"
-                        )
 
                 stmt = pg_insert(TelegramMessage).values(**values)
                 stmt = stmt.on_conflict_do_nothing(
@@ -329,7 +301,18 @@ class TelegramListener:
                     )
                 ).scalar()
 
-            # Best-effort embed in separate session
+            if inserted_id and media_info and media_info.media_type != "other":
+                try:
+                    enqueue_media_processing([inserted_id])
+                except Exception:
+                    logger.exception(
+                        "Immediate media dispatch failed for message %s; "
+                        "the durable recovery scan will retry dispatch",
+                        inserted_id,
+                    )
+
+            # Best-effort caption/text embedding in a separate session. Media
+            # processing replaces it atomically with summary + content chunks.
             if inserted_id:
                 try:
                     async with get_db_context() as db:

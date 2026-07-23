@@ -18,7 +18,7 @@ dependencies = [
     "telethon>=1.38.0",
     "celery[redis]>=5.4.0",
     "redis>=5.2.0",
-    "openai>=1.58.0",
+    "openai==2.47.0",
     "anthropic>=0.40.0",
     "pgvector>=0.3.0",
     "python-multipart>=0.0.18",
@@ -26,7 +26,7 @@ dependencies = [
     "email-validator>=2.2.0",
     "slowapi>=0.1.9",  # Rate limiting
     "sentry-sdk[fastapi]>=2.0.0",  # Error tracking
-    "deepgram-sdk>=6.0.0",  # Voice transcription (v6 API)
+    "markitdown[pdf,docx,pptx,xlsx,xls,outlook]==0.1.6",
     "croniter>=2.0.0",  # Cron expression parsing for digital agents
 ]
 

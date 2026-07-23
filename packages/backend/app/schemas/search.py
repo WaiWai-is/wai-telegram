@@ -29,6 +29,12 @@ class SearchResultItem(BaseModel):
     similarity: float
     has_media: bool = False
     media_type: str | None = None
+    content_summary: str | None = None
+    content_preview: str | None = None
+    media_processing_status: str | None = None
+    media_file_name: str | None = None
+    media_mime_type: str | None = None
+    media_file_size: int | None = None
     transcribed_at: datetime | None = None
 
     class Config:

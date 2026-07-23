@@ -29,13 +29,13 @@ npm run dev / npm run lint / npm run test / npm run test:coverage
 
 - Domain: https://telegram.waiwai.is
 - Env: `/opt/wai-telegram/.env.production`
-- systemd: `wai-backend`, `wai-frontend`, `wai-celery`, `wai-celery-beat`, `wai-listener`, `wai-mcp-sse`
+- systemd: `wai-backend`, `wai-frontend`, `wai-celery`, `wai-celery-beat`, `wai-media`, `wai-listener`, `wai-mcp-sse`
 - Docker: `wai-telegram-db`, `wai-telegram-redis`
 - Health: `/health/live`, `/health/ready`
 
 ## Fast Triage
 
-1. `systemctl is-active wai-backend wai-frontend wai-celery wai-celery-beat wai-listener wai-mcp-sse`
+1. `systemctl is-active wai-backend wai-frontend wai-celery wai-celery-beat wai-media wai-listener wai-mcp-sse`
 2. `curl -sf http://127.0.0.1:8000/health/live && curl -sf http://127.0.0.1:8000/health/ready`
 3. `curl -sf https://telegram.waiwai.is/health/ready`
 4. `journalctl -u wai-backend -u wai-celery -n 200 --no-pager`
@@ -44,7 +44,7 @@ npm run dev / npm run lint / npm run test / npm run test:coverage
 
 1. Timestamped backup in `/opt/wai-telegram-backups`
 2. Confirm `.env.production` includes `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`, `NEXT_PUBLIC_API_URL`, `SENTRY_DSN`
-3. `systemctl restart wai-backend wai-frontend wai-celery wai-celery-beat wai-listener wai-mcp-sse`
+3. `systemctl restart wai-backend wai-frontend wai-celery wai-celery-beat wai-media wai-listener wai-mcp-sse`
 4. Verify health checks + `celery inspect ping`
 
 ## Rollback

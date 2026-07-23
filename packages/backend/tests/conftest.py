@@ -35,15 +35,16 @@ def _patch_columns_for_sqlite():
     Returns a list of (column, original_type) tuples to restore later.
     """
     from app.models.digest import DailyDigest
-    from app.models.message import TelegramMessage
+    from app.models.message import MessageContentChunk, TelegramMessage
 
     patches = []
 
     # Patch Vector -> String on TelegramMessage.embedding
-    embedding_col = TelegramMessage.__table__.columns.get("embedding")
-    if embedding_col is not None:
-        patches.append((embedding_col, embedding_col.type))
-        embedding_col.type = String()
+    for model in (TelegramMessage, MessageContentChunk):
+        embedding_col = model.__table__.columns.get("embedding")
+        if embedding_col is not None:
+            patches.append((embedding_col, embedding_col.type))
+            embedding_col.type = String()
 
     # Patch JSONB -> JSON on DailyDigest.summary_stats
     stats_col = DailyDigest.__table__.columns.get("summary_stats")
@@ -60,42 +61,42 @@ def _unpatch_columns(patches):
         col.type = original_type
 
 
-def _remove_hnsw_index():
-    """Remove the PostgreSQL HNSW index from TelegramMessage table args.
+def _remove_hnsw_indexes():
+    """Remove PostgreSQL HNSW indexes while SQLite test tables are created.
 
-    Returns the original table args tuple so it can be restored.
+    Returns the original table args and indexes so they can be restored.
     """
-    from app.models.message import TelegramMessage
+    from app.models.message import MessageContentChunk, TelegramMessage
 
-    original_args = TelegramMessage.__table_args__
-    # Filter out indexes that use postgresql_using (HNSW)
-    filtered = tuple(
-        arg
-        for arg in original_args
-        if not (
-            hasattr(arg, "dialect_options")
-            and "postgresql_using" in arg.dialect_options.get("postgresql", {})
+    states = []
+    for model in (TelegramMessage, MessageContentChunk):
+        original_args = model.__table_args__
+        filtered = tuple(
+            arg
+            for arg in original_args
+            if not (
+                hasattr(arg, "dialect_options")
+                and "postgresql_using" in arg.dialect_options.get("postgresql", {})
+            )
         )
-    )
-    TelegramMessage.__table_args__ = filtered
-    # Also remove from table.indexes to prevent create_all from emitting it
-    hnsw_indexes = [
-        idx
-        for idx in TelegramMessage.__table__.indexes
-        if "postgresql_using" in idx.dialect_options.get("postgresql", {})
-    ]
-    for idx in hnsw_indexes:
-        TelegramMessage.__table__.indexes.discard(idx)
-    return original_args, hnsw_indexes
+        model.__table_args__ = filtered
+        hnsw_indexes = [
+            idx
+            for idx in model.__table__.indexes
+            if "postgresql_using" in idx.dialect_options.get("postgresql", {})
+        ]
+        for idx in hnsw_indexes:
+            model.__table__.indexes.discard(idx)
+        states.append((model, original_args, hnsw_indexes))
+    return states
 
 
-def _restore_hnsw_index(original_args, removed_indexes):
-    """Restore the HNSW index after SQLite table creation."""
-    from app.models.message import TelegramMessage
-
-    TelegramMessage.__table_args__ = original_args
-    for idx in removed_indexes:
-        TelegramMessage.__table__.indexes.add(idx)
+def _restore_hnsw_indexes(states):
+    """Restore HNSW indexes after SQLite table creation."""
+    for model, original_args, removed_indexes in states:
+        model.__table_args__ = original_args
+        for idx in removed_indexes:
+            model.__table__.indexes.add(idx)
 
 
 @pytest.fixture
@@ -105,7 +106,7 @@ async def async_engine():
 
     # Patch PG-specific types and indexes for SQLite
     col_patches = _patch_columns_for_sqlite()
-    original_args, removed_indexes = _remove_hnsw_index()
+    hnsw_states = _remove_hnsw_indexes()
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -118,7 +119,7 @@ async def async_engine():
 
     # Restore original types and indexes
     _unpatch_columns(col_patches)
-    _restore_hnsw_index(original_args, removed_indexes)
+    _restore_hnsw_indexes(hnsw_states)
 
 
 @pytest.fixture

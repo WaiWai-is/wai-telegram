@@ -18,7 +18,11 @@ from app.core.limiter import limiter
 from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
 from app.schemas.chat import ChatListResponse, ChatResponse
-from app.schemas.message import MessageListResponse, MessageResponse
+from app.schemas.message import (
+    MessageContentResponse,
+    MessageListResponse,
+    MessageResponse,
+)
 from app.services.sync_service import sync_chats
 
 router = APIRouter()
@@ -298,6 +302,14 @@ async def get_chat_messages(
                 text=msg.text,
                 has_media=msg.has_media,
                 media_type=msg.media_type,
+                media_file_name=msg.media_file_name,
+                media_mime_type=msg.media_mime_type,
+                media_file_size=msg.media_file_size,
+                media_duration_seconds=msg.media_duration_seconds,
+                content_summary=msg.content_summary,
+                content_preview=msg.content_text[:1200] if msg.content_text else None,
+                media_processing_status=msg.media_processing_status,
+                media_processing_error_code=msg.media_processing_error_code,
                 sender_id=msg.sender_id,
                 sender_name=msg.sender_name,
                 is_outgoing=msg.is_outgoing,
@@ -313,4 +325,52 @@ async def get_chat_messages(
         newest_cursor=newest_cursor,
         total_messages_synced=chat.total_messages_synced,
         last_sync_at=chat.last_sync_at,
+    )
+
+
+@router.get(
+    "/{chat_id}/messages/{telegram_message_id}/content",
+    response_model=MessageContentResponse,
+)
+async def get_message_content(
+    chat_id: UUID,
+    telegram_message_id: int,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> MessageContentResponse:
+    """Return the complete processed content for one media message."""
+    result = await db.execute(
+        select(TelegramMessage)
+        .join(TelegramChat)
+        .where(
+            TelegramMessage.chat_id == chat_id,
+            TelegramMessage.telegram_message_id == telegram_message_id,
+            TelegramChat.user_id == user.id,
+        )
+    )
+    message = result.scalar_one_or_none()
+    if message is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found",
+        )
+
+    return MessageContentResponse(
+        id=message.id,
+        telegram_message_id=message.telegram_message_id,
+        text=message.text,
+        media_type=message.media_type,
+        media_file_name=message.media_file_name,
+        media_mime_type=message.media_mime_type,
+        media_file_size=message.media_file_size,
+        media_duration_seconds=message.media_duration_seconds,
+        content_text=message.content_text,
+        content_summary=message.content_summary,
+        media_processing_status=message.media_processing_status,
+        media_processing_error_code=message.media_processing_error_code,
+        media_processing_error=message.media_processing_error,
+        transcribed_at=message.transcribed_at,
+        media_processed_at=message.media_processed_at,
+        content_model=message.content_model,
+        summary_model=message.summary_model,
     )

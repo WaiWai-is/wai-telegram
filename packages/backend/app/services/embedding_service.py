@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -11,6 +12,19 @@ from app.models.message import TelegramMessage
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+@dataclass(frozen=True)
+class PreparedContentChunk:
+    text: str
+    embedding: list[float]
+
+
+@dataclass(frozen=True)
+class PreparedMediaContentIndex:
+    message_text: str
+    message_embedding: list[float]
+    chunks: list[PreparedContentChunk]
 
 
 async def get_openai_client() -> AsyncOpenAI:
@@ -30,6 +44,50 @@ async def generate_embeddings(texts: list[str]) -> list[list[float]]:
         dimensions=settings.embedding_dimensions,
     )
     return [item.embedding for item in response.data]
+
+
+async def prepare_media_content_index(
+    *,
+    caption: str | None,
+    summary: str,
+    content_text: str | None,
+) -> PreparedMediaContentIndex:
+    """Build a complete media index or fail before mutating database state."""
+    from app.services.media_content_service import chunk_text
+
+    message_text = "\n\n".join(
+        part.strip()
+        for part in (caption, summary)
+        if isinstance(part, str) and part.strip()
+    )
+    if not message_text:
+        raise RuntimeError("Media summary is required for indexing")
+
+    chunks = chunk_text(
+        content_text.strip() if content_text else "",
+        max_chars=settings.media_embedding_chunk_chars,
+        overlap_chars=settings.media_embedding_chunk_overlap_chars,
+    )
+    inputs = [message_text, *chunks]
+    embeddings: list[list[float]] = []
+    for start in range(0, len(inputs), settings.embedding_batch_size):
+        batch = inputs[start : start + settings.embedding_batch_size]
+        batch_embeddings = await generate_embeddings(batch)
+        if len(batch_embeddings) != len(batch):
+            raise RuntimeError(
+                "OpenAI returned "
+                f"{len(batch_embeddings)} embeddings; expected {len(batch)} embeddings"
+            )
+        embeddings.extend(batch_embeddings)
+
+    return PreparedMediaContentIndex(
+        message_text=message_text,
+        message_embedding=embeddings[0],
+        chunks=[
+            PreparedContentChunk(text=text, embedding=embedding)
+            for text, embedding in zip(chunks, embeddings[1:], strict=True)
+        ],
+    )
 
 
 async def embed_messages(db: AsyncSession, message_ids: list[UUID]) -> int:

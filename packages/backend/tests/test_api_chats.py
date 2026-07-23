@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from app.models.chat import ChatType, TelegramChat
-from app.models.message import TelegramMessage
+from app.models.message import MediaProcessingStatus, TelegramMessage
 from app.services.telegram_client import TelegramSessionUnauthorizedError
 
 
@@ -126,6 +126,81 @@ class TestGetChatMessages:
 
     async def test_messages_chat_not_found(self, auth_client):
         response = await auth_client.get(f"/api/v1/chats/{uuid4()}/messages")
+        assert response.status_code == 404
+
+
+class TestGetMessageContent:
+    async def test_returns_full_media_content(
+        self,
+        auth_client,
+        db_session,
+        test_user,
+    ):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=54321,
+            chat_type=ChatType.PRIVATE,
+            title="Media chat",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+        message = TelegramMessage(
+            chat_id=chat.id,
+            telegram_message_id=42,
+            text="Исходная подпись",
+            has_media=True,
+            media_type="video",
+            content_text="Полная расшифровка",
+            content_summary="Краткое резюме",
+            media_processing_status=MediaProcessingStatus.READY,
+            sender_id=1,
+            is_outgoing=False,
+            sent_at=datetime.now(UTC),
+        )
+        db_session.add(message)
+        await db_session.flush()
+
+        response = await auth_client.get(f"/api/v1/chats/{chat.id}/messages/42/content")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["text"] == "Исходная подпись"
+        assert payload["content_text"] == "Полная расшифровка"
+        assert payload["content_summary"] == "Краткое резюме"
+        assert payload["media_processing_status"] == "ready"
+
+    async def test_does_not_expose_another_users_content(
+        self,
+        auth_client,
+        db_session,
+    ):
+        other_chat = TelegramChat(
+            user_id=uuid4(),
+            telegram_chat_id=98765,
+            chat_type=ChatType.PRIVATE,
+            title="Private",
+        )
+        db_session.add(other_chat)
+        await db_session.flush()
+        message = TelegramMessage(
+            chat_id=other_chat.id,
+            telegram_message_id=7,
+            text=None,
+            has_media=True,
+            media_type="document",
+            content_text="Secret",
+            content_summary="Secret summary",
+            media_processing_status=MediaProcessingStatus.READY,
+            is_outgoing=False,
+            sent_at=datetime.now(UTC),
+        )
+        db_session.add(message)
+        await db_session.flush()
+
+        response = await auth_client.get(
+            f"/api/v1/chats/{other_chat.id}/messages/7/content"
+        )
+
         assert response.status_code == 404
 
 

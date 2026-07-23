@@ -129,6 +129,17 @@ class TelegramAIClient:
             params["before"] = before
         return await self._request("GET", f"/api/v1/chats/{chat_id}/messages", params=params)
 
+    async def get_message_content(
+        self,
+        chat_id: str,
+        telegram_message_id: int,
+    ) -> dict[str, Any]:
+        """Get the complete transcript/extracted text and summary for one message."""
+        return await self._request(
+            "GET",
+            f"/api/v1/chats/{chat_id}/messages/{telegram_message_id}/content",
+        )
+
     async def sync_chat(
         self,
         chat_id: str,

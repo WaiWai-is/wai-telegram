@@ -166,27 +166,74 @@ def _format_date(value: Any) -> str:
 
 
 def _format_media_label(msg: dict) -> str:
-    """Format a media label based on media_type, text, and transcribed_at."""
+    """Format a compact, searchable representation of a media message."""
     media_type = msg.get("media_type")
     text = msg.get("text")
-    transcribed_at = msg.get("transcribed_at")
+    summary = msg.get("content_summary")
+    preview = msg.get("content_preview")
+    status = msg.get("media_processing_status")
 
-    if media_type in ("voice", "video_note") and text and transcribed_at:
-        label = "Voice transcript" if media_type == "voice" else "Video note transcript"
-        return f"[{label}]: {text}"
+    if not media_type:
+        return text or "[Media]"
 
-    if media_type and text:
-        # Has both media and text (e.g. photo with caption)
-        return text
-
+    label = MEDIA_LABELS.get(media_type, "Media")
+    parts: list[str] = []
     if text:
-        return text
+        parts.append(text)
+    if summary:
+        parts.append(f"Summary: {summary}")
+    elif preview:
+        parts.append(f"Content: {preview}")
 
-    if media_type:
-        label = MEDIA_LABELS.get(media_type, "Media")
-        return f"[{label}]"
+    if status in {"pending", "queued"}:
+        state = "processing queued"
+    elif status == "processing":
+        state = "processing"
+    elif status == "failed":
+        state = f"processing failed: {msg.get('media_processing_error_code') or 'unknown error'}"
+    else:
+        state = None
 
-    return "[Media]"
+    prefix = f"[{label}{f' — {state}' if state else ''}]"
+    return f"{prefix} {' | '.join(parts)}" if parts else prefix
+
+
+def format_message_content(result: dict) -> list[TextContent]:
+    """Format a full media transcript/extraction returned by the backend."""
+    message_id = result.get("telegram_message_id", "unknown")
+    media_type = result.get("media_type")
+    label = MEDIA_LABELS.get(media_type, "Media")
+    status = result.get("media_processing_status") or "unknown"
+    lines = [f"{label} content (msg#{message_id})", f"Status: {status}"]
+
+    file_name = result.get("media_file_name")
+    if file_name:
+        lines.append(f"File: {file_name}")
+
+    caption = result.get("text")
+    if caption:
+        lines.extend(["", "Caption:", caption])
+
+    summary = result.get("content_summary")
+    if summary:
+        lines.extend(["", "Summary:", summary])
+
+    content = result.get("content_text")
+    if content:
+        section = (
+            "Full transcript:"
+            if media_type in {"voice", "audio", "video", "video_note"}
+            else "Extracted content:"
+        )
+        lines.extend(["", section, content])
+
+    if status == "failed":
+        error_code = result.get("media_processing_error_code") or "unknown"
+        lines.extend(["", f"Processing error: {error_code}"])
+    elif status in {"pending", "queued", "processing"}:
+        lines.extend(["", "The file is being processed in the background."])
+
+    return [TextContent(type="text", text="\n".join(lines))]
 
 
 async def _list_all_chats(api: TelegramAIClient) -> dict[str, Any]:
@@ -294,7 +341,17 @@ def _search_result_lexical_score(result: dict[str, Any], query: str) -> int:
         return 0
 
     query_tokens = _tokenize_search_text(query_norm)
-    text = _normalize_search_text(result.get("text"))
+    text = _normalize_search_text(
+        " ".join(
+            value
+            for value in (
+                result.get("text"),
+                result.get("content_summary"),
+                result.get("content_preview"),
+            )
+            if isinstance(value, str)
+        )
+    )
     sender = _normalize_search_text(result.get("sender_name"))
     chat_title = _normalize_search_text(result.get("chat_title"))
     username = _normalize_search_text(result.get("chat_username")).removeprefix("@")
@@ -403,7 +460,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="search_messages",
             description=(
-                "Semantic search across all synced messages using vector embeddings. "
+                "Semantic search across synced message text, media summaries, full "
+                "transcripts, and extracted document content using vector embeddings. "
                 "Finds messages by meaning, not just keywords. Only searches already-synced data — "
                 "if results seem incomplete, sync the relevant chat first. "
                 "If you're trying to find a person/chat by name or username, use search_chats first."
@@ -516,6 +574,28 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_message_content",
+            description=(
+                "Get the complete background-processed content for one media message: "
+                "its original caption, summary, and full transcript or extracted document text. "
+                "Use chat_id and the numeric msg# shown by search_messages or get_chat_messages."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chat_id": {
+                        "type": "string",
+                        "description": "The chat ID containing the media message",
+                    },
+                    "telegram_message_id": {
+                        "type": "integer",
+                        "description": "The numeric Telegram message ID shown as msg#",
+                    },
+                },
+                "required": ["chat_id", "telegram_message_id"],
+            },
+        ),
+        Tool(
             name="get_daily_digest",
             description=(
                 "Get an AI-generated daily digest summarizing Telegram activity for a specific date. "
@@ -539,7 +619,8 @@ async def list_tools() -> list[Tool]:
                 "(recommended). Returns a job_id — poll get_sync_status every 10-15 seconds until completed. "
                 "The progress will show messages fetched out of total (e.g., '362 of 1,500 messages'). "
                 "After completion, use get_chat_messages to read the synced messages. "
-                "Typical speed: ~200 messages/second for text, slower for chats with voice messages (transcription)."
+                "File transcription, extraction, image analysis, and summaries continue "
+                "independently in the background after messages are saved."
             ),
             inputSchema={
                 "type": "object",
@@ -742,6 +823,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
             )
             return format_chat_messages(result)
 
+        elif name == "get_message_content":
+            chat_id = _require_str(args, "chat_id")
+            telegram_message_id = args.get("telegram_message_id")
+            if not isinstance(telegram_message_id, int):
+                raise ValueError('"telegram_message_id" must be an integer')
+            result = await api.get_message_content(chat_id, telegram_message_id)
+            return format_message_content(result)
+
         elif name == "get_daily_digest":
             digest_date = _optional_iso_date(args, "date")
             result = await api.get_daily_digest(digest_date)
@@ -831,6 +920,8 @@ def format_search_results(result: dict) -> list[TextContent]:
     for r in result.get("results", []):
         sender = r.get("sender_name") or ("You" if r.get("is_outgoing") else "Unknown")
         text = _format_media_label(r)
+        if r.get("content_summary") and r.get("content_preview"):
+            text += f" | Matching content: {r['content_preview']}"
         similarity = r.get("similarity", 0) * 100
         sent_at = _format_date(r.get("sent_at"))
         chat_title = r.get("chat_title") or "Unknown"

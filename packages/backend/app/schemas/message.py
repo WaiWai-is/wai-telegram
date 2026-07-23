@@ -10,6 +10,14 @@ class MessageResponse(BaseModel):
     text: str | None
     has_media: bool
     media_type: str | None
+    media_file_name: str | None = None
+    media_mime_type: str | None = None
+    media_file_size: int | None = None
+    media_duration_seconds: int | None = None
+    content_summary: str | None = None
+    content_preview: str | None = None
+    media_processing_status: str | None = None
+    media_processing_error_code: str | None = None
     sender_id: int | None
     sender_name: str | None
     is_outgoing: bool
@@ -19,6 +27,26 @@ class MessageResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MessageContentResponse(BaseModel):
+    id: UUID
+    telegram_message_id: int
+    text: str | None
+    media_type: str | None
+    media_file_name: str | None
+    media_mime_type: str | None
+    media_file_size: int | None
+    media_duration_seconds: int | None
+    content_text: str | None
+    content_summary: str | None
+    media_processing_status: str | None
+    media_processing_error_code: str | None
+    media_processing_error: str | None
+    transcribed_at: datetime | None
+    media_processed_at: datetime | None
+    content_model: str | None
+    summary_model: str | None
 
 
 class MessageListResponse(BaseModel):

@@ -42,7 +42,18 @@ if [ -z "$BACKUP_DIR" ] || [ ! -d "$BACKUP_DIR" ]; then
 fi
 
 echo "Stopping services..."
-systemctl stop wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse || true
+systemctl stop wai-backend wai-celery wai-celery-beat wai-media wai-frontend wai-listener wai-mcp-sse || true
+
+echo "Downgrading database to the backup release head..."
+BACKUP_HEAD=$(
+    cd "$BACKUP_DIR/packages/backend"
+    "$DEPLOY_DIR/.venv/bin/alembic" heads | awk 'NR == 1 {print $1}'
+)
+if [ -z "$BACKUP_HEAD" ]; then
+    echo "ERROR: Could not determine backup Alembic head"
+    exit 1
+fi
+su - wai -c "cd '$DEPLOY_DIR/packages/backend' && set -a && source '$DEPLOY_DIR/.env.production' && set +a && '$DEPLOY_DIR/.venv/bin/alembic' downgrade '$BACKUP_HEAD'"
 
 echo "Restoring from backup: $BACKUP_DIR"
 # Preserve .env.production (not in backup)
@@ -62,6 +73,12 @@ echo "Reinstalling systemd services from backup..."
 cp "$DEPLOY_DIR/systemd/wai-backend.service" /etc/systemd/system/
 cp "$DEPLOY_DIR/systemd/wai-celery.service" /etc/systemd/system/
 cp "$DEPLOY_DIR/systemd/wai-celery-beat.service" /etc/systemd/system/
+if [ -f "$DEPLOY_DIR/systemd/wai-media.service" ]; then
+    cp "$DEPLOY_DIR/systemd/wai-media.service" /etc/systemd/system/
+else
+    systemctl disable wai-media 2>/dev/null || true
+    rm -f /etc/systemd/system/wai-media.service
+fi
 cp "$DEPLOY_DIR/systemd/wai-frontend.service" /etc/systemd/system/
 cp "$DEPLOY_DIR/systemd/wai-listener.service" /etc/systemd/system/
 cp "$DEPLOY_DIR/systemd/wai-mcp-sse.service" /etc/systemd/system/
@@ -71,6 +88,9 @@ echo "Restarting services..."
 systemctl start wai-backend
 sleep 3
 systemctl start wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
+if [ -f /etc/systemd/system/wai-media.service ]; then
+    systemctl enable --now wai-media
+fi
 
 # Restore nginx config
 cp "$DEPLOY_DIR/nginx/telegram-ai.conf" /etc/nginx/sites-available/

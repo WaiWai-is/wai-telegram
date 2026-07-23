@@ -83,6 +83,12 @@ def _rows_to_response(rows: list, query: str) -> SearchResponse:
             similarity=row.similarity,
             has_media=row.has_media,
             media_type=row.media_type,
+            content_summary=getattr(row, "content_summary", None),
+            content_preview=getattr(row, "content_preview", None),
+            media_processing_status=getattr(row, "media_processing_status", None),
+            media_file_name=getattr(row, "media_file_name", None),
+            media_mime_type=getattr(row, "media_mime_type", None),
+            media_file_size=getattr(row, "media_file_size", None),
             transcribed_at=row.transcribed_at,
         )
         for row in rows
@@ -145,10 +151,15 @@ async def _keyword_search(
         return _empty_response(request.query)
 
     where_clauses, params = _base_where_clauses(user_id, request)
-    where_clauses.append("m.text IS NOT NULL")
+    where_clauses.append(
+        "(m.text IS NOT NULL OR m.content_summary IS NOT NULL "
+        "OR m.content_text IS NOT NULL)"
+    )
 
     searchable_text = (
-        "concat_ws(' ', coalesce(m.text, ''), coalesce(m.sender_name, ''), "
+        "concat_ws(' ', coalesce(m.text, ''), "
+        "coalesce(m.content_summary, ''), coalesce(m.content_text, ''), "
+        "coalesce(m.sender_name, ''), "
         "coalesce(c.title, ''), coalesce(c.username, ''))"
     )
     match_clauses = [f"{searchable_text} ILIKE :query_pattern"]
@@ -185,6 +196,12 @@ async def _keyword_search(
             {score_sql} as similarity,
             m.has_media,
             m.media_type,
+            m.content_summary,
+            left(m.content_text, 1200) as content_preview,
+            m.media_processing_status,
+            m.media_file_name,
+            m.media_mime_type,
+            m.media_file_size,
             m.transcribed_at
         FROM telegram_messages m
         JOIN telegram_chats c ON m.chat_id = c.id
@@ -256,15 +273,55 @@ async def semantic_search(
     # Build query dynamically to avoid asyncpg AmbiguousParameterError
     # when optional filters are None.
     where_clauses, params = _base_where_clauses(user_id, request)
-    where_clauses.append("m.embedding IS NOT NULL")
-
     # Format embedding as pgvector string literal for parameterized query
     embedding_literal = "[" + ",".join(str(x) for x in query_embedding) + "]"
     params["embedding"] = embedding_literal
+    params["candidate_limit"] = request.limit * 5
 
     where_sql = " AND ".join(where_clauses)
 
     sql = text(f"""
+        WITH message_candidates AS (
+            SELECT
+                m.id as message_id,
+                1 - (
+                    m.embedding <=> cast(:embedding as vector({dimensions}))
+                ) as similarity,
+                NULL::text as matched_content
+            FROM telegram_messages m
+            JOIN telegram_chats c ON m.chat_id = c.id
+            WHERE {where_sql}
+              AND m.embedding IS NOT NULL
+            ORDER BY m.embedding <=> cast(:embedding as vector({dimensions}))
+            LIMIT :candidate_limit
+        ),
+        chunk_candidates AS (
+            SELECT
+                m.id as message_id,
+                1 - (
+                    mc.embedding <=> cast(:embedding as vector({dimensions}))
+                ) as similarity,
+                left(mc.text, 1200) as matched_content
+            FROM message_content_chunks mc
+            JOIN telegram_messages m ON mc.message_id = m.id
+            JOIN telegram_chats c ON m.chat_id = c.id
+            WHERE {where_sql}
+              AND mc.embedding IS NOT NULL
+            ORDER BY mc.embedding <=> cast(:embedding as vector({dimensions}))
+            LIMIT :candidate_limit
+        ),
+        best_matches AS (
+            SELECT DISTINCT ON (message_id)
+                message_id,
+                similarity,
+                matched_content
+            FROM (
+                SELECT * FROM message_candidates
+                UNION ALL
+                SELECT * FROM chunk_candidates
+            ) candidates
+            ORDER BY message_id, similarity DESC
+        )
         SELECT
             m.id,
             m.chat_id,
@@ -277,13 +334,22 @@ async def semantic_search(
             m.sender_name,
             m.is_outgoing,
             m.sent_at,
-            1 - (m.embedding <=> cast(:embedding as vector({dimensions}))) as similarity,
+            best_matches.similarity,
             m.has_media,
             m.media_type,
+            m.content_summary,
+            coalesce(
+                best_matches.matched_content,
+                left(m.content_text, 1200)
+            ) as content_preview,
+            m.media_processing_status,
+            m.media_file_name,
+            m.media_mime_type,
+            m.media_file_size,
             m.transcribed_at
-        FROM telegram_messages m
+        FROM best_matches
+        JOIN telegram_messages m ON best_matches.message_id = m.id
         JOIN telegram_chats c ON m.chat_id = c.id
-        WHERE {where_sql}
         ORDER BY similarity DESC, m.sent_at DESC, m.telegram_message_id DESC
         LIMIT :limit
     """)

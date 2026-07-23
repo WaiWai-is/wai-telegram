@@ -12,8 +12,6 @@ from telethon.tl.types import (
     Channel,
     Chat,
     Message,
-    MessageMediaDocument,
-    MessageMediaPhoto,
 )
 from telethon.tl.types import (
     User as TelegramUser,
@@ -21,9 +19,10 @@ from telethon.tl.types import (
 
 from app.core.config import get_settings
 from app.models.chat import ChatType, TelegramChat
-from app.models.message import TelegramMessage
+from app.models.message import MediaProcessingStatus, TelegramMessage
 from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
+from app.services.media_content_service import get_media_info
 from app.services.messaging_service import _resolve_chat_entity
 from app.services.rate_limiter import record_request
 from app.services.telegram_client import (
@@ -32,10 +31,6 @@ from app.services.telegram_client import (
     get_client,
     invalidate_client_authorization,
     is_session_authorization_error,
-)
-from app.services.transcription_service import (
-    TRANSCRIBABLE_MEDIA_TYPES,
-    download_and_transcribe,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,27 +73,44 @@ def _get_sender_name(message: Message) -> str | None:
 
 def _get_media_type(message: Message) -> str | None:
     """Get media type from message."""
-    if not message.media:
-        return None
-    if isinstance(message.media, MessageMediaPhoto):
-        return "photo"
-    if isinstance(message.media, MessageMediaDocument):
-        doc = message.media.document
-        if doc:
-            for attr in doc.attributes:
-                if hasattr(attr, "voice") and attr.voice:
-                    return "voice"
-                if hasattr(attr, "round_message") and attr.round_message:
-                    return "video_note"
-                if hasattr(attr, "file_name"):
-                    return "document"
-            mime = getattr(doc, "mime_type", "")
-            if mime.startswith("video/"):
-                return "video"
-            if mime.startswith("audio/"):
-                return "audio"
-        return "document"
-    return "other"
+    info = get_media_info(message)
+    return info.media_type if info else None
+
+
+def _media_values(message: Message) -> dict:
+    info = get_media_info(message)
+    if info is None:
+        return {
+            "has_media": bool(message.media),
+            "media_type": None,
+            "media_processing_status": None,
+        }
+    processable = info.media_type != "other"
+    return {
+        "has_media": True,
+        "media_type": info.media_type,
+        "media_file_name": info.file_name,
+        "media_mime_type": info.mime_type,
+        "media_file_size": info.file_size,
+        "media_duration_seconds": info.duration_seconds,
+        "media_processing_status": (
+            MediaProcessingStatus.PENDING if processable else None
+        ),
+    }
+
+
+async def _insert_message_batch(
+    db: AsyncSession,
+    values: list[dict],
+) -> list[UUID]:
+    stmt = (
+        pg_insert(TelegramMessage)
+        .values(values)
+        .on_conflict_do_nothing(constraint="uq_telegram_messages_chat_msg")
+        .returning(TelegramMessage.id)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [row.id for row in rows]
 
 
 async def _jittered_sleep(base: float, jitter: float) -> None:
@@ -225,32 +237,11 @@ async def sync_messages(
 
     messages_seen = 0
 
-    # Pre-load telegram_message_ids that already have transcription in this chat.
-    # This avoids expensive re-download + re-transcribe for already-transcribed msgs.
-    already_transcribed: set[int] = set()
-    _rows = (
-        (
-            await db.execute(
-                select(TelegramMessage.telegram_message_id).where(
-                    TelegramMessage.chat_id == chat_id,
-                    TelegramMessage.transcribed_at.isnot(None),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    already_transcribed = set(_rows)
-
     # Always fetch newest-first with the requested limit.
     # When limit is None ("Sync All"): Telethon fetches entire chat history.
     # When limit is N ("Sync Latest N"): Telethon fetches the N newest messages.
-    # Deduplication is handled by the DB constraint + on_conflict_do_update:
-    #   - Truly new messages are inserted normally.
-    #   - Existing messages are updated ONLY when the incoming row carries a
-    #     transcription and the stored row does not (backfills voice/video_note
-    #     transcriptions added after the initial sync).
-    #   - All other duplicates are silently skipped (WHERE prevents a no-op UPDATE).
+    # Deduplication is handled by the DB constraint. Every newly discovered media
+    # message is persisted as pending and processed independently in the media queue.
     iter_kwargs = {"limit": limit, "wait_time": 0.5}
     total_reported = False
 
@@ -273,40 +264,18 @@ async def sync_messages(
             if not message.text and not message.media:
                 continue
 
-            media_type = _get_media_type(message)
+            media_values = _media_values(message)
             msg_values = {
                 "chat_id": chat_id,
                 "telegram_message_id": message.id,
                 "text": message.text,
-                "has_media": bool(message.media),
-                "media_type": media_type,
                 "sender_id": message.sender_id,
                 "sender_name": _get_sender_name(message),
                 "is_outgoing": message.out,
                 "sent_at": message.date,
                 "transcribed_at": None,
+                **media_values,
             }
-
-            # Transcribe voice/video_note messages (skip if already transcribed in DB)
-            if (
-                media_type in TRANSCRIBABLE_MEDIA_TYPES
-                and message.id not in already_transcribed
-            ):
-                try:
-                    transcript = await download_and_transcribe(client, message)
-                    if transcript:
-                        msg_values["text"] = transcript
-                        msg_values["transcribed_at"] = datetime.now(UTC)
-                        already_transcribed.add(message.id)
-                except Exception as e:
-                    if is_session_authorization_error(e):
-                        raise
-                    logger.warning(
-                        f"Transcription failed for message {message.id}: {e}"
-                    )
-                # Keep heartbeat alive during voice-heavy batches
-                if on_progress:
-                    on_progress(messages_seen, None)
 
             batch_values.append(msg_values)
             messages_synced += 1
@@ -315,22 +284,12 @@ async def sync_messages(
             if not last_id or message.id > last_id:
                 last_id = message.id
 
-            # Batch upsert: insert new messages, backfill transcriptions on conflict
+            # Persist metadata only. Expensive content processing runs in background.
             if len(batch_values) >= settings.sync_batch_size:
-                stmt = pg_insert(TelegramMessage).values(batch_values)
-                stmt = stmt.on_conflict_do_update(
-                    constraint="uq_telegram_messages_chat_msg",
-                    set_={
-                        "text": stmt.excluded.text,
-                        "transcribed_at": stmt.excluded.transcribed_at,
-                    },
-                    where=(
-                        stmt.excluded.transcribed_at.isnot(None)
-                        & TelegramMessage.transcribed_at.is_(None)
-                    ),
-                ).returning(TelegramMessage.id)
-                result = await db.execute(stmt)
-                inserted_ids = [row[0] for row in result.fetchall()]
+                inserted_ids = await _insert_message_batch(
+                    db,
+                    batch_values,
+                )
                 inserted_message_ids.extend(inserted_ids)
                 skipped = len(batch_values) - len(inserted_ids)
                 messages_synced -= skipped
@@ -356,20 +315,10 @@ async def sync_messages(
 
         # Insert remaining batch
         if batch_values:
-            stmt = pg_insert(TelegramMessage).values(batch_values)
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_telegram_messages_chat_msg",
-                set_={
-                    "text": stmt.excluded.text,
-                    "transcribed_at": stmt.excluded.transcribed_at,
-                },
-                where=(
-                    stmt.excluded.transcribed_at.isnot(None)
-                    & TelegramMessage.transcribed_at.is_(None)
-                ),
-            ).returning(TelegramMessage.id)
-            result = await db.execute(stmt)
-            inserted_ids = [row[0] for row in result.fetchall()]
+            inserted_ids = await _insert_message_batch(
+                db,
+                batch_values,
+            )
             inserted_message_ids.extend(inserted_ids)
             skipped = len(batch_values) - len(inserted_ids)
             messages_synced -= skipped

@@ -28,7 +28,25 @@ fi
 
 log "Starting deployment to ${SERVER}..."
 
-# Step 1: Sync code to server
+# Step 1: Back up the currently running release before rsync can overwrite it.
+log "Creating remote backup..."
+ssh "${SERVER}" << 'BACKUP_SCRIPT'
+set -e
+BACKUP_ROOT="/opt/wai-telegram-backups"
+if [ -d /opt/wai-telegram/packages ]; then
+    mkdir -p "${BACKUP_ROOT}"
+    TS=$(date +%Y%m%d%H%M%S)
+    TMP_BACKUP="${BACKUP_ROOT}/${TS}.tmp"
+    FINAL_BACKUP="${BACKUP_ROOT}/${TS}"
+    cp -a /opt/wai-telegram "${TMP_BACKUP}"
+    mv "${TMP_BACKUP}" "${FINAL_BACKUP}"
+    ln -sfn "${FINAL_BACKUP}" /opt/wai-telegram-backup
+    echo "Backup created at ${FINAL_BACKUP}"
+    ls -dt /opt/wai-telegram-backups/*/ 2>/dev/null | tail -n +6 | xargs rm -rf
+fi
+BACKUP_SCRIPT
+
+# Step 2: Sync code to server
 log "Syncing code to server..."
 rsync -avz --exclude '.git' \
     --exclude 'node_modules' \
@@ -42,14 +60,13 @@ rsync -avz --exclude '.git' \
     --exclude '.env' \
     ./ "${SERVER}:${DEPLOY_DIR}/"
 
-# Step 2: Run remote setup commands
+# Step 3: Run remote setup commands
 log "Running server setup..."
 ssh "${SERVER}" << 'REMOTE_SCRIPT'
 set -e
 
 cd /opt/wai-telegram
 export PATH="$HOME/.local/bin:$PATH"
-BACKUP_ROOT="/opt/wai-telegram-backups"
 
 # Install system dependencies if not present
 if ! command -v docker &> /dev/null; then
@@ -74,25 +91,17 @@ if ! command -v nginx &> /dev/null; then
     apt install -y nginx certbot python3-certbot-nginx
 fi
 
+if ! command -v ffmpeg &> /dev/null; then
+    echo "Installing ffmpeg for video transcription..."
+    apt-get update
+    apt-get install -y ffmpeg
+fi
+
 # Create wai service user if not present
 if ! id wai &>/dev/null; then
     echo "Creating wai service user..."
     useradd --system --home-dir /home/wai --create-home --shell /bin/bash wai
     su - wai -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
-fi
-
-# Backup current deployment (versioned and atomic)
-if [ -d /opt/wai-telegram/packages ]; then
-    mkdir -p "${BACKUP_ROOT}"
-    TS=$(date +%Y%m%d%H%M%S)
-    TMP_BACKUP="${BACKUP_ROOT}/${TS}.tmp"
-    FINAL_BACKUP="${BACKUP_ROOT}/${TS}"
-    cp -a /opt/wai-telegram "${TMP_BACKUP}"
-    mv "${TMP_BACKUP}" "${FINAL_BACKUP}"
-    ln -sfn "${FINAL_BACKUP}" /opt/wai-telegram-backup
-    echo "Backup created at ${FINAL_BACKUP}"
-    # Keep only the 5 most recent backups
-    ls -dt /opt/wai-telegram-backups/*/ 2>/dev/null | tail -n +6 | xargs rm -rf
 fi
 
 # Fix ownership
@@ -101,6 +110,17 @@ chown -R wai:wai /opt/wai-telegram
 # Start PostgreSQL and Redis
 echo "Starting database services..."
 set -a && source .env.production && set +a
+for required_var in \
+    OPENAI_API_KEY \
+    DEEPGRAM_API_KEY \
+    NEXT_SERVER_ACTIONS_ENCRYPTION_KEY \
+    NEXT_PUBLIC_API_URL
+do
+    if [ -z "${!required_var:-}" ]; then
+        echo "Required production variable is missing: ${required_var}"
+        exit 1
+    fi
+done
 docker compose -f docker-compose.prod.yml up -d
 
 # Wait for PostgreSQL to be ready
@@ -124,6 +144,7 @@ echo "Installing systemd services..."
 cp systemd/wai-backend.service /etc/systemd/system/
 cp systemd/wai-celery.service /etc/systemd/system/
 cp systemd/wai-celery-beat.service /etc/systemd/system/
+cp systemd/wai-media.service /etc/systemd/system/
 cp systemd/wai-frontend.service /etc/systemd/system/
 cp systemd/wai-listener.service /etc/systemd/system/
 cp systemd/wai-mcp-sse.service /etc/systemd/system/
@@ -132,10 +153,10 @@ systemctl daemon-reload
 
 # Start services
 echo "Starting services..."
-systemctl enable wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
+systemctl enable wai-backend wai-celery wai-celery-beat wai-media wai-frontend wai-listener wai-mcp-sse
 systemctl restart wai-backend
 sleep 5
-systemctl restart wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
+systemctl restart wai-celery wai-celery-beat wai-media wai-frontend wai-listener wai-mcp-sse
 
 # Setup Nginx
 echo "Configuring Nginx..."
@@ -150,7 +171,8 @@ fi
 
 # Service and endpoint verification
 echo "Verifying service health..."
-systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-frontend wai-listener wai-mcp-sse
+systemctl is-active --quiet wai-backend wai-celery wai-celery-beat wai-media wai-frontend wai-listener wai-mcp-sse
+su - wai -c 'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app inspect ping --timeout=10' | grep -q pong
 curl -sf --max-time 10 http://127.0.0.1:8000/health/live > /dev/null
 curl -sf --max-time 10 http://127.0.0.1:8000/health/ready > /dev/null
 curl -sf --max-time 10 https://telegram.waiwai.is/health/ready > /dev/null

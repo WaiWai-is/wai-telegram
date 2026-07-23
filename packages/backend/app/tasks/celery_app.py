@@ -20,7 +20,12 @@ celery_app = Celery(
     "wai_telegram",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.sync_tasks", "app.tasks.digest_tasks", "app.tasks.agent_tasks"],
+    include=[
+        "app.tasks.sync_tasks",
+        "app.tasks.digest_tasks",
+        "app.tasks.agent_tasks",
+        "app.tasks.media_tasks",
+    ],
 )
 
 celery_app.conf.update(
@@ -33,6 +38,9 @@ celery_app.conf.update(
     task_time_limit=3600,  # 1 hour max
     worker_prefetch_multiplier=1,
     task_acks_late=True,
+    task_routes={
+        "app.tasks.media_tasks.process_message_media": {"queue": "media"},
+    },
 )
 
 
@@ -105,5 +113,9 @@ celery_app.conf.beat_schedule = {
     "run-due-agents": {
         "task": "app.tasks.agent_tasks.run_due_agents",
         "schedule": 60,  # Every minute
+    },
+    "dispatch-pending-media": {
+        "task": "app.tasks.media_tasks.dispatch_pending_media",
+        "schedule": 15,  # Keep a small durable queue full without flooding Redis.
     },
 }

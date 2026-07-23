@@ -128,6 +128,56 @@ class TestSemanticSearch:
         )
         assert result.results[0].chat_type == "private"
 
+    async def test_semantic_search_includes_media_summary_and_content_chunks(
+        self, test_user
+    ):
+        from app.schemas.search import SearchRequest
+        from app.services.search_service import semantic_search
+
+        row = SimpleNamespace(
+            id=uuid4(),
+            chat_id=uuid4(),
+            chat_title="Test Chat",
+            chat_type="PRIVATE",
+            chat_telegram_id=123,
+            chat_username=None,
+            telegram_message_id=7,
+            text="caption",
+            content_preview="full transcript preview",
+            content_summary="meeting summary",
+            media_processing_status="ready",
+            media_file_name="meeting.mp4",
+            media_mime_type="video/mp4",
+            media_file_size=123,
+            sender_name="John",
+            is_outgoing=False,
+            sent_at="2026-03-10T12:00:00Z",
+            similarity=0.9,
+            has_media=True,
+            media_type="video",
+            transcribed_at="2026-03-10T12:01:00Z",
+        )
+        mock_result = SimpleNamespace(fetchall=lambda: [row])
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with patch(
+            "app.services.search_service.generate_query_embedding",
+            new_callable=AsyncMock,
+            return_value=[0.1, 0.2, 0.3],
+        ):
+            result = await semantic_search(
+                mock_db, test_user.id, SearchRequest(query="meeting")
+            )
+
+        sql_text = str(mock_db.execute.call_args.args[0])
+        assert "message_content_chunks" in sql_text
+        assert "left(mc.text, 1200) as matched_content" in sql_text
+        assert "content_summary" in sql_text
+        assert result.results[0].content_preview == "full transcript preview"
+        assert result.results[0].content_summary == "meeting summary"
+        assert result.results[0].media_processing_status == "ready"
+
     async def test_keyword_search_sql_omits_explicit_escape_clause(self, test_user):
         from app.schemas.search import SearchRequest
         from app.services.search_service import _keyword_search

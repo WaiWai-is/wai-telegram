@@ -17,11 +17,38 @@ class TestToolList:
             "search_chats",
             "list_chats",
             "get_chat_messages",
+            "get_message_content",
             "sync_chat",
             "get_sync_status",
             "get_daily_digest",
         }
         assert expected_tools.issubset(tool_names)
+
+    @pytest.mark.asyncio
+    async def test_get_message_content_returns_summary_and_full_transcript(self):
+        mock_api = AsyncMock()
+        mock_api.get_message_content.return_value = {
+            "telegram_message_id": 42,
+            "text": "Исходная подпись",
+            "media_type": "video",
+            "media_file_name": "meeting.mp4",
+            "media_processing_status": "ready",
+            "content_summary": "Обсудили сроки и ответственных.",
+            "content_text": "Полная транскрипция встречи без сокращений.",
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "get_message_content",
+                {"chat_id": "chat-1", "telegram_message_id": 42},
+            )
+
+        text = result[0].text
+        assert "Обсудили сроки и ответственных." in text
+        assert "Полная транскрипция встречи без сокращений." in text
+        assert "Исходная подпись" in text
+        mock_api.get_message_content.assert_awaited_once_with("chat-1", 42)
+        mock_api.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_each_tool_has_description(self):
