@@ -48,7 +48,7 @@ BACKUP_SCRIPT
 
 # Step 2: Sync code to server
 log "Syncing code to server..."
-rsync -avz --exclude '.git' \
+rsync -avz --delete --exclude '.git' \
     --exclude 'node_modules' \
     --exclude '.venv' \
     --exclude '__pycache__' \
@@ -126,6 +126,9 @@ docker compose -f docker-compose.prod.yml up -d
 # Wait for PostgreSQL to be ready
 echo "Waiting for PostgreSQL..."
 sleep 10
+
+# Stop processes that hold database connections before dependency and schema changes.
+systemctl stop wai-backend wai-celery wai-celery-beat wai-media wai-listener wai-mcp-sse || true
 
 # Run database migrations
 echo "Running database migrations..."
