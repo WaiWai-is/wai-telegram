@@ -2,7 +2,7 @@
 
 import re
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -196,56 +196,42 @@ def _valid_presentation_html(slide_count: int = 5) -> str:
 
 
 class TestBuildPresentationIntegration:
-    """Test build_presentation with mocked Claude API and deploy."""
+    """Test build_presentation with mocked Luna generation and deploy."""
 
     @pytest.mark.asyncio
     async def test_build_success(self):
         mock_html = _valid_presentation_html(5)
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=mock_html)]
-
         mock_deploy = AsyncMock(
             return_value={"success": True, "url": "https://slides-test.pages.dev"}
         )
 
         with (
             patch(
-                "app.services.agent.presentation_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch(
-                "app.services.agent.presentation_builder.get_settings"
-            ) as mock_settings,
+                "app.services.agent.presentation_builder.generate_text",
+                new_callable=AsyncMock,
+                return_value=mock_html,
+            ) as generate,
             patch(
                 "app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy
             ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
-
             result = await build_presentation("AI Overview")
 
         assert result.slug.startswith("slides-")
         assert result.slide_count == 5
         assert result.success is True
         assert result.url == "https://slides-test.pages.dev"
+        assert generate.await_args.kwargs["quality"] is True
 
     @pytest.mark.asyncio
     async def test_build_api_failure(self):
         with (
             patch(
-                "app.services.agent.presentation_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch(
-                "app.services.agent.presentation_builder.get_settings"
-            ) as mock_settings,
+                "app.services.agent.presentation_builder.generate_text",
+                new_callable=AsyncMock,
+                side_effect=Exception("API down"),
+            ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
-            mock_cls.return_value = mock_client
-
             result = await build_presentation("Test topic")
 
         assert result.success is False
@@ -254,22 +240,13 @@ class TestBuildPresentationIntegration:
 
     @pytest.mark.asyncio
     async def test_build_invalid_html(self):
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="Sorry, I can't generate that.")]
-
         with (
             patch(
-                "app.services.agent.presentation_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch(
-                "app.services.agent.presentation_builder.get_settings"
-            ) as mock_settings,
+                "app.services.agent.presentation_builder.generate_text",
+                new_callable=AsyncMock,
+                return_value="Sorry, I can't generate that.",
+            ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
-
             result = await build_presentation("Bad request")
 
         assert result.success is False
@@ -278,29 +255,20 @@ class TestBuildPresentationIntegration:
     @pytest.mark.asyncio
     async def test_build_deploy_failure(self):
         mock_html = _valid_presentation_html(4)
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=mock_html)]
-
         mock_deploy = AsyncMock(
             return_value={"success": False, "error": "Credentials missing"}
         )
 
         with (
             patch(
-                "app.services.agent.presentation_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch(
-                "app.services.agent.presentation_builder.get_settings"
-            ) as mock_settings,
+                "app.services.agent.presentation_builder.generate_text",
+                new_callable=AsyncMock,
+                return_value=mock_html,
+            ),
             patch(
                 "app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy
             ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
-
             result = await build_presentation("Test")
 
         assert result.success is False
@@ -310,22 +278,13 @@ class TestBuildPresentationIntegration:
     async def test_build_too_few_slides_fails_validation(self):
         """HTML with < 3 sections should fail presentation validation."""
         mock_html = _valid_presentation_html(2)
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=mock_html)]
-
         with (
             patch(
-                "app.services.agent.presentation_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch(
-                "app.services.agent.presentation_builder.get_settings"
-            ) as mock_settings,
+                "app.services.agent.presentation_builder.generate_text",
+                new_callable=AsyncMock,
+                return_value=mock_html,
+            ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
-
             result = await build_presentation("Minimal deck")
 
         assert result.success is False

@@ -12,19 +12,19 @@ Flow:
 6. Result sent back to Telegram
 """
 
+import json
 import logging
 from dataclasses import dataclass, field
 from uuid import UUID
 
-import anthropic
-
-from app.core.config import get_settings
 from app.services.agent.router import Intent, classify_intent, get_model_for_intent
 from app.services.agent.soul import build_soul_prompt
+from app.services.generation_service import (
+    EmptyGenerationError,
+    create_generation_response,
+)
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
-
 MAX_TURNS = 10  # Max tool-calling turns per interaction
 
 
@@ -60,7 +60,8 @@ class AgentResult:
     tool_calls: int = 0
 
 
-# Tool definitions for Claude's tool_use
+# Provider-neutral function definitions. They are converted to Responses API tools
+# at the model boundary.
 TOOLS = [
     {
         "name": "search_messages",
@@ -171,6 +172,18 @@ TOOLS = [
         },
     },
 ]
+
+
+def _responses_tools() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool["input_schema"],
+        }
+        for tool in TOOLS
+    ]
 
 
 async def execute_tool(tool_name: str, tool_input: dict, context: AgentContext) -> str:
@@ -363,59 +376,51 @@ async def run_agent(context: AgentContext, message: str) -> AgentResult:
 
     messages.append({"role": "user", "content": user_content})
 
-    # 4. Agent loop with tool calling
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    # 4. Responses API agent loop with function calling
+    input_items: list = messages
     total_input_tokens = 0
     total_output_tokens = 0
     tool_call_count = 0
 
-    for turn in range(MAX_TURNS):
-        response = await client.messages.create(
-            model=model,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=messages,
-            tools=TOOLS,
+    for _turn in range(MAX_TURNS):
+        response = await create_generation_response(
+            input_items,
+            max_output_tokens=4096,
+            instructions=system_prompt,
+            tools=_responses_tools(),
         )
 
-        total_input_tokens += response.usage.input_tokens
-        total_output_tokens += response.usage.output_tokens
+        if response.usage is not None:
+            total_input_tokens += response.usage.input_tokens
+            total_output_tokens += response.usage.output_tokens
 
-        # Check if the agent wants to use a tool
-        if response.stop_reason == "tool_use":
-            # Find tool use blocks
-            assistant_content = response.content
-            messages.append({"role": "assistant", "content": assistant_content})
-
-            tool_results = []
-            for block in assistant_content:
-                if block.type == "tool_use":
-                    tool_call_count += 1
-                    try:
-                        result = await execute_tool(block.name, block.input, context)
-                    except Exception as e:
-                        logger.error(f"Tool {block.name} failed: {e}")
-                        result = f"Error executing {block.name}: {e}"
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result,
-                        }
-                    )
-
-            messages.append({"role": "user", "content": tool_results})
+        function_calls = [
+            item for item in response.output if item.type == "function_call"
+        ]
+        if function_calls:
+            input_items.extend(response.output)
+            for call in function_calls:
+                tool_call_count += 1
+                tool_input = json.loads(call.arguments)
+                if not isinstance(tool_input, dict):
+                    raise ValueError(f"Tool arguments must be an object: {call.name}")
+                try:
+                    result = await execute_tool(call.name, tool_input, context)
+                except Exception as exc:
+                    logger.error("Tool %s failed: %s", call.name, exc)
+                    result = f"Error executing {call.name}: {exc}"
+                input_items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call.call_id,
+                        "output": result,
+                    }
+                )
             continue
 
-        # Agent finished — extract text response
-        text_parts = []
-        for block in response.content:
-            if hasattr(block, "text"):
-                text_parts.append(block.text)
-
-        final_response = (
-            "\n".join(text_parts) if text_parts else "I processed your request."
-        )
+        final_response = response.output_text.strip()
+        if not final_response:
+            raise EmptyGenerationError("Agent response contained no text")
 
         increment("agent_tokens_input", total_input_tokens)
         increment("agent_tokens_output", total_output_tokens)
@@ -429,12 +434,4 @@ async def run_agent(context: AgentContext, message: str) -> AgentResult:
             tool_calls=tool_call_count,
         )
 
-    # Max turns exceeded
-    return AgentResult(
-        response="I've been working on this but reached my turn limit. Here's what I found so far.",
-        intent=intent,
-        model_used=model,
-        input_tokens=total_input_tokens,
-        output_tokens=total_output_tokens,
-        tool_calls=tool_call_count,
-    )
+    raise RuntimeError(f"Agent exceeded the {MAX_TURNS}-turn tool-call limit")

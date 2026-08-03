@@ -1,6 +1,6 @@
 """Presentation Builder — generate reveal.js presentations from text descriptions.
 
-Same pattern as site_builder: Claude generates HTML → deploy to Cloudflare Pages.
+Same pattern as site_builder: the shared model generates HTML, then Cloudflare deploys it.
 Uses reveal.js CDN for a professional slide deck in a single HTML file.
 """
 
@@ -10,10 +10,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
-import anthropic
-
-from app.core.config import get_settings
 from app.services.agent.site_builder import generate_slug
+from app.services.generation_service import generate_text
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +136,6 @@ async def build_presentation(
     description: str, name: str | None = None
 ) -> PresentationResult:
     """Generate and deploy a reveal.js presentation."""
-    settings = get_settings()
-
     slug = generate_slug(name or description[:30])
     slug = f"slides-{slug}"
 
@@ -147,20 +143,11 @@ async def build_presentation(
     slug = f"{slug}-{uuid4().hex[:4]}"
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=16384,
-            messages=[
-                {
-                    "role": "user",
-                    "content": PRESENTATION_PROMPT.format(
-                        description=description[:3000]
-                    ),
-                }
-            ],
+        html = await generate_text(
+            PRESENTATION_PROMPT.format(description=description[:3000]),
+            max_output_tokens=16384,
+            quality=True,
         )
-        html = response.content[0].text.strip()
 
         # Strip markdown code blocks
         if html.startswith("```"):

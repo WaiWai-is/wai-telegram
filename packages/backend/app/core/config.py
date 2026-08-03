@@ -40,15 +40,18 @@ class Settings(BaseSettings):
     telegram_api_hash: str = Field(default="")
     telegram_bot_token: str = Field(default="")
 
-    # OpenAI (embeddings)
+    # OpenAI generation, vision, and embeddings
     openai_api_key: str = Field(default="")
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
     embedding_batch_size: int = 100
-
-    # Anthropic (digests)
-    anthropic_api_key: str = Field(default="")
-    digest_model: str = "claude-sonnet-4-6"
+    generation_model: str = "gpt-5.6-luna"
+    fast_generation_reasoning_effort: Literal[
+        "none", "low", "medium", "high", "xhigh", "max"
+    ] = "none"
+    quality_generation_reasoning_effort: Literal[
+        "none", "low", "medium", "high", "xhigh", "max"
+    ] = "low"
 
     # Sentry (error tracking)
     sentry_dsn: str = Field(default="")

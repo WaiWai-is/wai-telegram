@@ -839,23 +839,18 @@ async def _process_update(update: dict) -> None:
 
         await send_typing_action(chat_id)
 
-        # Use Claude to answer with web search context
-        import anthropic
-
-        settings = get_settings()
         try:
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            response = await client.messages.create(
-                model="claude-haiku-4-5",
-                max_tokens=1000,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Search the web and answer: {query}\n\nProvide a concise, informative answer. Include sources if possible.",
-                    }
-                ],
+            from app.services.generation_service import create_generation_response
+
+            response = await create_generation_response(
+                f"Search the web and answer: {query}\n\n"
+                "Provide a concise, informative answer with sources.",
+                max_output_tokens=1000,
+                tools=[{"type": "web_search"}],
             )
-            answer = response.content[0].text.strip()
+            answer = response.output_text.strip()
+            if not answer:
+                raise RuntimeError("Web search returned no answer")
             await send_telegram_message(chat_id, f"🌐 *Web:* {query}\n\n{answer}")
         except Exception as e:
             logger.error(f"Web search failed: {e}")
@@ -901,35 +896,24 @@ async def _process_update(update: dict) -> None:
 
         await send_typing_action(chat_id)
 
-        import anthropic
-
         try:
-            settings = get_settings()
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            from app.services.generation_service import generate_text
+
             lang = _detect_language(content)
             lang_instruction = (
                 "Respond in Russian."
                 if lang == "ru"
                 else "Respond in the same language as the text."
             )
-            response = await client.messages.create(
-                model="claude-haiku-4-5",
-                max_tokens=800,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Summarize this text concisely. {lang_instruction}\n\n"
-                            f"Format:\n"
-                            f"📝 *Summary* (2-3 sentences)\n"
-                            f"🔑 *Key Points* (bullet list)\n"
-                            f"📋 *Action Items* (if any)\n\n"
-                            f"Text:\n{content[:4000]}"
-                        ),
-                    }
-                ],
+            summary = await generate_text(
+                f"Summarize this text concisely. {lang_instruction}\n\n"
+                "Format:\n"
+                "📝 *Summary* (2-3 sentences)\n"
+                "🔑 *Key Points* (bullet list)\n"
+                "📋 *Action Items* (if any)\n\n"
+                f"Text:\n{content[:4000]}",
+                max_output_tokens=800,
             )
-            summary = response.content[0].text.strip()
             await send_telegram_message(chat_id, summary)
         except Exception as e:
             logger.error(f"Summarize failed: {e}")
@@ -1053,7 +1037,7 @@ async def _process_update(update: dict) -> None:
                 )
             return
 
-    # Show "typing..." while Claude thinks (critical for UX)
+    # Show "typing..." while the model works (critical for UX)
     from app.services.agent.typing import send_typing_action
 
     await send_typing_action(chat_id)

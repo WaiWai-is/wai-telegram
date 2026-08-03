@@ -19,7 +19,6 @@ dependencies = [
     "celery[redis]>=5.4.0",
     "redis>=5.2.0",
     "openai==2.47.0",
-    "anthropic>=0.40.0",
     "pgvector>=0.3.0",
     "python-multipart>=0.0.18",
     "httpx>=0.28.0",

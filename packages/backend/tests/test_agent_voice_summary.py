@@ -1,5 +1,7 @@
 """Tests for Voice Summary — the #1 wow moment."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from app.services.agent.voice_summary import (
@@ -9,6 +11,15 @@ from app.services.agent.voice_summary import (
 
 
 class TestSummarizeVoiceBasic:
+    @pytest.fixture(autouse=True)
+    def _generation(self):
+        with patch(
+            "app.services.agent.voice_summary.generate_text",
+            new_callable=AsyncMock,
+            return_value="📝 *Summary*\nConcise voice summary.",
+        ) as generation:
+            yield generation
+
     @pytest.mark.asyncio
     async def test_empty_transcript(self):
         result = await summarize_voice("")
@@ -71,6 +82,12 @@ class TestSummarizeVoiceBasic:
             "Alex will handle the backend, Sarah takes frontend."
         )
         assert "Transcript" in result
+
+    @pytest.mark.asyncio
+    async def test_long_transcript_uses_fast_luna_profile(self, _generation):
+        await summarize_voice("This is a sufficiently long transcript. " * 10)
+        assert _generation.await_args.kwargs["max_output_tokens"] == 500
+        assert "quality" not in _generation.await_args.kwargs
 
 
 class TestDurationText:

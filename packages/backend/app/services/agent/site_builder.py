@@ -4,7 +4,7 @@ User sends: "Сделай лендинг для кафе Рассвет. Мен�
 Wai generates HTML → saves to /var/www/sites/{slug}/ → accessible at {slug}.wai.computer
 
 Architecture:
-- Claude generates complete HTML/CSS/JS (single page, no build step)
+- The shared model generates complete HTML/CSS/JS (single page, no build step)
 - Saved to filesystem (nginx serves static files)
 - Wildcard nginx config routes *.wai.computer to the right directory
 - Each site gets a unique slug (auto-generated from name)
@@ -17,9 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-import anthropic
-
 from app.core.config import get_settings
+from app.services.generation_service import generate_text
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +54,7 @@ SITE_EDIT_PROMPT = (
 THEMES: dict[str, dict] = {
     "default": {
         "name": "default",
-        "description": "Let Claude pick the best color scheme based on the content.",
+        "description": "Let the model pick the best color scheme based on the content.",
         "prompt": "",
         "keywords_en": [],
         "keywords_ru": [],
@@ -266,7 +265,7 @@ def resolve_theme(description: str) -> tuple[str, str]:
 def get_theme_prompt(theme_key: str) -> str:
     """Get the prompt injection text for a theme.
 
-    Returns empty string for "default" theme (let Claude decide).
+    Returns empty string for "default" theme (let the model decide).
     """
     theme = THEMES.get(theme_key)
     if not theme or theme_key == "default":
@@ -548,13 +547,11 @@ async def build_site(
     Args:
         description: User's site description.
         name: Optional name for slug generation.
-        theme: Theme key from THEMES dict (default lets Claude choose).
+        theme: Theme key from THEMES dict (default lets the model choose).
 
-    Strategy: Agent SDK (Claude Code-like) → Direct API call fallback.
+    Strategy: generate through the reviewed Responses API boundary.
     Deploy: Cloudflare Pages → local filesystem fallback.
     """
-    settings = get_settings()
-
     # Generate slug
     slug = generate_slug(name or description[:30])
 
@@ -569,25 +566,18 @@ async def build_site(
     if theme_instructions:
         theme_instructions = "\n" + theme_instructions + "\n"
 
-    # Generate HTML via Claude
+    # Generate HTML via the shared quality profile.
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=16384,
-            messages=[
-                {
-                    "role": "user",
-                    "content": SITE_GENERATION_PROMPT.format(
-                        description=description[:3000],
-                        theme_instructions=theme_instructions,
-                    ),
-                }
-            ],
+        html = await generate_text(
+            SITE_GENERATION_PROMPT.format(
+                description=description[:3000],
+                theme_instructions=theme_instructions,
+            ),
+            max_output_tokens=16384,
+            quality=True,
         )
-        html = response.content[0].text.strip()
 
-        # Strip markdown code blocks (Claude often wraps in ```html ... ```)
+        # Strip markdown code blocks when the model wraps the HTML.
         if html.startswith("```"):
             # Remove opening ```html or ```
             html = re.sub(r"^```\w*\n?", "", html)
@@ -723,7 +713,7 @@ def get_deployed_sites(chat_id: int) -> list[dict]:
 async def edit_site(chat_id: int, instruction: str) -> SiteResult:
     """Edit the last generated site for a chat and redeploy it.
 
-    Fetches stored HTML, sends it to Claude with the edit instruction,
+    Fetches stored HTML, sends it to the model with the edit instruction,
     then redeploys to the same slug.
     """
     stored = get_stored_site(chat_id)
@@ -737,25 +727,12 @@ async def edit_site(chat_id: int, instruction: str) -> SiteResult:
         )
 
     slug, current_html = stored
-    settings = get_settings()
-
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=16384,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        SITE_EDIT_PROMPT.format(instruction=instruction)
-                        + "\n\n"
-                        + current_html
-                    ),
-                }
-            ],
+        html = await generate_text(
+            (SITE_EDIT_PROMPT.format(instruction=instruction) + "\n\n" + current_html),
+            max_output_tokens=16384,
+            quality=True,
         )
-        html = response.content[0].text.strip()
 
         # Strip markdown code blocks
         if html.startswith("```"):

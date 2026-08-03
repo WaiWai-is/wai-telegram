@@ -154,7 +154,7 @@ async def process_forwarded_message(
             "_Transcribing... (voice summary will follow)_"
         )
     elif content.content_type == "photo":
-        # Try to describe the photo with Claude Vision
+        # Describe the photo with the shared vision-capable model.
         photos = message.get("photo", [])
         if photos:
             from app.services.agent.media_processor import describe_photo

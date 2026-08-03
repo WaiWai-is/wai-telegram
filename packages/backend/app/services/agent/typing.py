@@ -1,7 +1,7 @@
-"""Typing indicator — show the bot is "thinking" while Claude processes.
+"""Typing indicator — show the bot is thinking during generation.
 
 Sends a "typing..." action to Telegram so the user sees the bot is working.
-Critical for UX: without it, 5-second Claude responses feel like the bot is dead.
+Critical for UX: without it, multi-second responses feel like the bot is dead.
 """
 
 import logging
@@ -18,7 +18,7 @@ async def send_typing_action(chat_id: int) -> None:
     """Send 'typing' action to Telegram chat.
 
     This shows "Wai is typing..." in the chat for ~5 seconds.
-    Should be called before any slow operation (Claude API, search, etc).
+    Should be called before any slow operation (generation, search, etc).
     """
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or get_settings().telegram_bot_token
     if not token:

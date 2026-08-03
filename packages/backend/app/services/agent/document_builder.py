@@ -1,6 +1,6 @@
 """Document Builder — generate professional print-ready documents from text descriptions.
 
-Same pattern as site_builder: Claude generates HTML → deploy to Cloudflare Pages.
+Same pattern as site_builder: the shared model generates HTML, then Cloudflare deploys it.
 Uses Google Fonts (Merriweather serif for body, Inter for headings) with print-optimized CSS.
 Document types: proposals, contracts, reports, letters, meeting summaries.
 """
@@ -11,10 +11,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
-import anthropic
-
 from app.core.config import get_settings
 from app.services.agent.site_builder import generate_slug
+from app.services.generation_service import generate_text
 
 logger = logging.getLogger(__name__)
 
@@ -212,8 +211,6 @@ class DocumentResult:
 
 async def build_document(description: str, name: str | None = None) -> DocumentResult:
     """Generate and deploy a professional document."""
-    settings = get_settings()
-
     slug = generate_slug(name or description[:30])
     slug = f"doc-{slug}"
 
@@ -224,21 +221,14 @@ async def build_document(description: str, name: str | None = None) -> DocumentR
     today = datetime.now(UTC).strftime("%d.%m.%Y")
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=16384,
-            messages=[
-                {
-                    "role": "user",
-                    "content": DOCUMENT_GENERATION_PROMPT.format(
-                        description=description[:3000],
-                        today=today,
-                    ),
-                }
-            ],
+        html = await generate_text(
+            DOCUMENT_GENERATION_PROMPT.format(
+                description=description[:3000],
+                today=today,
+            ),
+            max_output_tokens=16384,
+            quality=True,
         )
-        html = response.content[0].text.strip()
 
         # Strip markdown code blocks
         if html.startswith("```"):
@@ -354,26 +344,18 @@ async def edit_document(chat_id: int, instruction: str) -> DocumentResult:
         )
 
     slug, current_html = stored
-    settings = get_settings()
     doc_type = detect_doc_type(instruction)
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=16384,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        DOCUMENT_EDIT_PROMPT.format(instruction=instruction)
-                        + "\n\n"
-                        + current_html
-                    ),
-                }
-            ],
+        html = await generate_text(
+            (
+                DOCUMENT_EDIT_PROMPT.format(instruction=instruction)
+                + "\n\n"
+                + current_html
+            ),
+            max_output_tokens=16384,
+            quality=True,
         )
-        html = response.content[0].text.strip()
 
         # Strip markdown code blocks
         if html.startswith("```"):

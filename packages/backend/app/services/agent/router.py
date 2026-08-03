@@ -1,6 +1,6 @@
 """Intent Router — classifies user messages and routes to the right agent.
 
-Uses cheap model (Haiku) for instant classification. Routes to:
+Uses the shared generation model for ambiguous classification. Routes to:
 - search: find information in user's message history
 - voice_summary: summarize a forwarded voice message
 - digest: generate or fetch daily digest
@@ -13,9 +13,8 @@ Uses cheap model (Haiku) for instant classification. Routes to:
 import logging
 from enum import StrEnum
 
-import anthropic
-
 from app.core.config import get_settings
+from app.services.generation_service import generate_text
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -46,23 +45,12 @@ Intents:
 User message: {message}
 """
 
-# Model routing: cheap for classification, expensive for complex tasks
-# Model routing: use claude-haiku-4-5 for all intents
-# (Sonnet not available on current API key — switch when full key is available)
-MODEL_MAP: dict[Intent, str] = {
-    Intent.SEARCH: "claude-haiku-4-5",
-    Intent.VOICE_SUMMARY: "claude-haiku-4-5",
-    Intent.DIGEST: "claude-haiku-4-5",
-    Intent.ACTION: "claude-haiku-4-5",
-    Intent.BUILD: "claude-haiku-4-5",
-    Intent.EDIT: "claude-haiku-4-5",
-    Intent.COACH: "claude-haiku-4-5",
-    Intent.CHAT: "claude-haiku-4-5",
-}
+# All runtime generation is intentionally pinned to one reviewed model.
+MODEL_MAP: dict[Intent, str] = {intent: settings.generation_model for intent in Intent}
 
 
 async def classify_intent(message: str, has_voice: bool = False) -> Intent:
-    """Classify a user message into an intent using Haiku (fast + cheap)."""
+    """Classify a user message into an intent using the shared fast profile."""
     if has_voice:
         return Intent.VOICE_SUMMARY
 
@@ -184,31 +172,20 @@ async def classify_intent(message: str, has_voice: bool = False) -> Intent:
     if any(kw in lower for kw in commitment_keywords):
         return Intent.SEARCH  # Route to search with commitment context
 
-    # LLM classification for truly ambiguous messages
-    try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=20,
-            messages=[
-                {
-                    "role": "user",
-                    "content": CLASSIFICATION_PROMPT.format(message=message[:500]),
-                }
-            ],
+    # Model classification for truly ambiguous messages. Invalid provider output
+    # is surfaced instead of silently changing the route to chat.
+    intent_text = (
+        await generate_text(
+            CLASSIFICATION_PROMPT.format(message=message[:500]),
+            max_output_tokens=20,
         )
-        intent_text = response.content[0].text.strip().lower()
-
-        for intent in Intent:
-            if intent.value in intent_text:
-                return intent
-
-        return Intent.CHAT
-    except Exception as e:
-        logger.warning(f"Intent classification failed, defaulting to chat: {e}")
-        return Intent.CHAT
+    ).lower()
+    try:
+        return Intent(intent_text)
+    except ValueError as exc:
+        raise ValueError(f"Invalid intent classification: {intent_text!r}") from exc
 
 
 def get_model_for_intent(intent: Intent) -> str:
     """Get the appropriate model for the classified intent."""
-    return MODEL_MAP.get(intent, MODEL_MAP[Intent.CHAT])
+    return MODEL_MAP[intent]

@@ -1,5 +1,7 @@
 """Tests for the Intent Router — classifies user messages correctly."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from app.services.agent.router import Intent, classify_intent, get_model_for_intent
@@ -128,38 +130,31 @@ class TestNaturalLanguageClassification:
 class TestModelRouting:
     """Test model selection for each intent."""
 
-    def test_search_uses_haiku(self):
-        model = get_model_for_intent(Intent.SEARCH)
-        assert "haiku" in model
-
-    def test_voice_summary_uses_haiku(self):
-        model = get_model_for_intent(Intent.VOICE_SUMMARY)
-        assert "haiku" in model
-
-    def test_chat_uses_haiku(self):
-        model = get_model_for_intent(Intent.CHAT)
-        assert "haiku" in model
-
-    def test_digest_uses_haiku(self):
-        model = get_model_for_intent(Intent.DIGEST)
-        assert "haiku" in model
-
-    def test_action_uses_haiku(self):
-        model = get_model_for_intent(Intent.ACTION)
-        assert "haiku" in model
-
-    def test_build_uses_haiku(self):
-        model = get_model_for_intent(Intent.BUILD)
-        assert "haiku" in model
-
-    def test_coach_uses_haiku(self):
-        model = get_model_for_intent(Intent.COACH)
-        assert "haiku" in model
-
-    def test_all_intents_have_models(self):
+    def test_all_intents_use_luna(self):
         for intent in Intent:
-            model = get_model_for_intent(intent)
-            assert model, f"No model for intent {intent}"
+            assert get_model_for_intent(intent) == "gpt-5.6-luna"
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_message_uses_shared_generation_service(self):
+        with patch(
+            "app.services.agent.router.generate_text",
+            new_callable=AsyncMock,
+            return_value="chat",
+        ) as generate:
+            assert await classify_intent("Hello there") == Intent.CHAT
+        assert generate.await_args.kwargs["max_output_tokens"] == 20
+
+    @pytest.mark.asyncio
+    async def test_invalid_model_classification_is_surfaced(self):
+        with (
+            patch(
+                "app.services.agent.router.generate_text",
+                new_callable=AsyncMock,
+                return_value="unknown",
+            ),
+            pytest.raises(ValueError, match="Invalid intent"),
+        ):
+            await classify_intent("Hello there")
 
 
 class TestIntentEnum:

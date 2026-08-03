@@ -1,6 +1,6 @@
 """HTML Validator — verify generated content before deploying to users.
 
-Checks that Claude's output is a complete, renderable page.
+Checks that generated output is a complete, renderable page.
 Used by site_builder, presentation_builder, and table_builder.
 """
 

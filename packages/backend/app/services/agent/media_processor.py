@@ -1,7 +1,7 @@
 """Media Processor — extract content from photos and documents.
 
 When a user sends or forwards a photo or document:
-- Photos: described via Claude Vision (what's in the image)
+- Photos: described by the shared vision-capable generation model
 - Text documents: content extracted and indexed
 - PDFs: text extracted (basic, first pages)
 
@@ -15,68 +15,52 @@ import os
 import httpx
 
 from app.core.config import get_settings
+from app.services.generation_service import generate_text
 
 logger = logging.getLogger(__name__)
 
 
 async def describe_photo(file_id: str) -> str | None:
-    """Download a photo from Telegram and describe it with Claude Vision.
+    """Download a photo from Telegram and describe it with the shared model.
 
     Returns a text description of the image, or None on failure.
     """
-    try:
-        image_data = await _download_telegram_file(file_id)
-        if not image_data:
-            return None
-
-        # Use Claude Vision to describe the image
-        import anthropic
-
-        settings = get_settings()
-        if not settings.anthropic_api_key:
-            return None
-
-        # Detect actual image format from magic bytes
-        media_type = "image/jpeg"
-        if image_data[:8] == b"\x89PNG\r\n\x1a\n":
-            media_type = "image/png"
-        elif image_data[:4] == b"RIFF" and image_data[8:12] == b"WEBP":
-            media_type = "image/webp"
-        elif image_data[:3] == b"GIF":
-            media_type = "image/gif"
-
-        b64_image = base64.b64encode(image_data).decode("utf-8")
-
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=300,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": b64_image,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": "Describe this image concisely in 2-3 sentences. "
-                            "Focus on: text visible in the image, people, objects, "
-                            "and context. If there's text, transcribe it.",
-                        },
-                    ],
-                }
-            ],
-        )
-        return response.content[0].text.strip()
-    except Exception as e:
-        logger.warning(f"Photo description failed: {e}")
+    image_data = await _download_telegram_file(file_id)
+    if not image_data:
         return None
+
+    # Detect actual image format from magic bytes
+    media_type = "image/jpeg"
+    if image_data[:8] == b"\x89PNG\r\n\x1a\n":
+        media_type = "image/png"
+    elif image_data[:4] == b"RIFF" and image_data[8:12] == b"WEBP":
+        media_type = "image/webp"
+    elif image_data[:3] == b"GIF":
+        media_type = "image/gif"
+
+    b64_image = base64.b64encode(image_data).decode("utf-8")
+
+    return await generate_text(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:{media_type};base64,{b64_image}",
+                        "detail": "low",
+                    },
+                    {
+                        "type": "input_text",
+                        "text": "Describe this image concisely in 2-3 sentences. "
+                        "Focus on visible text, people, objects, and context. "
+                        "If there is text, transcribe it.",
+                    },
+                ],
+            }
+        ],
+        max_output_tokens=300,
+    )
 
 
 async def extract_document_text(

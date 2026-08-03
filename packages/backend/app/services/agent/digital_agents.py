@@ -1,7 +1,7 @@
 """Digital Agents service — create and manage autonomous AI agents.
 
 Users create agents from natural language descriptions.
-Claude parses the description into a structured agent config.
+The shared generation model parses the description into a structured config.
 Agents run on Celery Beat and send results to Telegram.
 """
 
@@ -10,13 +10,12 @@ import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
-import anthropic
 from croniter import croniter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.models.digital_agent import DigitalAgent
+from app.services.generation_service import generate_text
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +48,7 @@ async def create_agent_from_description(
     telegram_chat_id: int,
     description: str,
 ) -> DigitalAgent:
-    """Use Claude to parse a natural language description into a structured agent."""
-    settings = get_settings()
+    """Parse a natural language description into a structured agent."""
 
     # Check limit
     result = await db.execute(
@@ -63,20 +61,10 @@ async def create_agent_from_description(
     if active_count >= MAX_AGENTS_PER_USER:
         raise ValueError(f"Maximum {MAX_AGENTS_PER_USER} active agents allowed")
 
-    # Ask Claude to parse the description
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    response = await client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=500,
-        messages=[
-            {
-                "role": "user",
-                "content": CREATION_PROMPT.format(description=description),
-            }
-        ],
+    raw = await generate_text(
+        CREATION_PROMPT.format(description=description),
+        max_output_tokens=500,
     )
-
-    raw = response.content[0].text.strip()
     # Strip markdown if present
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]

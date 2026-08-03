@@ -12,14 +12,12 @@ This is the feature that makes people say "how did I live without this?"
 
 import logging
 
-import anthropic
-
-from app.core.config import get_settings
 from app.services.agent.commitments import (
     CommitmentDirection,
     detect_commitments,
 )
 from app.services.agent.entities import EntityType, extract_entities_fast
+from app.services.generation_service import generate_text
 
 logger = logging.getLogger(__name__)
 
@@ -66,27 +64,12 @@ async def summarize_voice(transcript: str, user_name: str | None = None) -> str:
     else:
         parts.append(f"🎤 *Transcript:*\n_{transcript}_")
 
-    # 3. AI Summary via Claude Haiku (cheap + fast)
-    settings = get_settings()
-    if settings.anthropic_api_key:
-        try:
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            response = await client.messages.create(
-                model="claude-haiku-4-5",
-                max_tokens=500,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": VOICE_SUMMARY_PROMPT.format(
-                            transcript=transcript[:2000]
-                        ),
-                    }
-                ],
-            )
-            summary = response.content[0].text.strip()
-            parts.append(f"\n{summary}")
-        except Exception as e:
-            logger.warning(f"Voice summary LLM failed: {e}")
+    # 3. AI summary via the shared fast generation profile.
+    summary = await generate_text(
+        VOICE_SUMMARY_PROMPT.format(transcript=transcript[:2000]),
+        max_output_tokens=500,
+    )
+    parts.append(f"\n{summary}")
 
     # 4. Entities (fast, no LLM)
     entities = extract_entities_fast(transcript)

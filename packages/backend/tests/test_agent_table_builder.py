@@ -2,7 +2,7 @@
 
 import re
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -216,54 +216,42 @@ agGrid.createGrid(document.getElementById('grid'), gridOptions);
 
 
 class TestBuildTableIntegration:
-    """Test build_table with mocked Claude API and deploy."""
+    """Test build_table with mocked Luna generation and deploy."""
 
     @pytest.mark.asyncio
     async def test_build_success(self):
         mock_html = _valid_table_html(rows=5, columns=2)
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=mock_html)]
-
         mock_deploy = AsyncMock(
             return_value={"success": True, "url": "https://table-test.pages.dev"}
         )
 
         with (
             patch(
-                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+                "app.services.agent.table_builder.generate_text",
+                new_callable=AsyncMock,
+                return_value=mock_html,
+            ) as generate,
             patch(
                 "app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy
             ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
-
             result = await build_table("Compare laptops")
 
         assert result.slug.startswith("table-")
         assert result.success is True
         assert result.columns == 2  # 2 headerName occurrences
         assert result.url == "https://table-test.pages.dev"
+        assert generate.await_args.kwargs["quality"] is True
 
     @pytest.mark.asyncio
     async def test_build_api_failure(self):
         with (
             patch(
-                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+                "app.services.agent.table_builder.generate_text",
+                new_callable=AsyncMock,
+                side_effect=Exception("Rate limited"),
+            ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(
-                side_effect=Exception("Rate limited")
-            )
-            mock_cls.return_value = mock_client
-
             result = await build_table("Test table")
 
         assert result.success is False
@@ -272,20 +260,13 @@ class TestBuildTableIntegration:
 
     @pytest.mark.asyncio
     async def test_build_invalid_html(self):
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="I cannot create that table.")]
-
         with (
             patch(
-                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+                "app.services.agent.table_builder.generate_text",
+                new_callable=AsyncMock,
+                return_value="I cannot create that table.",
+            ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
-
             result = await build_table("Bad request")
 
         assert result.success is False
@@ -294,27 +275,20 @@ class TestBuildTableIntegration:
     @pytest.mark.asyncio
     async def test_build_deploy_failure(self):
         mock_html = _valid_table_html(rows=3, columns=2)
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=mock_html)]
-
         mock_deploy = AsyncMock(
             return_value={"success": False, "error": "No credentials"}
         )
 
         with (
             patch(
-                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+                "app.services.agent.table_builder.generate_text",
+                new_callable=AsyncMock,
+                return_value=mock_html,
+            ),
             patch(
                 "app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy
             ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
-
             result = await build_table("Test")
 
         assert result.success is False
@@ -328,20 +302,13 @@ class TestBuildTableIntegration:
 <body><h1>No Grid Here</h1><p>Just some text without any table or grid component at all.</p>
 <p>This is filler to get past the 200 char minimum length requirement for the validator.</p>
 </body></html>"""
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=mock_html)]
-
         with (
             patch(
-                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+                "app.services.agent.table_builder.generate_text",
+                new_callable=AsyncMock,
+                return_value=mock_html,
+            ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = AsyncMock(return_value=mock_response)
-            mock_cls.return_value = mock_client
-
             result = await build_table("No grid")
 
         assert result.success is False
@@ -352,32 +319,24 @@ class TestBuildTableIntegration:
         """build_table truncates description to 3000 chars."""
         long_desc = "x" * 5000
         mock_html = _valid_table_html(rows=3, columns=2)
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=mock_html)]
-
         mock_deploy = AsyncMock(
             return_value={"success": True, "url": "https://test.pages.dev"}
         )
         captured_prompt = []
 
-        async def capture_create(**kwargs):
-            captured_prompt.append(kwargs["messages"][0]["content"])
-            return mock_response
+        async def capture_generate(prompt, **_kwargs):
+            captured_prompt.append(prompt)
+            return mock_html
 
         with (
             patch(
-                "app.services.agent.table_builder.anthropic.AsyncAnthropic"
-            ) as mock_cls,
-            patch("app.services.agent.table_builder.get_settings") as mock_settings,
+                "app.services.agent.table_builder.generate_text",
+                side_effect=capture_generate,
+            ),
             patch(
                 "app.services.agent.cloudflare_deploy.deploy_site_to_pages", mock_deploy
             ),
         ):
-            mock_settings.return_value.anthropic_api_key = "test-key"
-            mock_client = AsyncMock()
-            mock_client.messages.create = capture_create
-            mock_cls.return_value = mock_client
-
             await build_table(long_desc)
 
         # The description in the prompt should be truncated

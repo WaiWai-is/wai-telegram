@@ -4,6 +4,7 @@ The run_due_agents task checks every minute for agents whose next_run_at
 has passed, and dispatches execute_agent for each one.
 """
 
+import json
 import logging
 from datetime import UTC, datetime
 from uuid import UUID
@@ -11,20 +12,18 @@ from uuid import UUID
 from celery import shared_task
 
 from app.core.async_runner import run_async
-from app.core.config import get_settings
-
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 # Max tool-calling rounds per agent execution (prevents runaway costs)
 MAX_TOOL_ROUNDS = 2
 
-# Tool definition for Claude when agent has "search_web"
+# Responses API function tool available to scheduled agents.
 SEARCH_WEB_TOOL = {
+    "type": "function",
     "name": "search_web",
     "description": "Search the internet for current information. Use this to find news, facts, prices, events, or any real-time data.",
-    "input_schema": {
+    "parameters": {
         "type": "object",
         "properties": {
             "query": {
@@ -38,7 +37,7 @@ SEARCH_WEB_TOOL = {
 
 
 def _build_tools_for_agent(agent_tools: str) -> list[dict]:
-    """Build Claude tools list based on agent's configured tools."""
+    """Build Responses API tools based on the agent's configured tools."""
     tools = []
     tool_names = [t.strip() for t in agent_tools.split(",") if t.strip()]
     if "search_web" in tool_names:
@@ -47,7 +46,7 @@ def _build_tools_for_agent(agent_tools: str) -> list[dict]:
 
 
 async def _execute_tool_call(tool_name: str, tool_input: dict) -> str:
-    """Execute a tool call from Claude and return the result string."""
+    """Execute an agent tool call and return the result string."""
     if tool_name == "search_web":
         from app.services.agent.web_search import search_web
 
@@ -96,12 +95,11 @@ def execute_agent(self, agent_id: str):
 
 
 async def _execute_agent(agent_id: UUID) -> dict:
-    import anthropic
-
     from app.core.database import get_db_context
     from app.models.digital_agent import DigitalAgent
     from app.services.agent.digital_agents import compute_next_run
     from app.services.bot_service import send_telegram_message
+    from app.services.generation_service import create_generation_response
 
     async with get_db_context() as db:
         from sqlalchemy import select
@@ -117,56 +115,54 @@ async def _execute_agent(agent_id: UUID) -> dict:
             # Build tools based on agent config
             tools = _build_tools_for_agent(agent.tools or "")
 
-            # Call Claude with the agent's system prompt and tools
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            messages = [
+            input_items: list = [
                 {
                     "role": "user",
                     "content": f"Execute your task now. Current time: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}.",
                 }
             ]
 
-            create_kwargs: dict = {
-                "model": "claude-haiku-4-5",
-                "max_tokens": agent.max_tokens_per_run,
-                "system": agent.system_prompt,
-                "messages": messages,
-            }
-            if tools:
-                create_kwargs["tools"] = tools
-
             output = ""
             for _round in range(MAX_TOOL_ROUNDS + 1):
-                response = await client.messages.create(**create_kwargs)
-
-                # If no tool use, extract text and break
-                if response.stop_reason != "tool_use":
-                    text_parts = []
-                    for block in response.content:
-                        if hasattr(block, "text"):
-                            text_parts.append(block.text)
-                    output = "\n".join(text_parts).strip() if text_parts else ""
+                response = await create_generation_response(
+                    input_items,
+                    max_output_tokens=agent.max_tokens_per_run,
+                    instructions=agent.system_prompt,
+                    tools=tools,
+                )
+                function_calls = [
+                    item for item in response.output if item.type == "function_call"
+                ]
+                if not function_calls:
+                    output = response.output_text.strip()
+                    if not output:
+                        raise RuntimeError("Scheduled agent returned no text")
                     break
 
                 # Handle tool calls
-                messages.append({"role": "assistant", "content": response.content})
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        try:
-                            result = await _execute_tool_call(block.name, block.input)
-                        except Exception as e:
-                            logger.error(f"Agent tool {block.name} failed: {e}")
-                            result = f"Error: {e}"
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": result[:4000],
-                            }
+                input_items.extend(response.output)
+                for call in function_calls:
+                    tool_input = json.loads(call.arguments)
+                    if not isinstance(tool_input, dict):
+                        raise ValueError(
+                            f"Tool arguments must be an object: {call.name}"
                         )
-                messages.append({"role": "user", "content": tool_results})
-                create_kwargs["messages"] = messages
+                    try:
+                        result = await _execute_tool_call(call.name, tool_input)
+                    except Exception as exc:
+                        logger.error("Agent tool %s failed: %s", call.name, exc)
+                        result = f"Error: {exc}"
+                    input_items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": call.call_id,
+                            "output": result[:4000],
+                        }
+                    )
+            else:
+                raise RuntimeError(
+                    f"Scheduled agent exceeded {MAX_TOOL_ROUNDS} tool rounds"
+                )
 
             # Send result to user
             header = f"🤖 *{agent.name}*\n\n"

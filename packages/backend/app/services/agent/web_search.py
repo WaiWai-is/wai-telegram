@@ -1,6 +1,6 @@
 """Web search for digital agents via DuckDuckGo Instant Answers API.
 
-No API key required. Returns structured results for Claude to reason over.
+No API key required. Returns structured results for the agent to reason over.
 """
 
 import logging
@@ -17,7 +17,7 @@ async def search_web(query: str) -> str:
     """Search the web via DuckDuckGo and return formatted results.
 
     Uses the Instant Answers API (free, no key).
-    Returns a text summary suitable for injection into Claude context.
+    Returns a text summary suitable for injection into agent context.
     """
     async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT) as client:
         response = await client.get(

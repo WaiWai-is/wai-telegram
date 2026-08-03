@@ -103,17 +103,16 @@ async def test_edit_site_success():
             return_value=("cafe-sunrise", SAMPLE_HTML),
         ),
         patch("app.services.agent.site_builder.store_site") as mock_store_fn,
-        patch("app.services.agent.site_builder.anthropic.AsyncAnthropic") as mock_cls,
+        patch(
+            "app.services.agent.site_builder.generate_text",
+            new_callable=AsyncMock,
+            return_value=EDITED_HTML,
+        ),
         patch(
             "app.services.agent.cloudflare_deploy.deploy_site_to_pages",
             new_callable=AsyncMock,
         ) as mock_deploy,
     ):
-        mock_response = AsyncMock()
-        mock_response.content = [AsyncMock(text=EDITED_HTML)]
-        mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
-        mock_cls.return_value = mock_client
         mock_deploy.return_value = {
             "success": True,
             "url": "https://cafe-sunrise.wai.computer",
@@ -136,17 +135,16 @@ async def test_edit_site_deploy_failure():
             return_value=("cafe-sunrise", SAMPLE_HTML),
         ),
         patch("app.services.agent.site_builder.store_site"),
-        patch("app.services.agent.site_builder.anthropic.AsyncAnthropic") as mock_cls,
+        patch(
+            "app.services.agent.site_builder.generate_text",
+            new_callable=AsyncMock,
+            return_value=EDITED_HTML,
+        ),
         patch(
             "app.services.agent.cloudflare_deploy.deploy_site_to_pages",
             new_callable=AsyncMock,
         ) as mock_deploy,
     ):
-        mock_response = AsyncMock()
-        mock_response.content = [AsyncMock(text=EDITED_HTML)]
-        mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
-        mock_cls.return_value = mock_client
         mock_deploy.return_value = {
             "success": False,
             "error": "Cloudflare credentials not configured",
@@ -159,22 +157,18 @@ async def test_edit_site_deploy_failure():
 
 
 @pytest.mark.asyncio
-async def test_edit_site_invalid_html_from_claude():
+async def test_edit_site_invalid_html_from_model():
     with (
         patch(
             "app.services.agent.site_builder.get_stored_site",
             return_value=("cafe-sunrise", SAMPLE_HTML),
         ),
-        patch("app.services.agent.site_builder.anthropic.AsyncAnthropic") as mock_cls,
+        patch(
+            "app.services.agent.site_builder.generate_text",
+            new_callable=AsyncMock,
+            return_value="I can't generate HTML right now, sorry.",
+        ),
     ):
-        mock_response = AsyncMock()
-        mock_response.content = [
-            AsyncMock(text="I can't generate HTML right now, sorry.")
-        ]
-        mock_client = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
-        mock_cls.return_value = mock_client
-
         result = await edit_site(123, "make it darker")
 
     assert result.success is False

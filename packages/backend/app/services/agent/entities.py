@@ -1,9 +1,7 @@
 """Entity Extraction — auto-extract people, topics, decisions from messages.
 
 Inspired by wai-computer's entity system but lightweight for Telegram.
-Two modes:
-1. Fast pattern-based extraction (no LLM, instant)
-2. LLM-powered deep extraction (Claude Haiku, ~1s)
+Uses deterministic pattern-based extraction without a model call.
 
 Entity types: person, topic, decision, action_item, date, amount
 """
@@ -134,56 +132,6 @@ def extract_entities_fast(text: str) -> list[Entity]:
             unique.append(e)
 
     return unique
-
-
-async def extract_entities_llm(text: str) -> list[Entity]:
-    """LLM-powered entity extraction using Claude Haiku. More accurate but costs ~$0.001."""
-    import anthropic
-
-    from app.core.config import get_settings
-
-    settings = get_settings()
-
-    try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=500,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"""Extract entities from this message. Return one entity per line in format:
-TYPE|NAME|CONTEXT
-Types: person, topic, decision, action_item, amount, location
-Only include clearly mentioned entities. Be concise.
-
-Message: {text[:1000]}""",
-                }
-            ],
-        )
-
-        entities = []
-        for line in response.content[0].text.strip().split("\n"):
-            parts = line.split("|", 2)
-            if len(parts) >= 2:
-                entity_type = parts[0].strip().lower()
-                name = parts[1].strip()
-                context = parts[2].strip() if len(parts) > 2 else ""
-
-                if entity_type in {e.value for e in EntityType} and name:
-                    entities.append(
-                        Entity(
-                            type=EntityType(entity_type),
-                            name=name[:200],
-                            context=context[:200],
-                            confidence=0.9,
-                        )
-                    )
-
-        return entities
-    except Exception as e:
-        logger.warning(f"LLM entity extraction failed, falling back to fast: {e}")
-        return extract_entities_fast(text)
 
 
 def format_entities_for_display(entities: list[Entity]) -> str:
