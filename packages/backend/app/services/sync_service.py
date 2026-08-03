@@ -83,6 +83,10 @@ def _media_values(message: Message) -> dict:
         return {
             "has_media": bool(message.media),
             "media_type": None,
+            "media_file_name": None,
+            "media_mime_type": None,
+            "media_file_size": None,
+            "media_duration_seconds": None,
             "media_processing_status": None,
         }
     processable = info.media_type != "other"

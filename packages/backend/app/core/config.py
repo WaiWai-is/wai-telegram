@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     media_embedding_chunk_chars: int = 6_000
     media_embedding_chunk_overlap_chars: int = 600
     document_extraction_timeout_seconds: float = 180.0
+    media_download_timeout_seconds: float = Field(default=120.0, gt=0.0)
     media_dispatch_target_depth: int = 20
     media_queue_stale_minutes: int = 360
     media_processing_stale_minutes: int = 120

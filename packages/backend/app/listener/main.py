@@ -27,7 +27,6 @@ from app.models.sync_job import SyncJob, SyncStatus
 from app.services.embedding_service import embed_messages
 from app.services.media_content_service import get_media_info
 from app.services.sync_service import sync_messages
-from app.tasks.media_tasks import enqueue_media_processing
 from app.services.telegram_client import (
     TelegramSessionUnauthorizedError,
     get_client_session_id,
@@ -300,16 +299,6 @@ class TelegramListener:
                         select(func.count()).where(TelegramMessage.chat_id == chat.id)
                     )
                 ).scalar()
-
-            if inserted_id and media_info and media_info.media_type != "other":
-                try:
-                    enqueue_media_processing([inserted_id])
-                except Exception:
-                    logger.exception(
-                        "Immediate media dispatch failed for message %s; "
-                        "the durable recovery scan will retry dispatch",
-                        inserted_id,
-                    )
 
             # Best-effort caption/text embedding in a separate session. Media
             # processing replaces it atomically with summary + content chunks.

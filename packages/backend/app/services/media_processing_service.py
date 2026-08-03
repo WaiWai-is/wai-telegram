@@ -352,41 +352,47 @@ async def _download_telegram_media(
 ) -> tuple[Path, MediaInfo]:
     client = None
     try:
-        async with get_db_context() as db:
-            chat = (
-                await db.execute(
-                    select(TelegramChat).where(
-                        TelegramChat.id == job.chat_id,
-                        TelegramChat.user_id == job.user_id,
+        timeout_seconds = settings.media_download_timeout_seconds
+        async with asyncio.timeout(timeout_seconds):
+            async with get_db_context() as db:
+                chat = (
+                    await db.execute(
+                        select(TelegramChat).where(
+                            TelegramChat.id == job.chat_id,
+                            TelegramChat.user_id == job.user_id,
+                        )
                     )
-                )
-            ).scalar_one_or_none()
-            if chat is None:
-                raise MediaDownloadError("Chat is no longer available")
-            client = await get_client(job.user_id, db)
-            peer = await _resolve_chat_entity(client, db, chat)
+                ).scalar_one_or_none()
+                if chat is None:
+                    raise MediaDownloadError("Chat is no longer available")
+                client = await get_client(job.user_id, db)
+                peer = await _resolve_chat_entity(client, db, chat)
 
-        telegram_message = await client.get_messages(
-            peer,
-            ids=job.telegram_message_id,
-        )
-        info = get_media_info(telegram_message)
-        if info is None:
-            raise MediaDownloadError("Telegram message has no downloadable media")
+            telegram_message = await client.get_messages(
+                peer,
+                ids=job.telegram_message_id,
+            )
+            info = get_media_info(telegram_message)
+            if info is None:
+                raise MediaDownloadError("Telegram message has no downloadable media")
 
-        destination = directory / (
-            "source" + _safe_suffix(info.file_name or job.file_name, info.mime_type)
-        )
-        downloaded = await client.download_media(
-            telegram_message,
-            file=str(destination),
-        )
-        downloaded_path = Path(downloaded) if downloaded else destination
-        if not downloaded_path.is_file() or downloaded_path.stat().st_size == 0:
-            raise MediaDownloadError("Telegram media download returned no file")
-        if info.file_size is None:
-            info = replace(info, file_size=downloaded_path.stat().st_size)
-        return downloaded_path, info
+            destination = directory / (
+                "source" + _safe_suffix(info.file_name or job.file_name, info.mime_type)
+            )
+            downloaded = await client.download_media(
+                telegram_message,
+                file=str(destination),
+            )
+            downloaded_path = Path(downloaded) if downloaded else destination
+            if not downloaded_path.is_file() or downloaded_path.stat().st_size == 0:
+                raise MediaDownloadError("Telegram media download returned no file")
+            if info.file_size is None:
+                info = replace(info, file_size=downloaded_path.stat().st_size)
+            return downloaded_path, info
+    except TimeoutError as exc:
+        raise MediaDownloadError(
+            f"Telegram media download timed out after {timeout_seconds:g} seconds"
+        ) from exc
     except TelegramSessionUnauthorizedError:
         raise
     except MediaProcessingError:
