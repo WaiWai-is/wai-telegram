@@ -13,6 +13,7 @@ def test_ai_model_defaults_match_reviewed_production_policy():
     assert settings.fast_generation_reasoning_effort == "none"
     assert settings.quality_generation_reasoning_effort == "low"
     assert settings.media_summary_model == "gpt-5.6-luna"
+    assert settings.media_image_max_output_tokens == 1600
     assert settings.embedding_model == "text-embedding-3-small"
     assert settings.deepgram_model == "nova-3"
     assert settings.deepgram_language == "multi"

@@ -72,6 +72,9 @@ def init_worker_process_runtime(**_kwargs):
 def shutdown_worker_process_runtime(**_kwargs):
     try:
         start_async_runner()
+        from app.services.media_processing_service import disconnect_media_clients
+
+        run_async(disconnect_media_clients())
         run_async(dispose_engine())
     finally:
         stop_async_runner()

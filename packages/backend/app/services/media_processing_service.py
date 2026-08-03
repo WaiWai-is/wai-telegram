@@ -11,6 +11,7 @@ from uuid import UUID
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from telethon import TelegramClient
 
 from app.core.config import get_settings
 from app.core.database import get_db_context
@@ -47,6 +48,7 @@ from app.services.telegram_client import (
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+_media_clients: dict[UUID, TelegramClient] = {}
 
 
 class MediaDownloadError(MediaProcessingError):
@@ -59,6 +61,34 @@ class MediaConversionError(MediaProcessingError):
 
 class MediaIndexingError(MediaProcessingError):
     """Search embeddings could not be prepared completely."""
+
+
+async def _get_media_client(user_id: UUID, db: AsyncSession) -> TelegramClient:
+    """Reuse one Telethon client per user inside a persistent worker process."""
+    cached = _media_clients.get(user_id)
+    if cached is not None:
+        if cached.is_connected():
+            return cached
+        _media_clients.pop(user_id, None)
+        await cached.disconnect()
+
+    client = await get_client(user_id, db)
+    _media_clients[user_id] = client
+    return client
+
+
+async def _discard_media_client(user_id: UUID, expected_client: TelegramClient) -> None:
+    """Remove and close a client after a network or authorization failure."""
+    if _media_clients.get(user_id) is expected_client:
+        _media_clients.pop(user_id, None)
+    await expected_client.disconnect()
+
+
+async def disconnect_media_clients() -> None:
+    """Close all worker-local Telethon clients before process shutdown."""
+    clients = list(_media_clients.values())
+    _media_clients.clear()
+    await asyncio.gather(*(client.disconnect() for client in clients))
 
 
 @dataclass(frozen=True)
@@ -365,7 +395,7 @@ async def _download_telegram_media(
                 ).scalar_one_or_none()
                 if chat is None:
                     raise MediaDownloadError("Chat is no longer available")
-                client = await get_client(job.user_id, db)
+                client = await _get_media_client(job.user_id, db)
                 peer = await _resolve_chat_entity(client, db, chat)
 
             telegram_message = await client.get_messages(
@@ -390,20 +420,23 @@ async def _download_telegram_media(
                 info = replace(info, file_size=downloaded_path.stat().st_size)
             return downloaded_path, info
     except TimeoutError as exc:
+        if client is not None:
+            await _discard_media_client(job.user_id, client)
         raise MediaDownloadError(
             f"Telegram media download timed out after {timeout_seconds:g} seconds"
         ) from exc
     except TelegramSessionUnauthorizedError:
+        if client is not None:
+            await _discard_media_client(job.user_id, client)
         raise
     except MediaProcessingError:
         raise
     except Exception as exc:
+        if client is not None:
+            await _discard_media_client(job.user_id, client)
         raise MediaDownloadError(
             f"Telegram media download failed ({type(exc).__name__})"
         ) from exc
-    finally:
-        if client is not None:
-            await client.disconnect()
 
 
 def _error_details(error: Exception) -> tuple[str, str]:

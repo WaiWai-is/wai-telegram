@@ -219,6 +219,7 @@ class TestOpenAISummaries:
             ),
         ):
             mock_settings.media_summary_model = "gpt-5.6-luna"
+            mock_settings.media_image_max_output_tokens = 1600
             result = await analyze_image(image_path, "image/jpeg")
 
         assert result == parsed
@@ -228,6 +229,42 @@ class TestOpenAISummaries:
         assert image_input["type"] == "input_image"
         assert image_input["detail"] == "low"
         assert request["reasoning"] == {"effort": "none"}
+        assert request["max_output_tokens"] == 1600
+
+    async def test_invalid_structured_image_response_is_provider_error(self, tmp_path):
+        from pydantic import ValidationError
+
+        from app.services.media_content_service import (
+            ImageAnalysis,
+            MediaProviderResponseError,
+            analyze_image,
+        )
+
+        image_path = tmp_path / "photo.jpg"
+        image_path.write_bytes(b"jpeg")
+        try:
+            ImageAnalysis.model_validate_json('{"visible_text":"truncated')
+        except ValidationError as validation_error:
+            error = validation_error
+
+        client = SimpleNamespace(
+            responses=SimpleNamespace(parse=AsyncMock(side_effect=error))
+        )
+        with (
+            patch("app.services.media_content_service.settings") as mock_settings,
+            patch(
+                "app.services.media_content_service.get_openai_client",
+                new_callable=AsyncMock,
+                return_value=client,
+            ),
+        ):
+            mock_settings.media_summary_model = "gpt-5.6-luna"
+            mock_settings.media_image_max_output_tokens = 1600
+            with pytest.raises(
+                MediaProviderResponseError,
+                match="invalid structured image",
+            ):
+                await analyze_image(image_path, "image/jpeg")
 
 
 class TestDocumentExtraction:

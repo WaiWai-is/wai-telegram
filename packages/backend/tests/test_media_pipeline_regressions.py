@@ -17,6 +17,8 @@ from app.services.media_processing_service import (
     ClaimedMediaMessage,
     MediaDownloadError,
     _download_telegram_media,
+    _get_media_client,
+    disconnect_media_clients,
 )
 from app.services.sync_service import _media_values
 
@@ -138,6 +140,30 @@ async def test_telegram_media_download_has_an_operation_timeout(tmp_path):
                 timeout=0.2,
             )
 
+    client.disconnect.assert_awaited_once()
+
+
+async def test_media_worker_reuses_client_and_disconnects_it_on_shutdown():
+    await disconnect_media_clients()
+    user_id = uuid4()
+    db = AsyncMock()
+    client = MagicMock()
+    client.is_connected.return_value = True
+    client.disconnect = AsyncMock()
+
+    with patch(
+        "app.services.media_processing_service.get_client",
+        new_callable=AsyncMock,
+        return_value=client,
+    ) as create_client:
+        first = await _get_media_client(user_id, db)
+        second = await _get_media_client(user_id, db)
+
+    assert first is client
+    assert second is client
+    create_client.assert_awaited_once_with(user_id, db)
+
+    await disconnect_media_clients()
     client.disconnect.assert_awaited_once()
 
 

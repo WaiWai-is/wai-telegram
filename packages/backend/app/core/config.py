@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     # Background media processing
     media_summary_model: str = "gpt-5.6-luna"
     media_summary_max_output_tokens: int = 500
+    media_image_max_output_tokens: int = 1600
     media_summary_chunk_chars: int = 120_000
     media_embedding_chunk_chars: int = 6_000
     media_embedding_chunk_overlap_chars: int = 600
