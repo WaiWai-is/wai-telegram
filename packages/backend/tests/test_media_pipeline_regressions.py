@@ -2,6 +2,7 @@ import asyncio
 import inspect
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -9,6 +10,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from telethon.errors import FloodWaitError
 
 from app.listener.main import TelegramListener
 from app.models.message import TelegramMessage
@@ -165,6 +167,71 @@ async def test_media_worker_reuses_client_and_disconnects_it_on_shutdown():
 
     await disconnect_media_clients()
     client.disconnect.assert_awaited_once()
+
+
+async def test_flood_wait_does_not_discard_reusable_media_client(tmp_path):
+    await disconnect_media_clients()
+    user_id = uuid4()
+    job = ClaimedMediaMessage(
+        id=uuid4(),
+        user_id=user_id,
+        chat_id=uuid4(),
+        telegram_message_id=123,
+        caption=None,
+        media_type="photo",
+        file_name="photo.jpg",
+        mime_type="image/jpeg",
+        file_size=None,
+        duration_seconds=None,
+        existing_content_text=None,
+        transcribed_at=None,
+    )
+    db = AsyncMock()
+    db_result = MagicMock()
+    db_result.scalar_one_or_none.return_value = object()
+    db.execute.return_value = db_result
+
+    @asynccontextmanager
+    async def test_db_context():
+        yield db
+
+    client = MagicMock()
+    client.is_connected.return_value = True
+    client.disconnect = AsyncMock()
+    client.get_messages = AsyncMock(side_effect=FloodWaitError(None, capture=300))
+
+    with (
+        patch(
+            "app.services.media_processing_service.get_db_context",
+            side_effect=test_db_context,
+        ),
+        patch(
+            "app.services.media_processing_service.get_client",
+            new_callable=AsyncMock,
+            return_value=client,
+        ),
+        patch(
+            "app.services.media_processing_service._resolve_chat_entity",
+            new_callable=AsyncMock,
+            return_value=object(),
+        ),
+    ):
+        with pytest.raises(MediaDownloadError, match="FloodWaitError"):
+            await _download_telegram_media(job, tmp_path)
+
+        assert await _get_media_client(user_id, db) is client
+
+    client.disconnect.assert_not_awaited()
+    await disconnect_media_clients()
+
+
+def test_media_worker_uses_one_persistent_telegram_connection():
+    service = (
+        Path(__file__).parents[3].joinpath("systemd/wai-media.service").read_text()
+    )
+
+    assert "--concurrency=1" in service
+    assert "--max-tasks-per-child" not in service
 
 
 def test_realtime_listener_uses_the_bounded_priority_dispatcher():

@@ -12,6 +12,7 @@ from uuid import UUID
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
+from telethon.errors import FloodWaitError
 
 from app.core.config import get_settings
 from app.core.database import get_db_context
@@ -429,6 +430,13 @@ async def _download_telegram_media(
         if client is not None:
             await _discard_media_client(job.user_id, client)
         raise
+    except FloodWaitError as exc:
+        # A server-side throttle does not mean the persistent connection is
+        # broken. Disconnecting here churns exported media-DC senders and can
+        # amplify the flood wait for the remaining backlog.
+        raise MediaDownloadError(
+            f"Telegram media download failed (FloodWaitError: {exc.seconds}s)"
+        ) from exc
     except MediaProcessingError:
         raise
     except Exception as exc:
