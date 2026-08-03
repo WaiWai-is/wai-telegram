@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -129,3 +129,59 @@ async def test_dispatch_claims_uninitialized_historical_media(
 
     assert claimed == [message.id]
     assert message.media_processing_status == MediaProcessingStatus.QUEUED
+
+
+async def test_dispatch_prioritizes_live_pending_media_over_historical_backfill(
+    db_session,
+    test_user,
+):
+    chat = TelegramChat(
+        user_id=test_user.id,
+        telegram_chat_id=323,
+        chat_type=ChatType.PRIVATE,
+        title="Live queue priority",
+    )
+    db_session.add(chat)
+    await db_session.flush()
+    now = datetime.now(UTC)
+    live_photo = TelegramMessage(
+        chat_id=chat.id,
+        telegram_message_id=656,
+        text=None,
+        has_media=True,
+        media_type="photo",
+        media_processing_status=MediaProcessingStatus.PENDING,
+        sent_at=now - timedelta(days=1),
+    )
+    historical_voice = TelegramMessage(
+        chat_id=chat.id,
+        telegram_message_id=657,
+        text="Старая расшифровка.",
+        has_media=True,
+        media_type="voice",
+        media_processing_status=None,
+        transcribed_at=now,
+        sent_at=now,
+    )
+    db_session.add_all([live_photo, historical_voice])
+    await db_session.flush()
+
+    @asynccontextmanager
+    async def test_db_context():
+        yield db_session
+
+    with (
+        patch(
+            "app.tasks.media_tasks.get_db_context",
+            side_effect=test_db_context,
+        ),
+        patch("app.tasks.media_tasks.settings") as task_settings,
+    ):
+        task_settings.media_queue_stale_minutes = 360
+        task_settings.media_processing_stale_minutes = 120
+        task_settings.media_dispatch_target_depth = 1
+        claimed = await _find_pending_and_reap_stale()
+
+    assert claimed == [live_photo.id]
+    assert live_photo.media_processing_status == MediaProcessingStatus.QUEUED
+    assert historical_voice.media_processing_status is None

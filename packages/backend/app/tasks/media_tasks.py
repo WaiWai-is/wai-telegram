@@ -92,7 +92,15 @@ async def _find_pending_and_reap_stale() -> list[UUID]:
         if dispatch_limit == 0:
             return []
 
-        priority = case(
+        live_priority = case(
+            (
+                TelegramMessage.media_processing_status
+                == MediaProcessingStatus.PENDING,
+                0,
+            ),
+            else_=1,
+        )
+        media_priority = case(
             (TelegramMessage.transcribed_at.isnot(None), 0),
             (
                 TelegramMessage.media_type.in_(
@@ -119,7 +127,8 @@ async def _find_pending_and_reap_stale() -> list[UUID]:
             select(TelegramMessage.id)
             .where(dispatchable)
             .order_by(
-                priority.asc(),
+                live_priority.asc(),
+                media_priority.asc(),
                 TelegramMessage.sent_at.desc(),
                 TelegramMessage.id.desc(),
             )
