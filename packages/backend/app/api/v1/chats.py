@@ -1,12 +1,17 @@
+import os
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import CurrentUser
+from app.core.auth import CurrentUser, OptionalUser
 from app.core.cursor import (
     CursorError,
     decode_cursor,
@@ -24,6 +29,13 @@ from app.schemas.message import (
     MessageResponse,
 )
 from app.services.sync_service import sync_chats
+from app.services.media_access import decode_media_download_token
+from app.services.media_download_service import download_telegram_media
+from app.services.telegram_links import (
+    build_media_download_url,
+    build_telegram_message_url,
+    media_download_filename,
+)
 
 router = APIRouter()
 _CURSOR_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -85,6 +97,24 @@ def _encode_message_cursor(message: TelegramMessage) -> str:
             "id": str(message.id),
         }
     )
+
+
+def _message_download_url(
+    chat_id: UUID, telegram_message_id: int, user_id: UUID
+) -> str:
+    return build_media_download_url(
+        base_path=(f"/api/v1/chats/{chat_id}/messages/{telegram_message_id}/media"),
+        user_id=user_id,
+        chat_id=chat_id,
+        telegram_message_id=telegram_message_id,
+    )
+
+
+def _remove_download_file(path: str) -> None:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
 
 
 @router.get("", response_model=ChatListResponse)
@@ -316,6 +346,17 @@ async def get_chat_messages(
                 sent_at=msg.sent_at,
                 has_embedding=msg.embedding is not None,
                 transcribed_at=msg.transcribed_at,
+                telegram_message_url=build_telegram_message_url(
+                    chat_type=chat.chat_type,
+                    telegram_chat_id=chat.telegram_chat_id,
+                    username=chat.username,
+                    message_id=msg.telegram_message_id,
+                ),
+                media_download_url=(
+                    _message_download_url(chat.id, msg.telegram_message_id, user.id)
+                    if msg.has_media
+                    else None
+                ),
             )
             for msg in messages
         ],
@@ -340,7 +381,7 @@ async def get_message_content(
 ) -> MessageContentResponse:
     """Return the complete processed content for one media message."""
     result = await db.execute(
-        select(TelegramMessage)
+        select(TelegramMessage, TelegramChat)
         .join(TelegramChat)
         .where(
             TelegramMessage.chat_id == chat_id,
@@ -348,12 +389,13 @@ async def get_message_content(
             TelegramChat.user_id == user.id,
         )
     )
-    message = result.scalar_one_or_none()
-    if message is None:
+    row = result.one_or_none()
+    if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Message not found",
         )
+    message, chat = row
 
     return MessageContentResponse(
         id=message.id,
@@ -373,4 +415,113 @@ async def get_message_content(
         media_processed_at=message.media_processed_at,
         content_model=message.content_model,
         summary_model=message.summary_model,
+        telegram_message_url=build_telegram_message_url(
+            chat_type=chat.chat_type,
+            telegram_chat_id=chat.telegram_chat_id,
+            username=chat.username,
+            message_id=message.telegram_message_id,
+        ),
+        media_download_url=(
+            _message_download_url(chat.id, message.telegram_message_id, user.id)
+            if message.has_media
+            else None
+        ),
+    )
+
+
+@router.get("/{chat_id}/messages/{telegram_message_id}/media")
+@limiter.limit("20/minute")
+async def download_message_media(
+    request: Request,
+    chat_id: UUID,
+    telegram_message_id: int,
+    user: OptionalUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    token: str | None = Query(default=None),
+) -> FileResponse:
+    """Download one Telegram media item through auth or a short-lived link."""
+    claims = None
+    if token:
+        try:
+            claims = decode_media_download_token(token)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired media download link",
+            ) from exc
+        if (
+            claims.chat_id != chat_id
+            or claims.telegram_message_id != telegram_message_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Media download link does not match this message",
+            )
+
+    if claims is not None and user is not None and claims.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Media download link belongs to another user",
+        )
+    owner_id = claims.user_id if claims is not None else (user.id if user else None)
+    if owner_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
+    result = await db.execute(
+        select(TelegramMessage, TelegramChat)
+        .join(TelegramChat)
+        .where(
+            TelegramMessage.chat_id == chat_id,
+            TelegramMessage.telegram_message_id == telegram_message_id,
+            TelegramChat.user_id == owner_id,
+        )
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found",
+        )
+    message, _chat = row
+    if not message.has_media:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message has no downloadable media",
+        )
+
+    suffix = Path(
+        media_download_filename(message.media_file_name, message.media_mime_type)
+    ).suffix
+    file_descriptor, temporary_path = tempfile.mkstemp(
+        prefix="wai-telegram-media-",
+        suffix=suffix,
+    )
+    os.close(file_descriptor)
+    try:
+        downloaded = await download_telegram_media(
+            db,
+            owner_id,
+            chat_id,
+            telegram_message_id,
+            Path(temporary_path),
+            stored_file_name=message.media_file_name,
+            stored_mime_type=message.media_mime_type,
+        )
+    except ValueError as exc:
+        _remove_download_file(temporary_path)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    if downloaded.path != Path(temporary_path):
+        _remove_download_file(temporary_path)
+    return FileResponse(
+        path=str(downloaded.path),
+        media_type=downloaded.mime_type,
+        filename=downloaded.file_name,
+        background=BackgroundTask(_remove_download_file, str(downloaded.path)),
     )

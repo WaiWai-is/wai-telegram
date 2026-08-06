@@ -36,6 +36,8 @@ class SearchResultItem(BaseModel):
     media_mime_type: str | None = None
     media_file_size: int | None = None
     transcribed_at: datetime | None = None
+    telegram_message_url: str | None = None
+    media_download_url: str | None = None
 
     class Config:
         from_attributes = True

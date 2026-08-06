@@ -24,6 +24,8 @@ class MessageResponse(BaseModel):
     sent_at: datetime
     has_embedding: bool
     transcribed_at: datetime | None = None
+    telegram_message_url: str | None = None
+    media_download_url: str | None = None
 
     class Config:
         from_attributes = True
@@ -47,6 +49,8 @@ class MessageContentResponse(BaseModel):
     media_processed_at: datetime | None
     content_model: str | None
     summary_model: str | None
+    telegram_message_url: str | None = None
+    media_download_url: str | None = None
 
 
 class MessageListResponse(BaseModel):

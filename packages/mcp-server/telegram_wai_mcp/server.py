@@ -6,7 +6,7 @@ from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import CallToolResult, ResourceLink, TextContent, Tool
 from starlette.requests import Request
 
 from telegram_wai_mcp.client import TelegramAIClient
@@ -198,7 +198,10 @@ def _format_media_label(msg: dict) -> str:
     return f"{prefix} {' | '.join(parts)}" if parts else prefix
 
 
-def format_message_content(result: dict) -> list[TextContent]:
+def format_message_content(
+    result: dict,
+    base_url: str = "https://telegram.waiwai.is",
+) -> list:
     """Format a full media transcript/extraction returned by the backend."""
     message_id = result.get("telegram_message_id", "unknown")
     media_type = result.get("media_type")
@@ -213,6 +216,14 @@ def format_message_content(result: dict) -> list[TextContent]:
     caption = result.get("text")
     if caption:
         lines.extend(["", "Caption:", caption])
+
+    telegram_message_url = result.get("telegram_message_url")
+    if telegram_message_url:
+        lines.extend(["", f"Telegram message: {telegram_message_url}"])
+
+    media_download_url = _absolute_url(result.get("media_download_url"), base_url)
+    if media_download_url:
+        lines.extend(["", f"Download media: {media_download_url}"])
 
     summary = result.get("content_summary")
     if summary:
@@ -233,7 +244,11 @@ def format_message_content(result: dict) -> list[TextContent]:
     elif status in {"pending", "queued", "processing"}:
         lines.extend(["", "The file is being processed in the background."])
 
-    return [TextContent(type="text", text="\n".join(lines))]
+    content: list = [TextContent(type="text", text="\n".join(lines))]
+    resource = _media_resource_link(result, base_url)
+    if resource:
+        content.append(resource)
+    return content
 
 
 async def _list_all_chats(api: TelegramAIClient) -> dict[str, Any]:
@@ -440,6 +455,58 @@ def _private_chat_link(chat_type: Any, telegram_chat_id: Any, message_id: Any) -
     return f"https://t.me/c/{channel_id}/{message_id}"
 
 
+def _absolute_url(url: Any, base_url: str) -> str | None:
+    if not isinstance(url, str) or not url.strip():
+        return None
+    if url.startswith(("http://", "https://")):
+        return url
+    return f"{base_url.rstrip('/')}/{url.lstrip('/')}"
+
+
+def _client_base_url(api: TelegramAIClient) -> str:
+    base_url = getattr(api, "base_url", None)
+    return base_url if isinstance(base_url, str) and base_url else "https://telegram.waiwai.is"
+
+
+def _media_resource_link(result: dict, base_url: str) -> ResourceLink | None:
+    url = _absolute_url(result.get("media_download_url"), base_url)
+    if not url:
+        return None
+    message_id = result.get("telegram_message_id", "unknown")
+    file_name = result.get("media_file_name") or f"telegram-media-{message_id}"
+    size = result.get("media_file_size")
+    if not isinstance(size, int) or size < 0:
+        size = None
+    mime_type = result.get("media_mime_type")
+    if not isinstance(mime_type, str) or not mime_type.strip():
+        mime_type = None
+    return ResourceLink(
+        type="resource_link",
+        name=str(file_name),
+        title=f"Download {file_name}",
+        uri=url,
+        description="Short-lived authenticated Telegram media download",
+        mimeType=mime_type,
+        size=size,
+    )
+
+
+def format_media_download(result: dict, base_url: str) -> list:
+    """Return a compact download link plus an MCP resource link."""
+    url = _absolute_url(result.get("media_download_url"), base_url)
+    if not url:
+        return [TextContent(type="text", text="No downloadable media is available for this message.")]
+
+    lines = [
+        f"Download URL: {url}",
+        f"File: {result.get('media_file_name') or 'telegram-media'}",
+    ]
+    resource = _media_resource_link(result, base_url)
+    return [TextContent(type="text", text="\n".join(lines)), resource] if resource else [
+        TextContent(type="text", text="\n".join(lines))
+    ]
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available MCP tools."""
@@ -579,6 +646,29 @@ async def list_tools() -> list[Tool]:
                 "Get the complete background-processed content for one media message: "
                 "its original caption, summary, and full transcript or extracted document text. "
                 "Use chat_id and the numeric msg# shown by search_messages or get_chat_messages."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chat_id": {
+                        "type": "string",
+                        "description": "The chat ID containing the media message",
+                    },
+                    "telegram_message_id": {
+                        "type": "integer",
+                        "description": "The numeric Telegram message ID shown as msg#",
+                    },
+                },
+                "required": ["chat_id", "telegram_message_id"],
+            },
+        ),
+        Tool(
+            name="download_media",
+            description=(
+                "Get a short-lived authenticated download link for the original Telegram media file. "
+                "Supports documents, photos, videos, audio, voice messages, and video notes. "
+                "The MCP result includes a resource_link so an agent can fetch the binary without "
+                "putting the file itself into the conversation."
             ),
             inputSchema={
                 "type": "object",
@@ -791,7 +881,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
                 date_to=date_to,
             )
             result["results"] = _rerank_search_results(query, result.get("results", []), limit)
-            return format_search_results(result)
+            return format_search_results(result, _client_base_url(api))
 
         elif name == "search_chats":
             query = _require_str(args, "query")
@@ -821,7 +911,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
                 limit=limit,
                 before=before,
             )
-            return format_chat_messages(result)
+            return format_chat_messages(result, _client_base_url(api))
 
         elif name == "get_message_content":
             chat_id = _require_str(args, "chat_id")
@@ -829,7 +919,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
             if not isinstance(telegram_message_id, int):
                 raise ValueError('"telegram_message_id" must be an integer')
             result = await api.get_message_content(chat_id, telegram_message_id)
-            return format_message_content(result)
+            return format_message_content(result, _client_base_url(api))
+
+        elif name == "download_media":
+            chat_id = _require_str(args, "chat_id")
+            telegram_message_id = args.get("telegram_message_id")
+            if not isinstance(telegram_message_id, int):
+                raise ValueError('"telegram_message_id" must be an integer')
+            result = await api.get_message_content(chat_id, telegram_message_id)
+            return format_media_download(result, _client_base_url(api))
 
         elif name == "get_daily_digest":
             digest_date = _optional_iso_date(args, "date")
@@ -895,7 +993,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
                 limit=limit,
                 date_from=datetime(today.year, today.month, today.day, tzinfo=UTC),
             )
-            return format_search_results(result)
+            return format_search_results(result, _client_base_url(api))
 
         else:
             return _tool_error(f"Unknown tool: {name}")
@@ -909,7 +1007,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
             await api.close()
 
 
-def format_search_results(result: dict) -> list[TextContent]:
+def format_search_results(
+    result: dict,
+    base_url: str = "https://telegram.waiwai.is",
+) -> list:
     """Format search results for display."""
     if not result.get("results"):
         return [TextContent(type="text", text="No messages found matching your query.")]
@@ -917,6 +1018,7 @@ def format_search_results(result: dict) -> list[TextContent]:
     total = result.get("total", 0)
     query = result.get("query", "")
     lines = [f'Found {total} messages for query: "{query}"\n']
+    resources: list[ResourceLink] = []
     for r in result.get("results", []):
         sender = r.get("sender_name") or ("You" if r.get("is_outgoing") else "Unknown")
         text = _format_media_label(r)
@@ -941,10 +1043,17 @@ def format_search_results(result: dict) -> list[TextContent]:
         ]
         if username_ref:
             details.append(f"Username: {username_ref}")
-        elif private_link:
-            details.append(f"Open: {private_link}")
+        message_url = r.get("telegram_message_url") or private_link
+        if message_url:
+            details.append(f"Open: {message_url}")
+        media_url = _absolute_url(r.get("media_download_url"), base_url)
+        if media_url:
+            details.append(f"Download media: {media_url}")
+            resource = _media_resource_link(r, base_url)
+            if resource:
+                resources.append(resource)
         lines.append(f"[{chat_title}] {sender}: {text}\n  - {' | '.join(details)}\n")
-    return [TextContent(type="text", text="\n".join(lines))]
+    return [TextContent(type="text", text="\n".join(lines)), *resources]
 
 
 def _freshness_label(last_sync_at: Any, listener_active: bool = False) -> str:
@@ -1047,7 +1156,10 @@ def format_chat_search_results(result: dict) -> list[TextContent]:
     return [TextContent(type="text", text="\n".join(lines))]
 
 
-def format_chat_messages(result: dict) -> list[TextContent]:
+def format_chat_messages(
+    result: dict,
+    base_url: str = "https://telegram.waiwai.is",
+) -> list:
     """Format paginated chat messages for display."""
     messages = result.get("messages", [])
     if not messages:
@@ -1057,12 +1169,23 @@ def format_chat_messages(result: dict) -> list[TextContent]:
     last_sync = result.get("last_sync_at")
 
     lines = [f"Messages ({len(messages)} returned):\n"]
+    resources: list[ResourceLink] = []
     for msg in messages:
         sender = msg.get("sender_name") or ("You" if msg.get("is_outgoing") else "Unknown")
         text = _format_media_label(msg)
         sent_at = _format_date(msg.get("sent_at"))
         msg_id = msg.get("telegram_message_id", "")
-        lines.append(f"[{sent_at}] {sender} (msg#{msg_id}): {text}\n")
+        links: list[str] = []
+        if msg.get("telegram_message_url"):
+            links.append(f"Open: {msg['telegram_message_url']}")
+        media_url = _absolute_url(msg.get("media_download_url"), base_url)
+        if media_url:
+            links.append(f"Download media: {media_url}")
+            resource = _media_resource_link(msg, base_url)
+            if resource:
+                resources.append(resource)
+        link_suffix = f"\n  - {' | '.join(links)}" if links else ""
+        lines.append(f"[{sent_at}] {sender} (msg#{msg_id}): {text}{link_suffix}\n")
 
     has_more = result.get("has_more", False)
     next_cursor = result.get("next_cursor")
@@ -1084,7 +1207,7 @@ def format_chat_messages(result: dict) -> list[TextContent]:
             f"Use sync_chat with message_limit=0 to download full history. ---"
         )
 
-    return [TextContent(type="text", text="\n".join(lines))]
+    return [TextContent(type="text", text="\n".join(lines)), *resources]
 
 
 def format_digest(result: dict) -> list[TextContent]:

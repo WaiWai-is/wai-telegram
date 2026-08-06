@@ -11,6 +11,10 @@ from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
 from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
 from app.services.embedding_service import generate_query_embedding
+from app.services.telegram_links import (
+    build_media_download_url,
+    build_telegram_message_url,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -66,7 +70,7 @@ def _base_where_clauses(
     return where_clauses, params
 
 
-def _rows_to_response(rows: list, query: str) -> SearchResponse:
+def _rows_to_response(rows: list, query: str, user_id: UUID) -> SearchResponse:
     results = [
         SearchResultItem(
             id=row.id,
@@ -90,6 +94,25 @@ def _rows_to_response(rows: list, query: str) -> SearchResponse:
             media_mime_type=getattr(row, "media_mime_type", None),
             media_file_size=getattr(row, "media_file_size", None),
             transcribed_at=row.transcribed_at,
+            telegram_message_url=build_telegram_message_url(
+                chat_type=_normalize_chat_type(row.chat_type),
+                telegram_chat_id=row.chat_telegram_id,
+                username=row.chat_username,
+                message_id=row.telegram_message_id,
+            ),
+            media_download_url=(
+                build_media_download_url(
+                    base_path=(
+                        f"/api/v1/chats/{row.chat_id}/messages/"
+                        f"{row.telegram_message_id}/media"
+                    ),
+                    user_id=user_id,
+                    chat_id=row.chat_id,
+                    telegram_message_id=row.telegram_message_id,
+                )
+                if getattr(row, "has_media", False)
+                else None
+            ),
         )
         for row in rows
     ]
@@ -211,7 +234,7 @@ async def _keyword_search(
     """)
 
     result = await db.execute(sql, params)
-    return _rows_to_response(result.fetchall(), request.query)
+    return _rows_to_response(result.fetchall(), request.query, user_id)
 
 
 async def semantic_search(
@@ -356,7 +379,7 @@ async def semantic_search(
 
     try:
         result = await db.execute(sql, params)
-        return _rows_to_response(result.fetchall(), request.query)
+        return _rows_to_response(result.fetchall(), request.query, user_id)
     except Exception:
         logger.exception(
             "Semantic vector search failed; falling back to keyword search",
