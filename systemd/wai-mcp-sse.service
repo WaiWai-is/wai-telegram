@@ -10,6 +10,7 @@ WorkingDirectory=/opt/wai-telegram/packages/mcp-server
 Environment="PATH=/home/wai/.local/bin:/usr/local/bin:/usr/bin"
 EnvironmentFile=/opt/wai-telegram/.env.production
 Environment="TELEGRAM_AI_URL=http://127.0.0.1:8000"
+Environment="TELEGRAM_AI_PUBLIC_URL=https://telegram.waiwai.is"
 
 ExecStart=/opt/wai-telegram/.venv/bin/telegram-wai-mcp-http --host 127.0.0.1 --port 8808
 

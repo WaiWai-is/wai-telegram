@@ -61,3 +61,11 @@ async def test_download_media_is_a_discoverable_mcp_tool():
     tools = await server.list_tools()
     download_tool = next(tool for tool in tools if tool.name == "download_media")
     assert "short-lived" in download_tool.description
+
+
+def test_mcp_uses_public_origin_for_internal_backend(monkeypatch):
+    api = AsyncMock()
+    api.base_url = "http://127.0.0.1:8000"
+    monkeypatch.setenv("TELEGRAM_AI_PUBLIC_URL", "https://telegram.waiwai.is")
+
+    assert server._client_base_url(api) == "https://telegram.waiwai.is"

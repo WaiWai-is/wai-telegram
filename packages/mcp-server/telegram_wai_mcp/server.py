@@ -464,6 +464,9 @@ def _absolute_url(url: Any, base_url: str) -> str | None:
 
 
 def _client_base_url(api: TelegramAIClient) -> str:
+    public_url = os.environ.get("TELEGRAM_AI_PUBLIC_URL", "").strip()
+    if public_url:
+        return public_url.rstrip("/")
     base_url = getattr(api, "base_url", None)
     return base_url if isinstance(base_url, str) and base_url else "https://telegram.waiwai.is"
 
@@ -495,16 +498,20 @@ def format_media_download(result: dict, base_url: str) -> list:
     """Return a compact download link plus an MCP resource link."""
     url = _absolute_url(result.get("media_download_url"), base_url)
     if not url:
-        return [TextContent(type="text", text="No downloadable media is available for this message.")]
+        return [
+            TextContent(type="text", text="No downloadable media is available for this message.")
+        ]
 
     lines = [
         f"Download URL: {url}",
         f"File: {result.get('media_file_name') or 'telegram-media'}",
     ]
     resource = _media_resource_link(result, base_url)
-    return [TextContent(type="text", text="\n".join(lines)), resource] if resource else [
-        TextContent(type="text", text="\n".join(lines))
-    ]
+    return (
+        [TextContent(type="text", text="\n".join(lines)), resource]
+        if resource
+        else [TextContent(type="text", text="\n".join(lines))]
+    )
 
 
 @server.list_tools()
