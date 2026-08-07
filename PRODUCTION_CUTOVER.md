@@ -20,8 +20,12 @@ workflow and its protected `production` environment.
   `0600`, owned by root, and keep an off-server copy.
 - Initialize and verify the repository with `scripts/restic-init.sh`.
 
-The workflow refuses to continue if CPU, memory, media mount, media volume size,
-restic configuration, or required owner credentials are missing.
+The normal `media_mode=full` workflow refuses to continue if CPU, memory, media
+mount, media volume size, restic configuration, or required owner credentials
+are missing. A temporary `media_mode=deferred` release is allowed only with
+`MEDIA_PIPELINE_ENABLED=false`, the cloud Bot API URL, at least 2 CPU / 3.5 GB
+RAM / 8 GB free root storage, and a verified encrypted database backup. It does
+not start media workers, local Bot API, reconciliation, or restic timers.
 
 ## Cutover guarantees
 
@@ -39,7 +43,9 @@ chats, messages, transcripts, and metadata under their original user IDs.
 ## Deploy
 
 1. For the one-time account transition, run `CI / Deploy` from `main` with
-   `deployment_mode=initial-cutover`. All later releases use
+   `deployment_mode=initial-cutover`. Select `media_mode=full` after the target
+   infrastructure exists, or `media_mode=deferred` for an explicit auth-only
+   cutover on the constrained host. All later releases use
    `deployment_mode=standard`; they validate the existing owner and never repeat
    deactivation timestamps or Telegram revocations.
 2. The separate read-only preflight job prints the owner evidence before the
@@ -56,6 +62,11 @@ chats, messages, transcripts, and metadata under their original user IDs.
 5. Run `systemctl start wai-restic-backup` and wait for success before treating
    media backup as established. Weekly checks and quarterly actual database
    restore drills then run by timer.
+
+In deferred mode, `prepare_media` returns `media_pipeline_deferred` and direct
+small bot media continues through Telegram's cloud Bot API using ephemeral temp
+files. This is a visible operational state, not a fallback. Enable full mode only
+after attaching durable storage and completing the local Bot API/restic setup.
 
 ## Recovery boundary
 

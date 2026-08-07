@@ -91,6 +91,7 @@ class Settings(BaseSettings):
     video_frame_interval_seconds: int = Field(default=30, ge=1)
     video_scene_threshold: float = Field(default=0.3, gt=0.0, lt=1.0)
     video_frame_analysis_batch: int = Field(default=4, ge=1, le=16)
+    media_pipeline_enabled: bool = True
     media_root: Path = Path("/srv/wai-telegram-media")
     media_internal_uri_prefix: str = "/_protected_media"
     media_download_stall_timeout_seconds: float = Field(default=120.0, gt=0.0)
@@ -132,7 +133,7 @@ class Settings(BaseSettings):
                 raise ValueError("TELEGRAM_API_ID and TELEGRAM_API_HASH must be set")
             if self.environment == "production" and self.owner_user_id is None:
                 raise ValueError("OWNER_USER_ID must be set in production")
-            if self.environment == "production":
+            if self.environment == "production" and self.media_pipeline_enabled:
                 bot_api_host = urlparse(self.telegram_bot_api_base_url).hostname
                 if bot_api_host not in {"127.0.0.1", "localhost", "::1"}:
                     raise ValueError(

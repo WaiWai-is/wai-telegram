@@ -570,6 +570,16 @@ async def prepare_message_media(
         raise HTTPException(status_code=404, detail="Message not found")
     if not message.has_media:
         raise HTTPException(status_code=404, detail="Message has no media")
+    if not get_settings().media_pipeline_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "media_pipeline_deferred",
+                "message": (
+                    "Durable media processing is deferred until storage is attached"
+                ),
+            },
+        )
 
     media_object = await get_or_create_media_object(db, user.id, message.id)
     cache_ready = bool(media_object.relative_path and media_object.sha256)

@@ -15,6 +15,14 @@ on:
           - standard
           - initial-cutover
         default: standard
+      media_mode:
+        description: Full durable media runtime or an explicit deferred-storage release
+        required: true
+        type: choice
+        options:
+          - full
+          - deferred
+        default: full
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -176,16 +184,20 @@ jobs:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
           DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
+          MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
           ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
           scp "${ssh_opts[@]}" scripts/single-user-preflight.sh \
             "${USER}@${HOST}:/tmp/wai-single-user-preflight.sh"
-          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- "$DEPLOYMENT_MODE" << 'EOF'
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- \
+            "$DEPLOYMENT_MODE" "$MEDIA_MODE" << 'EOF'
           set -euo pipefail
           DEPLOYMENT_MODE=$1
+          MEDIA_MODE=$2
           trap 'rm -f /tmp/wai-single-user-preflight.sh' EXIT
           chmod 0700 /tmp/wai-single-user-preflight.sh
-          /tmp/wai-single-user-preflight.sh --mode "$DEPLOYMENT_MODE"
+          /tmp/wai-single-user-preflight.sh \
+            --mode "$DEPLOYMENT_MODE" --media-mode "$MEDIA_MODE"
           EOF
 
   deploy:
@@ -206,11 +218,14 @@ jobs:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
           RELEASE_SHA: ${{ github.sha }}
+          MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
           ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
-          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- "$RELEASE_SHA" << 'EOF'
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- \
+            "$RELEASE_SHA" "$MEDIA_MODE" << 'EOF'
           set -euo pipefail
           RELEASE_SHA=$1
+          MEDIA_MODE=$2
           readonly BOT_API_COMMIT="adfd7f6a8e990272851777eeb3ae0def4216f161"
           command -v apt-get >/dev/null
           if ! command -v ffmpeg >/dev/null || ! command -v pdfinfo >/dev/null \
@@ -228,21 +243,30 @@ jobs:
           usermod -a -G wai-media wai
           cpu_count=$(nproc)
           memory_kib=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-          [ "$cpu_count" -ge 4 ] && [ "$memory_kib" -ge 7500000 ] || {
-            echo "Server must be upgraded to at least 4 CPU / 8 GB RAM" >&2
-            exit 1
-          }
-          mountpoint -q /srv/wai-telegram-media
-          media_bytes=$(df --output=size -B1 /srv/wai-telegram-media | tail -n 1)
-          [ "$media_bytes" -ge 450000000000 ] || {
-            echo "Media volume is smaller than the required 500 GB class" >&2
-            exit 1
-          }
           install -d -o root -g wai-media -m 0770 /srv/wai-telegram-media
-          install -d -o wai-bot-api -g wai-media -m 0770 \
-            /srv/wai-telegram-media/bot-api /srv/wai-telegram-media/bot-api-temp
-          test -r /etc/wai-telegram/restic.env
-          test -r /etc/wai-telegram/restic-password
+          if [ "$MEDIA_MODE" = "full" ]; then
+            [ "$cpu_count" -ge 4 ] && [ "$memory_kib" -ge 7500000 ] || {
+              echo "Server must be upgraded to at least 4 CPU / 8 GB RAM" >&2
+              exit 1
+            }
+            mountpoint -q /srv/wai-telegram-media
+            media_bytes=$(df --output=size -B1 /srv/wai-telegram-media | tail -n 1)
+            [ "$media_bytes" -ge 450000000000 ] || {
+              echo "Media volume is smaller than the required 500 GB class" >&2
+              exit 1
+            }
+            install -d -o wai-bot-api -g wai-media -m 0770 \
+              /srv/wai-telegram-media/bot-api /srv/wai-telegram-media/bot-api-temp
+            test -r /etc/wai-telegram/restic.env
+            test -r /etc/wai-telegram/restic-password
+          else
+            free_bytes=$(df --output=avail -B1 / | tail -n 1)
+            [ "$cpu_count" -ge 2 ] && [ "$memory_kib" -ge 3500000 ] \
+              && [ "$free_bytes" -ge 8000000000 ] || {
+              echo "Deferred release needs 2 CPU, 3.5 GB RAM, and 8 GB free" >&2
+              exit 1
+            }
+          fi
           test -r /etc/wai-telegram/auth-backup-passphrase
           node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 20 || (major === 20 && minor >= 9) ? 0 : 1)'
           release_dir="/opt/wai-telegram-releases/release-$RELEASE_SHA"
@@ -271,11 +295,14 @@ jobs:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
           RELEASE_SHA: ${{ github.sha }}
+          MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
           ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
-          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- "$RELEASE_SHA" << 'EOF'
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- \
+            "$RELEASE_SHA" "$MEDIA_MODE" << 'EOF'
           set -euo pipefail
           RELEASE_SHA=$1
+          MEDIA_MODE=$2
           readonly BOT_API_COMMIT="adfd7f6a8e990272851777eeb3ae0def4216f161"
           release_dir="/opt/wai-telegram-releases/release-$RELEASE_SHA"
           chown -R root:root "$release_dir"
@@ -290,23 +317,28 @@ jobs:
           for variable in DATABASE_URL REDIS_URL OWNER_USER_ID SECRET_KEY \
             NEXT_SERVER_ACTIONS_ENCRYPTION_KEY NEXT_PUBLIC_API_URL SENTRY_DSN \
             OPENAI_API_KEY DEEPGRAM_API_KEY TELEGRAM_BOT_TOKEN TELEGRAM_API_ID \
-            TELEGRAM_API_HASH; do
+            TELEGRAM_API_HASH MEDIA_PIPELINE_ENABLED TELEGRAM_BOT_API_BASE_URL; do
             test -n "${!variable:-}" || { echo "Missing $variable" >&2; exit 1; }
           done
-          install -d -o root -g wai-media -m 0750 /etc/wai-telegram
-          bot_env=$(mktemp /etc/wai-telegram/.bot-api.env.XXXXXX)
-          printf 'TELEGRAM_API_ID=%s\nTELEGRAM_API_HASH=%s\n' \
-            "$TELEGRAM_API_ID" "$TELEGRAM_API_HASH" > "$bot_env"
-          chown root:wai-media "$bot_env"
-          chmod 0640 "$bot_env"
-          mv -f "$bot_env" /etc/wai-telegram/bot-api.env
-          if [ ! -x /usr/local/bin/telegram-bot-api ] \
-            || [ ! -r /usr/local/share/wai-telegram/telegram-bot-api.commit ] \
-            || [ "$(cat /usr/local/share/wai-telegram/telegram-bot-api.commit 2>/dev/null || true)" != "$BOT_API_COMMIT" ]; then
-            "$release_dir/scripts/install-telegram-bot-api.sh"
+          if [ "$MEDIA_MODE" = "full" ]; then
+            [ "$MEDIA_PIPELINE_ENABLED" = "true" ] || exit 1
+            install -d -o root -g wai-media -m 0750 /etc/wai-telegram
+            bot_env=$(mktemp /etc/wai-telegram/.bot-api.env.XXXXXX)
+            printf 'TELEGRAM_API_ID=%s\nTELEGRAM_API_HASH=%s\n' \
+              "$TELEGRAM_API_ID" "$TELEGRAM_API_HASH" > "$bot_env"
+            chown root:wai-media "$bot_env"
+            chmod 0640 "$bot_env"
+            mv -f "$bot_env" /etc/wai-telegram/bot-api.env
+            if [ ! -x /usr/local/bin/telegram-bot-api ] \
+              || [ ! -r /usr/local/share/wai-telegram/telegram-bot-api.commit ] \
+              || [ "$(cat /usr/local/share/wai-telegram/telegram-bot-api.commit 2>/dev/null || true)" != "$BOT_API_COMMIT" ]; then
+              "$release_dir/scripts/install-telegram-bot-api.sh"
+            fi
+            "$release_dir/scripts/install-restic.sh"
+            "$release_dir/scripts/restic-init.sh"
+          else
+            [ "$MEDIA_PIPELINE_ENABLED" = "false" ] || exit 1
           fi
-          "$release_dir/scripts/install-restic.sh"
-          "$release_dir/scripts/restic-init.sh"
           runuser -u wai -- /home/wai/.local/bin/uv sync \
             --directory "$release_dir" --all-packages --no-dev --frozen
           runuser -u wai -- bash -c \
@@ -315,20 +347,26 @@ jobs:
           test -f "$release_dir/packages/frontend/.next/BUILD_ID"
           EOF
 
-      - name: Create verified authenticated and off-host backups
+      - name: Create verified encrypted backup and optional off-host media backup
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
+          MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
           ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
           scp "${ssh_opts[@]}" scripts/auth-cutover-backup.sh scripts/restic-backup.sh \
             "${USER}@${HOST}:/tmp/"
-          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s << 'EOF'
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- "$MEDIA_MODE" << 'EOF'
           set -euo pipefail
+          MEDIA_MODE=$1
           trap 'rm -f /tmp/auth-cutover-backup.sh /tmp/restic-backup.sh' EXIT
           chmod 0700 /tmp/auth-cutover-backup.sh /tmp/restic-backup.sh
           /tmp/auth-cutover-backup.sh
-          /tmp/restic-backup.sh
+          if [ "$MEDIA_MODE" = "full" ]; then
+            /tmp/restic-backup.sh
+          else
+            echo "Deferred media mode: off-host media backup is intentionally pending"
+          fi
           EOF
 
       - name: Activate release, migrate, cut over, and restart
@@ -337,26 +375,30 @@ jobs:
           USER: ${{ secrets.DEPLOY_USER }}
           RELEASE_SHA: ${{ github.sha }}
           DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
+          MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
           ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
           ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- \
-            "$RELEASE_SHA" "$DEPLOYMENT_MODE" << 'EOF'
+            "$RELEASE_SHA" "$DEPLOYMENT_MODE" "$MEDIA_MODE" << 'EOF'
           set -euo pipefail
           RELEASE_SHA=$1
           DEPLOYMENT_MODE=$2
-          services="wai-backend wai-celery wai-celery-beat wai-media wai-media-process wai-media-index wai-listener wai-mcp-sse wai-frontend"
+          MEDIA_MODE=$3
+          core_services="wai-backend wai-celery wai-celery-beat wai-listener wai-mcp-sse wai-frontend"
+          media_services="wai-media wai-media-process wai-media-index"
+          all_services="$core_services $media_services"
           release_dir="/opt/wai-telegram-releases/release-$RELEASE_SHA"
           previous_target=$(readlink -f /opt/wai-telegram)
           migration_started=0
           rollback_or_fail_closed() {
             status=$?
             [ "$status" -eq 0 ] && return
-            systemctl stop $services telegram-bot-api >/dev/null 2>&1 || true
+            systemctl stop $all_services telegram-bot-api >/dev/null 2>&1 || true
             if [ "$migration_started" -eq 0 ]; then
               rm -f -- /opt/wai-telegram
               ln -s "$previous_target" /opt/wai-telegram
               systemctl daemon-reload
-              systemctl start $services >/dev/null 2>&1 || true
+              systemctl start $core_services wai-media >/dev/null 2>&1 || true
               echo "Activation failed before migration; previous release restored" >&2
             else
               echo "Activation failed after migration began; services remain stopped for fail-safe recovery" >&2
@@ -364,7 +406,7 @@ jobs:
             exit "$status"
           }
           trap rollback_or_fail_closed EXIT
-          for service in $services; do
+          for service in $all_services; do
             systemctl stop "$service" >/dev/null 2>&1 || true
           done
           if [ ! -L /opt/wai-telegram ]; then
@@ -396,35 +438,50 @@ jobs:
           ln -sfn /etc/nginx/sites-available/telegram-ai.conf \
             /etc/nginx/sites-enabled/telegram-ai.conf
           systemctl daemon-reload
-          systemctl enable telegram-bot-api wai-media wai-media-process wai-media-index
-          systemctl enable --now wai-media-volume-monitor.timer \
-            wai-restic-backup.timer wai-restic-check.timer wai-restic-restore-drill.timer
           nginx -t
-          systemctl restart telegram-bot-api
-          for attempt in $(seq 1 30); do
-            curl -sS --max-time 2 http://127.0.0.1:8081/ >/dev/null 2>&1 && break
-            [ "$attempt" -eq 30 ] && exit 1
-            sleep 2
-          done
-          if [ "$DEPLOYMENT_MODE" = "initial-cutover" ]; then
-            bot_mode="--initial-cloud-cutover"
+          if [ "$MEDIA_MODE" = "full" ]; then
+            systemctl enable telegram-bot-api $media_services
+            systemctl enable --now wai-media-volume-monitor.timer \
+              wai-restic-backup.timer wai-restic-check.timer \
+              wai-restic-restore-drill.timer
+            systemctl restart telegram-bot-api
+            for attempt in $(seq 1 30); do
+              curl -sS --max-time 2 http://127.0.0.1:8081/ >/dev/null 2>&1 && break
+              [ "$attempt" -eq 30 ] && exit 1
+              sleep 2
+            done
+            if [ -f /etc/wai-telegram/bot-api-cutover-complete ]; then
+              bot_mode="--verify-local"
+            else
+              bot_mode="--initial-cloud-cutover"
+            fi
+            runuser -u wai -- bash -c \
+              "cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/python -m app.cli.bot_api_cutover $bot_mode"
+            install -o root -g root -m 0600 /dev/null \
+              /etc/wai-telegram/bot-api-cutover-complete
+            systemctl restart $core_services $media_services
           else
-            bot_mode="--verify-local"
+            systemctl disable --now telegram-bot-api $media_services \
+              wai-media-volume-monitor.timer wai-restic-backup.timer \
+              wai-restic-check.timer wai-restic-restore-drill.timer \
+              >/dev/null 2>&1 || true
+            systemctl restart $core_services
           fi
-          runuser -u wai -- bash -c \
-            "cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/python -m app.cli.bot_api_cutover $bot_mode"
-          systemctl restart $services
           systemctl reload nginx
           for attempt in $(seq 1 12); do
-            if systemctl is-active --quiet $services telegram-bot-api \
+            if systemctl is-active --quiet $core_services \
               && curl -sf --max-time 10 http://127.0.0.1:8000/health/ready >/dev/null; then
-              break
+              if [ "$MEDIA_MODE" = "deferred" ] \
+                || systemctl is-active --quiet $media_services telegram-bot-api; then
+                break
+              fi
             fi
             [ "$attempt" -eq 12 ] && exit 1
             sleep 10
           done
-          /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app \
-            inspect ping --timeout=15 | grep -q pong
+          runuser -u wai -- bash -c \
+            'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app inspect ping --timeout=15' \
+            | grep -q pong
           migration_started=2
           trap - EXIT
           EOF
@@ -448,10 +505,15 @@ jobs:
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
+          MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
           ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
-          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s << 'EOF'
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- "$MEDIA_MODE" << 'EOF'
           set -euo pipefail
-          systemctl start --no-block wai-search-indexes.service
-          systemctl start --no-block wai-metadata-reconcile.service
+          if [ "$1" = "full" ]; then
+            systemctl start --no-block wai-search-indexes.service
+            systemctl start --no-block wai-metadata-reconcile.service
+          else
+            echo "Deferred media mode: reconciliation waits for expanded resources"
+          fi
           EOF

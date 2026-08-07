@@ -1,6 +1,7 @@
 import pytest
 from app.core.config import Settings, get_settings
 from pydantic import ValidationError
+from uuid import uuid4
 
 # Keys set by conftest.py that interfere with Settings() defaults
 _CONFTEST_ENV_KEYS = [
@@ -83,6 +84,33 @@ class TestProductionValidation:
     def test_development_allows_defaults(self):
         s = Settings(environment="development")
         assert s.secret_key == "dev-secret-key-change-in-production"
+
+    def test_deferred_media_pipeline_allows_cloud_bot_api(self):
+        settings = Settings(
+            environment="production",
+            secret_key="real-secret-key",
+            encryption_key="real-encryption-key",
+            telegram_api_id=123,
+            telegram_api_hash="hash",
+            owner_user_id=uuid4(),
+            media_pipeline_enabled=False,
+            telegram_bot_api_base_url="https://api.telegram.org",
+        )
+
+        assert settings.media_pipeline_enabled is False
+
+    def test_enabled_media_pipeline_requires_local_bot_api(self):
+        with pytest.raises(ValidationError, match="local Bot API"):
+            Settings(
+                environment="production",
+                secret_key="real-secret-key",
+                encryption_key="real-encryption-key",
+                telegram_api_id=123,
+                telegram_api_hash="hash",
+                owner_user_id=uuid4(),
+                media_pipeline_enabled=True,
+                telegram_bot_api_base_url="https://api.telegram.org",
+            )
 
 
 class TestGetSettingsCached:

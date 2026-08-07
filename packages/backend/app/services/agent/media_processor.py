@@ -29,7 +29,9 @@ settings = get_settings()
 
 def _temporary_bot_directory(prefix: str) -> tempfile.TemporaryDirectory[str]:
     parent: str | None = None
-    if settings.environment == "production":
+    if settings.environment == "production" and getattr(
+        settings, "media_pipeline_enabled", True
+    ):
         work_root = settings.media_root / "bot-work"
         work_root.mkdir(parents=True, exist_ok=True)
         parent = str(work_root)

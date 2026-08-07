@@ -291,6 +291,21 @@ async def _prepare_media(
     message, chat, media_object = await _message_row(db, user_id, arguments)
     if not message.has_media:
         raise ToolInputError("Message has no media")
+    if not settings.media_pipeline_enabled:
+        return {
+            "message_id": str(message.id),
+            "status": "unavailable",
+            "stage": "deferred",
+            "enqueued": False,
+            "error_code": "media_pipeline_deferred",
+            "error_detail": (
+                "Durable media processing is deferred until storage is attached"
+            ),
+            "retry_after": None,
+            "media_download_url": None,
+            "telegram_message_url": _telegram_url(message, chat),
+            "next_action": "Retry after the durable media pipeline is enabled",
+        }
     if media_object is None:
         media_object = await get_or_create_media_object(db, user_id, message.id)
 
@@ -551,6 +566,7 @@ async def _get_data_status(
             for status, count in processing_rows
         },
         "cache": {
+            "pipeline_enabled": settings.media_pipeline_enabled,
             "objects": int(cache_objects),
             "bytes": int(cache_bytes),
             "hits": hits,

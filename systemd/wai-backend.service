@@ -2,7 +2,6 @@
 Description=WAI Telegram Backend (FastAPI)
 After=network.target docker.service
 Requires=docker.service
-RequiresMountsFor=/srv/wai-telegram-media
 Wants=wai-celery.service
 StartLimitIntervalSec=300
 StartLimitBurst=10

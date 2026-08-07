@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.core.security import compute_api_key_prefix, get_key_hint, hash_api_key
@@ -172,6 +173,42 @@ async def test_prepare_media_tool_does_not_duplicate_pending_dispatch(
     assert first["enqueued"] is True
     assert second["enqueued"] is False
     enqueue.assert_called_once_with([message.id])
+
+
+async def test_prepare_media_tool_reports_deferred_pipeline(
+    db_session,
+    test_user,
+):
+    chat, _message = await _seed(db_session, test_user)
+    locator = {"chat_id": str(chat.id), "telegram_message_id": 42}
+
+    with (
+        patch(
+            "app.services.tool_registry.settings",
+            SimpleNamespace(media_pipeline_enabled=False),
+        ),
+        patch("app.tasks.media_tasks.enqueue_media_processing") as enqueue,
+    ):
+        result = await execute_data_tool(
+            db_session,
+            test_user.id,
+            "prepare_media",
+            locator,
+        )
+
+    assert result == {
+        "message_id": str(_message.id),
+        "status": "unavailable",
+        "stage": "deferred",
+        "enqueued": False,
+        "error_code": "media_pipeline_deferred",
+        "error_detail": "Durable media processing is deferred until storage is attached",
+        "retry_after": None,
+        "media_download_url": None,
+        "telegram_message_url": "https://t.me/tool_chat/42",
+        "next_action": "Retry after the durable media pipeline is enabled",
+    }
+    enqueue.assert_not_called()
 
 
 async def test_read_only_api_key_cannot_start_media_processing(

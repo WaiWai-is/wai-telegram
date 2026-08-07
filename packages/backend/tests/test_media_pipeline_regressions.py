@@ -269,3 +269,18 @@ def test_restic_is_pinned_and_checksum_verified_before_backup_setup():
     assert "sha256sum --check" in installer
     assert "^restic 0\\.19\\.1 compiled with go" in installer
     assert '"$release_dir/scripts/install-restic.sh"' in workflow
+
+
+def test_deferred_media_deploy_is_explicit_and_skips_heavy_runtime():
+    root = Path(__file__).parents[3]
+    workflow = root.joinpath(".github/workflows/deploy.yml").read_text()
+    preflight = root.joinpath("scripts/single-user-preflight.sh").read_text()
+    backup = root.joinpath("scripts/auth-cutover-backup.sh").read_text()
+
+    assert "media_mode" in workflow
+    assert "deferred" in workflow
+    assert '[ "$MEDIA_PIPELINE_ENABLED" = "false" ]' in preflight
+    assert 'if [ "$MEDIA_MODE" = "full" ]' in workflow
+    assert "tee >(docker exec -i" in backup
+    assert 'plain_dump="$work_dir/database.dump"' not in backup
+    assert 'verification_dump="$work_dir/database-verify.dump"' not in backup

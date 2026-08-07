@@ -378,6 +378,46 @@ class TestMessageMediaEndpoints:
         assert second.status_code == 200
         enqueue.assert_called_once_with([message.id])
 
+    async def test_prepare_reports_deferred_pipeline_without_enqueuing(
+        self,
+        auth_client,
+        db_session,
+        test_user,
+    ):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=55005,
+            chat_type=ChatType.PRIVATE,
+            title="Deferred media",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+        db_session.add(
+            TelegramMessage(
+                chat_id=chat.id,
+                telegram_message_id=505,
+                has_media=True,
+                media_type="document",
+                sent_at=datetime.now(UTC),
+            )
+        )
+        await db_session.flush()
+
+        with (
+            patch(
+                "app.api.v1.chats.get_settings",
+                return_value=SimpleNamespace(media_pipeline_enabled=False),
+            ),
+            patch("app.api.v1.chats.enqueue_media_processing") as enqueue,
+        ):
+            response = await auth_client.post(
+                f"/api/v1/chats/{chat.id}/messages/505/prepare"
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "media_pipeline_deferred"
+        enqueue.assert_not_called()
+
 
 class TestRefreshChats:
     async def test_refresh_chats(self, auth_client):

@@ -16,6 +16,7 @@ from app.tasks.media_tasks import (
     _find_pending_and_reap_stale,
     _is_terminal_error,
     _retry_or_finish,
+    dispatch_pending_media,
     enqueue_media_processing,
     fetch_message_media_task,
     index_message_media_task,
@@ -138,6 +139,16 @@ def test_enqueue_routes_fetch_to_persistent_client_worker():
         args=[str(message_id)],
         queue="media-fetch",
     )
+
+
+def test_deferred_pipeline_does_not_dispatch_media_jobs():
+    with patch(
+        "app.tasks.media_tasks.settings",
+        SimpleNamespace(media_pipeline_enabled=False),
+    ):
+        result = dispatch_pending_media.run()
+
+    assert result == {"dispatched": 0, "deferred": 1}
 
 
 def test_fetch_handoff_publish_failure_uses_durable_retry_path():

@@ -6,24 +6,29 @@ readonly DATABASE_CONTAINER="wai-telegram-db"
 readonly BOT_API_COMMIT="adfd7f6a8e990272851777eeb3ae0def4216f161"
 
 usage() {
-    echo "Usage: $0 --mode initial-cutover|standard" >&2
+    echo "Usage: $0 --mode initial-cutover|standard --media-mode full|deferred" >&2
     exit 2
 }
 
 mode=""
+media_mode=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --mode) mode="${2:-}"; shift 2 ;;
+        --media-mode) media_mode="${2:-}"; shift 2 ;;
         *) usage ;;
     esac
 done
 [ "$mode" = "initial-cutover" ] || [ "$mode" = "standard" ] || usage
+[ "$media_mode" = "full" ] || [ "$media_mode" = "deferred" ] || usage
 [ "$(id -u)" -eq 0 ] || { echo "Run as root" >&2; exit 1; }
 [ -r "$ENV_FILE" ] || { echo "Missing $ENV_FILE" >&2; exit 1; }
 set -a
 source "$ENV_FILE"
 set +a
 : "${OWNER_USER_ID:?OWNER_USER_ID is required}"
+: "${MEDIA_PIPELINE_ENABLED:?MEDIA_PIPELINE_ENABLED is required}"
+: "${TELEGRAM_BOT_API_BASE_URL:?TELEGRAM_BOT_API_BASE_URL is required}"
 case "$OWNER_USER_ID" in
     ????????-????-????-????-????????????) ;;
     *) echo "OWNER_USER_ID must be a UUID" >&2; exit 1 ;;
@@ -34,23 +39,52 @@ docker exec "$DATABASE_CONTAINER" pg_isready -U telegram -d telegram_ai >/dev/nu
 
 cpu_count=$(nproc)
 memory_kib=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-if mountpoint -q /srv/wai-telegram-media; then
+media_bytes=0
+if [ "$media_mode" = "full" ]; then
+    [ "$MEDIA_PIPELINE_ENABLED" = "true" ] || {
+        echo "Full media mode requires MEDIA_PIPELINE_ENABLED=true" >&2
+        exit 1
+    }
+    case "$TELEGRAM_BOT_API_BASE_URL" in
+        http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;;
+        *) echo "Full media mode requires the local Bot API URL" >&2; exit 1 ;;
+    esac
+    [ "$cpu_count" -ge 4 ] && [ "$memory_kib" -ge 7500000 ] || {
+        echo "Server must be upgraded to at least 4 CPU / 8 GB RAM" >&2
+        exit 1
+    }
+    mountpoint -q /srv/wai-telegram-media || {
+        echo "A mounted media volume is required" >&2
+        exit 1
+    }
     media_bytes=$(df --output=size -B1 /srv/wai-telegram-media | tail -n 1)
+    [ "$media_bytes" -ge 450000000000 ] || {
+        echo "A mounted 500 GB-class media volume is required" >&2
+        exit 1
+    }
+    required_files=(
+        /etc/wai-telegram/restic.env
+        /etc/wai-telegram/restic-password
+        /etc/wai-telegram/auth-backup-passphrase
+    )
 else
-    media_bytes=0
+    [ "$MEDIA_PIPELINE_ENABLED" = "false" ] || {
+        echo "Deferred media mode requires MEDIA_PIPELINE_ENABLED=false" >&2
+        exit 1
+    }
+    [ "$TELEGRAM_BOT_API_BASE_URL" = "https://api.telegram.org" ] || {
+        echo "Deferred media mode requires the explicit cloud Bot API URL" >&2
+        exit 1
+    }
+    free_bytes=$(df --output=avail -B1 / | tail -n 1)
+    [ "$cpu_count" -ge 2 ] && [ "$memory_kib" -ge 3500000 ] \
+        && [ "$free_bytes" -ge 8000000000 ] || {
+        echo "Deferred release needs 2 CPU, 3.5 GB RAM, and 8 GB free" >&2
+        exit 1
+    }
+    required_files=(/etc/wai-telegram/auth-backup-passphrase)
 fi
-[ "$cpu_count" -ge 4 ] && [ "$memory_kib" -ge 7500000 ] || {
-    echo "Server must be upgraded to at least 4 CPU / 8 GB RAM" >&2
-    exit 1
-}
-[ "$media_bytes" -ge 450000000000 ] || {
-    echo "A mounted 500 GB-class media volume is required" >&2
-    exit 1
-}
-for required_file in \
-    /etc/wai-telegram/restic.env \
-    /etc/wai-telegram/restic-password \
-    /etc/wai-telegram/auth-backup-passphrase; do
+for required_file in "${required_files[@]}"; do
     [ -r "$required_file" ] || {
         echo "Missing required root configuration: $required_file" >&2
         exit 1
@@ -123,4 +157,4 @@ else
     echo "standard preflight: exactly OWNER_USER_ID is active and archive credentials are revoked"
 fi
 
-echo "read-only infrastructure snapshot: cpu=$cpu_count memory_kib=$memory_kib media_bytes=$media_bytes bot_api_commit=$BOT_API_COMMIT"
+echo "read-only infrastructure snapshot: media_mode=$media_mode cpu=$cpu_count memory_kib=$memory_kib media_bytes=$media_bytes bot_api_commit=$BOT_API_COMMIT"

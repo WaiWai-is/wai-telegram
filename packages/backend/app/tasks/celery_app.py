@@ -102,7 +102,7 @@ def configure_celery_beat_observability(**_kwargs):
 
 
 # Beat schedule
-celery_app.conf.beat_schedule = {
+beat_schedule = {
     "generate-daily-digests": {
         "task": "app.tasks.digest_tasks.generate_all_digests",
         "schedule": 3600,  # Every hour — per-user hour matching inside task
@@ -119,8 +119,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.agent_tasks.run_due_agents",
         "schedule": 60,  # Every minute
     },
-    "dispatch-pending-media": {
+}
+if settings.media_pipeline_enabled:
+    beat_schedule["dispatch-pending-media"] = {
         "task": "app.tasks.media_tasks.dispatch_pending_media",
         "schedule": 15,  # Keep a small durable queue full without flooding Redis.
-    },
-}
+    }
+celery_app.conf.beat_schedule = beat_schedule

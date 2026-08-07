@@ -34,6 +34,10 @@ RETRY_DELAYS_SECONDS = (15, 60, 300, 900, 3600, 21_600, 86_400)
 
 def enqueue_media_processing(message_ids: list[UUID]) -> None:
     """Start each durable media pipeline at the resumable fetch queue."""
+    if not settings.media_pipeline_enabled:
+        raise RuntimeError(
+            "Durable media processing is deferred until storage is attached"
+        )
     for message_id in message_ids:
         fetch_message_media_task.apply_async(
             args=[str(message_id)],
@@ -377,6 +381,8 @@ async def _return_queued_to_pending(message_ids: list[UUID]) -> None:
 @shared_task(max_retries=0, name="app.tasks.media_tasks.dispatch_pending_media")
 def dispatch_pending_media() -> dict[str, int]:
     """Recover pending jobs missed by immediate dispatch after ingestion."""
+    if not settings.media_pipeline_enabled:
+        return {"dispatched": 0, "deferred": 1}
     message_ids = run_async(_find_pending_and_reap_stale())
     for index, message_id in enumerate(message_ids):
         try:

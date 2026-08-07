@@ -1,4 +1,8 @@
-"""The only Telegram Bot API transport. Production points to the local server."""
+"""The only Telegram Bot API transport.
+
+Full media mode points production to the local server. Explicit deferred mode
+keeps Telegram's cloud endpoint until durable storage is attached.
+"""
 
 import asyncio
 import logging
@@ -53,14 +57,12 @@ class TelegramBotAPIClient:
                 )
         except httpx.HTTPError as exc:
             raise TelegramBotAPIError(
-                f"Local Telegram Bot API request failed ({type(exc).__name__})"
+                f"Telegram Bot API request failed ({type(exc).__name__})"
             ) from exc
         try:
             payload = response.json()
         except ValueError as exc:
-            raise TelegramBotAPIError(
-                "Local Telegram Bot API returned invalid JSON"
-            ) from exc
+            raise TelegramBotAPIError("Telegram Bot API returned invalid JSON") from exc
         if response.status_code >= 400 or not payload.get("ok"):
             detail = _redact(str(payload.get("description") or response.text))[:300]
             raise TelegramBotAPIError(
@@ -86,9 +88,7 @@ class TelegramBotAPIClient:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if local_source.is_absolute():
             if not local_source.is_file():
-                raise TelegramBotAPIError(
-                    "Local Telegram Bot API file_path does not exist"
-                )
+                raise TelegramBotAPIError("Telegram Bot API file_path does not exist")
             await asyncio.to_thread(shutil.copyfile, local_source, destination)
         else:
             try:
@@ -111,7 +111,7 @@ class TelegramBotAPIClient:
                                 output.write(chunk)
             except httpx.HTTPError as exc:
                 raise TelegramBotAPIError(
-                    f"Local Telegram file download failed ({type(exc).__name__})"
+                    f"Telegram file download failed ({type(exc).__name__})"
                 ) from exc
         if not destination.is_file() or destination.stat().st_size == 0:
             raise TelegramBotAPIError("Telegram file download returned no bytes")

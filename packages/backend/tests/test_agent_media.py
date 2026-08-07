@@ -178,6 +178,39 @@ async def test_all_production_bot_downloads_use_media_volume(tmp_path):
     assert all(destination.is_relative_to(work_root) for destination in destinations)
 
 
+async def test_deferred_production_bot_downloads_use_ephemeral_storage(tmp_path):
+    destinations = []
+
+    async def capture_download(_file_id, destination):
+        destinations.append(destination)
+        destination.write_bytes(b"fixture")
+        return destination
+
+    production_settings = SimpleNamespace(
+        environment="production",
+        media_pipeline_enabled=False,
+        media_root=tmp_path,
+    )
+    analysis = SimpleNamespace(summary="photo", visible_text=None)
+    with (
+        patch("app.services.agent.media_processor.settings", production_settings),
+        patch(
+            "app.services.agent.media_processor._download_telegram_file",
+            new_callable=AsyncMock,
+            side_effect=capture_download,
+        ),
+        patch(
+            "app.services.agent.media_processor.analyze_image",
+            new_callable=AsyncMock,
+            return_value=analysis,
+        ),
+    ):
+        await describe_photo("photo")
+
+    assert len(destinations) == 1
+    assert not destinations[0].is_relative_to(tmp_path)
+
+
 class TestMediaTypes:
     def test_photo_content_type(self):
         from app.services.agent.forward_processor import parse_forwarded_message
