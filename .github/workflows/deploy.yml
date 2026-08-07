@@ -186,7 +186,7 @@ jobs:
           DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
           MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
-          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
           scp "${ssh_opts[@]}" scripts/single-user-preflight.sh \
             "${USER}@${HOST}:/tmp/wai-single-user-preflight.sh"
           ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- \
@@ -220,7 +220,7 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
-          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
           ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- \
             "$RELEASE_SHA" "$MEDIA_MODE" << 'EOF'
           set -euo pipefail
@@ -297,7 +297,7 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
-          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
           ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- \
             "$RELEASE_SHA" "$MEDIA_MODE" << 'EOF'
           set -euo pipefail
@@ -353,7 +353,7 @@ jobs:
           USER: ${{ secrets.DEPLOY_USER }}
           MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
-          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
           scp "${ssh_opts[@]}" scripts/auth-cutover-backup.sh scripts/restic-backup.sh \
             "${USER}@${HOST}:/tmp/"
           ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- "$MEDIA_MODE" << 'EOF'
@@ -377,7 +377,7 @@ jobs:
           DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
           MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
-          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
           ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- \
             "$RELEASE_SHA" "$DEPLOYMENT_MODE" "$MEDIA_MODE" << 'EOF'
           set -euo pipefail
@@ -480,7 +480,7 @@ jobs:
             sleep 10
           done
           runuser -u wai -- bash -c \
-            'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app inspect ping --timeout=15' \
+            'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app inspect ping --timeout=30' \
             | grep -q pong
           migration_started=2
           trap - EXIT
@@ -507,7 +507,7 @@ jobs:
           USER: ${{ secrets.DEPLOY_USER }}
           MEDIA_MODE: ${{ inputs.media_mode }}
         run: |
-          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
           ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- "$MEDIA_MODE" << 'EOF'
           set -euo pipefail
           if [ "$1" = "full" ]; then

@@ -290,3 +290,13 @@ def test_deferred_media_deploy_is_explicit_and_skips_heavy_runtime():
     assert 'restore_status="${PIPESTATUS[1]}"' in backup
     assert 'plain_dump="$work_dir/database.dump"' not in backup
     assert 'verification_dump="$work_dir/database-verify.dump"' not in backup
+
+
+def test_production_deploy_tolerates_slow_imports_and_stalled_ssh_sessions():
+    root = Path(__file__).parents[3]
+    workflow = root.joinpath(".github/workflows/deploy.yml").read_text()
+
+    assert "inspect ping --timeout=30" in workflow
+    assert workflow.count("-o ConnectTimeout=10") == 6
+    assert workflow.count("-o ServerAliveInterval=15") == 6
+    assert workflow.count("-o ServerAliveCountMax=2") == 6
