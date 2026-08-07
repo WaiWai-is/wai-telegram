@@ -5,37 +5,47 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      deployment_mode:
+        description: Standard deploy or the one-time evidence-gated account cutover
+        required: true
+        type: choice
+        options:
+          - standard
+          - initial-cutover
+        default: standard
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+permissions:
+  contents: read
 
 env:
-  SSH_OPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes
   DEPLOY_DIR: /opt/wai-telegram
 
 jobs:
   python-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
-      - name: Lint backend
-        run: uvx ruff check packages/backend
-      - name: Format check backend
-        run: uvx ruff format --check packages/backend
-      - name: Lint MCP server
-        run: uvx ruff check packages/mcp-server
-      - name: Format check MCP server
-        run: uvx ruff format --check packages/mcp-server
+      - name: Install locked dependencies
+        run: uv sync --all-packages --extra dev --frozen
+      - name: Lint Python packages
+        run: uv run ruff check packages/backend packages/mcp-server
+      - name: Format check Python packages
+        run: uv run ruff format --check packages/backend packages/mcp-server
 
   typescript-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -45,7 +55,7 @@ jobs:
         run: npm ci
       - name: Lint
         working-directory: packages/frontend
-        run: npx next lint
+        run: npm run lint
       - name: Type check
         working-directory: packages/frontend
         run: npx tsc --noEmit
@@ -78,18 +88,19 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgresql+asyncpg://telegram:telegram_test@localhost:5432/telegram_ai_test
+      POSTGRES_CONTRACT_DATABASE_URL: postgresql+asyncpg://telegram:telegram_test@localhost:5432/telegram_ai_test
       REDIS_URL: redis://localhost:6379
       ENVIRONMENT: development
       SECRET_KEY: ci-test-secret-key
       ENCRYPTION_KEY: sZEBNdB1PTJZ8o9vGjJsXnUN9cQXz94O1jSWv7l4hQw=
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
       - name: Install dependencies
         working-directory: packages/backend
-        run: uv sync --extra dev
+        run: uv sync --extra dev --frozen
       - name: Create pgvector extension
         run: |
           PGPASSWORD=telegram_test psql -h localhost -U telegram -d telegram_ai_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
@@ -106,7 +117,7 @@ jobs:
             --junitxml=test-results/backend.xml
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-test-results
           path: packages/backend/test-results/
@@ -115,8 +126,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [typescript-lint]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -126,36 +137,63 @@ jobs:
         run: npm ci
       - name: Run tests
         working-directory: packages/frontend
-        run: npx vitest run --reporter=junit --outputFile=test-results/frontend.xml
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-test-results
-          path: packages/frontend/test-results/
-
+        run: npm run test:coverage
+      - name: Production build
+        working-directory: packages/frontend
+        env:
+          NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: Y2ktdGVzdC1zZXJ2ZXItYWN0aW9ucy1rZXk=
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+        run: npm run build
   mcp-tests:
     runs-on: ubuntu-latest
     needs: [python-lint]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
       - name: Install dependencies
         working-directory: packages/mcp-server
-        run: uv sync --extra dev
+        run: uv sync --extra dev --frozen
       - name: Run tests
         working-directory: packages/mcp-server
         run: uv run pytest tests/ -v
 
-  deploy:
+  production-preflight:
     runs-on: ubuntu-latest
     needs: [backend-tests, frontend-tests, mcp-tests]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+      - name: Read-only owner and infrastructure preflight
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
+        run: |
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          scp "${ssh_opts[@]}" scripts/single-user-preflight.sh \
+            "${USER}@${HOST}:/tmp/wai-single-user-preflight.sh"
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- "$DEPLOYMENT_MODE" << 'EOF'
+          set -euo pipefail
+          DEPLOYMENT_MODE=$1
+          trap 'rm -f /tmp/wai-single-user-preflight.sh' EXIT
+          chmod 0700 /tmp/wai-single-user-preflight.sh
+          /tmp/wai-single-user-preflight.sh --mode "$DEPLOYMENT_MODE"
+          EOF
 
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [production-preflight]
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -163,302 +201,257 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
 
-      - name: Validate server environment
+      - name: Prepare infrastructure and immutable release directory
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          echo "Validating .env.production..."
-          if [ ! -f /opt/wai-telegram/.env.production ]; then
-            echo "FATAL: /opt/wai-telegram/.env.production not found"
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- "$RELEASE_SHA" << 'EOF'
+          set -euo pipefail
+          RELEASE_SHA=$1
+          readonly BOT_API_COMMIT="adfd7f6a8e990272851777eeb3ae0def4216f161"
+          command -v apt-get >/dev/null
+          if ! command -v ffmpeg >/dev/null || ! command -v pdfinfo >/dev/null \
+            || ! command -v pg_restore >/dev/null || ! command -v gpg >/dev/null \
+            || ! command -v curl >/dev/null || ! command -v bzip2 >/dev/null; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              ffmpeg poppler-utils postgresql-client gnupg curl bzip2 ca-certificates
+          fi
+          id wai >/dev/null
+          test -x /home/wai/.local/bin/uv
+          getent group wai-media >/dev/null || groupadd --system wai-media
+          id wai-bot-api >/dev/null 2>&1 || useradd --system --no-create-home \
+            --home-dir /nonexistent --shell /usr/sbin/nologin --gid wai-media wai-bot-api
+          usermod -a -G wai-media wai
+          cpu_count=$(nproc)
+          memory_kib=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+          [ "$cpu_count" -ge 4 ] && [ "$memory_kib" -ge 7500000 ] || {
+            echo "Server must be upgraded to at least 4 CPU / 8 GB RAM" >&2
             exit 1
-          fi
-          set -a && source /opt/wai-telegram/.env.production && set +a
-          MISSING=""
-          [ -z "${DATABASE_URL:-}" ] && MISSING="$MISSING DATABASE_URL"
-          [ -z "${REDIS_URL:-}" ] && MISSING="$MISSING REDIS_URL"
-          [ -z "${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}" ] && MISSING="$MISSING NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"
-          [ -z "${NEXT_PUBLIC_API_URL:-}" ] && MISSING="$MISSING NEXT_PUBLIC_API_URL"
-          [ -z "${SECRET_KEY:-}" ] && MISSING="$MISSING SECRET_KEY"
-          [ -z "${SENTRY_DSN:-}" ] && MISSING="$MISSING SENTRY_DSN"
-          [ -z "${OPENAI_API_KEY:-}" ] && MISSING="$MISSING OPENAI_API_KEY"
-          [ -z "${DEEPGRAM_API_KEY:-}" ] && MISSING="$MISSING DEEPGRAM_API_KEY"
-          if [ -n "$MISSING" ]; then
-            echo "FATAL: Missing required env vars:$MISSING"
+          }
+          mountpoint -q /srv/wai-telegram-media
+          media_bytes=$(df --output=size -B1 /srv/wai-telegram-media | tail -n 1)
+          [ "$media_bytes" -ge 450000000000 ] || {
+            echo "Media volume is smaller than the required 500 GB class" >&2
             exit 1
+          }
+          install -d -o root -g wai-media -m 0770 /srv/wai-telegram-media
+          install -d -o wai-bot-api -g wai-media -m 0770 \
+            /srv/wai-telegram-media/bot-api /srv/wai-telegram-media/bot-api-temp
+          test -r /etc/wai-telegram/restic.env
+          test -r /etc/wai-telegram/restic-password
+          test -r /etc/wai-telegram/auth-backup-passphrase
+          node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 20 || (major === 20 && minor >= 9) ? 0 : 1)'
+          release_dir="/opt/wai-telegram-releases/release-$RELEASE_SHA"
+          install -d -o root -g root -m 0755 /opt/wai-telegram-releases
+          if [ -e "$release_dir" ]; then
+            mv "$release_dir" "/opt/wai-telegram-releases/failed-$RELEASE_SHA-$(date -u +%Y%m%dT%H%M%SZ)"
           fi
-          echo "All required env vars present"
+          install -d -o root -g root -m 0755 "$release_dir"
           EOF
 
-      - name: Create service user and backup
+      - name: Upload release source
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          # Create wai user if it doesn't exist
-          if ! id wai &>/dev/null; then
-            useradd --system --home-dir /home/wai --create-home --shell /bin/bash wai
-            # Install uv for wai user
-            su - wai -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
-          fi
+          rsync -az --delete \
+            -e "ssh -i $HOME/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            --exclude '.git' --exclude 'node_modules' --exclude '.venv' \
+            --exclude '__pycache__' --exclude '.next' --exclude '*.pyc' \
+            --exclude '.DS_Store' --exclude '.env.production' --exclude '.env' \
+            ./ "${USER}@${HOST}:/opt/wai-telegram-releases/release-${RELEASE_SHA}/"
 
-          # Backup current deployment for rollback
-          if [ -d /opt/wai-telegram/packages ]; then
-            mkdir -p /opt/wai-telegram-backups
-            TS=$(date +%Y%m%d%H%M%S)
-            TMP_BACKUP="/opt/wai-telegram-backups/${TS}.tmp"
-            FINAL_BACKUP="/opt/wai-telegram-backups/${TS}"
-            cp -a /opt/wai-telegram "${TMP_BACKUP}"
-            mv "${TMP_BACKUP}" "${FINAL_BACKUP}"
-            ln -sfn "${FINAL_BACKUP}" /opt/wai-telegram-backup
-            echo "Backup created at ${FINAL_BACKUP}"
-            # Keep only the 5 most recent backups
-            ls -dt /opt/wai-telegram-backups/*/ 2>/dev/null | tail -n +6 | xargs rm -rf
+      - name: Build and verify release before downtime
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- "$RELEASE_SHA" << 'EOF'
+          set -euo pipefail
+          RELEASE_SHA=$1
+          readonly BOT_API_COMMIT="adfd7f6a8e990272851777eeb3ae0def4216f161"
+          release_dir="/opt/wai-telegram-releases/release-$RELEASE_SHA"
+          chown -R root:root "$release_dir"
+          install -d -o wai -g wai -m 0755 "$release_dir/.venv"
+          chown -R wai:wai "$release_dir/packages/backend" \
+            "$release_dir/packages/mcp-server" "$release_dir/packages/frontend"
+          install -o root -g wai -m 0640 /opt/wai-telegram/.env.production \
+            "$release_dir/.env.production"
+          set -a
+          source "$release_dir/.env.production"
+          set +a
+          for variable in DATABASE_URL REDIS_URL OWNER_USER_ID SECRET_KEY \
+            NEXT_SERVER_ACTIONS_ENCRYPTION_KEY NEXT_PUBLIC_API_URL SENTRY_DSN \
+            OPENAI_API_KEY DEEPGRAM_API_KEY TELEGRAM_BOT_TOKEN TELEGRAM_API_ID \
+            TELEGRAM_API_HASH; do
+            test -n "${!variable:-}" || { echo "Missing $variable" >&2; exit 1; }
+          done
+          install -d -o root -g wai-media -m 0750 /etc/wai-telegram
+          bot_env=$(mktemp /etc/wai-telegram/.bot-api.env.XXXXXX)
+          printf 'TELEGRAM_API_ID=%s\nTELEGRAM_API_HASH=%s\n' \
+            "$TELEGRAM_API_ID" "$TELEGRAM_API_HASH" > "$bot_env"
+          chown root:wai-media "$bot_env"
+          chmod 0640 "$bot_env"
+          mv -f "$bot_env" /etc/wai-telegram/bot-api.env
+          if [ ! -x /usr/local/bin/telegram-bot-api ] \
+            || [ ! -r /usr/local/share/wai-telegram/telegram-bot-api.commit ] \
+            || [ "$(cat /usr/local/share/wai-telegram/telegram-bot-api.commit 2>/dev/null || true)" != "$BOT_API_COMMIT" ]; then
+            "$release_dir/scripts/install-telegram-bot-api.sh"
           fi
+          "$release_dir/scripts/install-restic.sh"
+          "$release_dir/scripts/restic-init.sh"
+          runuser -u wai -- /home/wai/.local/bin/uv sync \
+            --directory "$release_dir" --all-packages --no-dev --frozen
+          runuser -u wai -- bash -c \
+            "cd '$release_dir/packages/frontend' && set -a && source '$release_dir/.env.production' && set +a && npm ci --prefer-offline && npm run build"
+          test -x "$release_dir/.venv/bin/python"
+          test -f "$release_dir/packages/frontend/.next/BUILD_ID"
           EOF
 
-      - name: Sync code to server
+      - name: Create verified authenticated and off-host backups
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
         run: |
-          rsync -avz --delete \
-            -e "ssh $SSH_OPTS" \
-            --exclude '.git' \
-            --exclude 'node_modules' \
-            --exclude '.venv' \
-            --exclude '__pycache__' \
-            --exclude '.next' \
-            --exclude '*.pyc' \
-            --exclude 'code/' \
-            --exclude '.DS_Store' \
-            --exclude '.env.production' \
-            --exclude '.env' \
-            ./ ${USER}@${HOST}:${DEPLOY_DIR}/
-
-      - name: Fix ownership
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          chown -R wai:wai /opt/wai-telegram
-          # Ensure .env.production is readable by wai user (file is excluded from rsync)
-          if [ -f /opt/wai-telegram/.env.production ]; then
-            chown root:wai /opt/wai-telegram/.env.production
-            chmod 640 /opt/wai-telegram/.env.production
-          fi
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          scp "${ssh_opts[@]}" scripts/auth-cutover-backup.sh scripts/restic-backup.sh \
+            "${USER}@${HOST}:/tmp/"
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s << 'EOF'
+          set -euo pipefail
+          trap 'rm -f /tmp/auth-cutover-backup.sh /tmp/restic-backup.sh' EXIT
+          chmod 0700 /tmp/auth-cutover-backup.sh /tmp/restic-backup.sh
+          /tmp/auth-cutover-backup.sh
+          /tmp/restic-backup.sh
           EOF
 
-      - name: Start Docker services
+      - name: Activate release, migrate, cut over, and restart
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
+          RELEASE_SHA: ${{ github.sha }}
+          DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
         run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          cd /opt/wai-telegram
-          set -a && source .env.production && set +a
-          docker compose -f docker-compose.prod.yml up -d
-          EOF
-
-      - name: Wait for PostgreSQL
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          for i in $(seq 1 30); do
-            if docker exec wai-telegram-db pg_isready -U telegram -d telegram_ai > /dev/null 2>&1; then
-              echo "PostgreSQL is ready"
-              exit 0
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s -- \
+            "$RELEASE_SHA" "$DEPLOYMENT_MODE" << 'EOF'
+          set -euo pipefail
+          RELEASE_SHA=$1
+          DEPLOYMENT_MODE=$2
+          services="wai-backend wai-celery wai-celery-beat wai-media wai-media-process wai-media-index wai-listener wai-mcp-sse wai-frontend"
+          release_dir="/opt/wai-telegram-releases/release-$RELEASE_SHA"
+          previous_target=$(readlink -f /opt/wai-telegram)
+          migration_started=0
+          rollback_or_fail_closed() {
+            status=$?
+            [ "$status" -eq 0 ] && return
+            systemctl stop $services telegram-bot-api >/dev/null 2>&1 || true
+            if [ "$migration_started" -eq 0 ]; then
+              rm -f -- /opt/wai-telegram
+              ln -s "$previous_target" /opt/wai-telegram
+              systemctl daemon-reload
+              systemctl start $services >/dev/null 2>&1 || true
+              echo "Activation failed before migration; previous release restored" >&2
+            else
+              echo "Activation failed after migration began; services remain stopped for fail-safe recovery" >&2
             fi
-            echo "Waiting for PostgreSQL... ($i/30)"
+            exit "$status"
+          }
+          trap rollback_or_fail_closed EXIT
+          for service in $services; do
+            systemctl stop "$service" >/dev/null 2>&1 || true
+          done
+          if [ ! -L /opt/wai-telegram ]; then
+            legacy="/opt/wai-telegram-releases/legacy-$(date -u +%Y%m%dT%H%M%SZ)"
+            mv /opt/wai-telegram "$legacy"
+            previous_target="$legacy"
+          else
+            rm -f -- /opt/wai-telegram
+          fi
+          ln -s "$release_dir" /opt/wai-telegram
+          migration_started=1
+          runuser -u wai -- bash -c \
+            'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/alembic upgrade head'
+          set -a
+          source /opt/wai-telegram/.env.production
+          set +a
+          if [ "$DEPLOYMENT_MODE" = "initial-cutover" ]; then
+            runuser -u wai -- bash -c \
+              'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/python -m app.cli.single_user_cutover --apply --confirm-owner "$OWNER_USER_ID"'
+          else
+            runuser -u wai -- bash -c \
+              'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/python -m app.cli.single_user_validate'
+          fi
+          for unit in /opt/wai-telegram/systemd/*.service /opt/wai-telegram/systemd/*.timer; do
+            install -o root -g root -m 0644 "$unit" /etc/systemd/system/
+          done
+          install -o root -g root -m 0644 /opt/wai-telegram/nginx/telegram-ai.conf \
+            /etc/nginx/sites-available/telegram-ai.conf
+          ln -sfn /etc/nginx/sites-available/telegram-ai.conf \
+            /etc/nginx/sites-enabled/telegram-ai.conf
+          systemctl daemon-reload
+          systemctl enable telegram-bot-api wai-media wai-media-process wai-media-index
+          systemctl enable --now wai-media-volume-monitor.timer \
+            wai-restic-backup.timer wai-restic-check.timer wai-restic-restore-drill.timer
+          nginx -t
+          systemctl restart telegram-bot-api
+          for attempt in $(seq 1 30); do
+            curl -sS --max-time 2 http://127.0.0.1:8081/ >/dev/null 2>&1 && break
+            [ "$attempt" -eq 30 ] && exit 1
             sleep 2
           done
-          echo "PostgreSQL failed to start"
-          exit 1
-          EOF
-
-      - name: Stop services before deploy
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          # Stop services that hold DB connections so migrations can run
-          systemctl stop wai-backend wai-celery wai-celery-beat wai-media wai-listener wai-mcp-sse || true
-          sleep 2
-          EOF
-
-      - name: Install media system dependency
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          if ! command -v ffmpeg > /dev/null 2>&1; then
-            apt-get update
-            apt-get install -y ffmpeg
+          if [ "$DEPLOYMENT_MODE" = "initial-cutover" ]; then
+            bot_mode="--initial-cloud-cutover"
+          else
+            bot_mode="--verify-local"
           fi
-          ffmpeg -version | head -n 1
-          EOF
-
-      - name: Install Python dependencies
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          export PATH="/home/wai/.local/bin:$PATH"
-          su - wai -c 'cd /opt/wai-telegram/packages/backend && /home/wai/.local/bin/uv sync'
-          su - wai -c 'cd /opt/wai-telegram/packages/mcp-server && /home/wai/.local/bin/uv sync'
-          EOF
-
-      - name: Run database migrations
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          cd /opt/wai-telegram/packages/backend
-          set -a && source /opt/wai-telegram/.env.production && set +a
-          su - wai -c 'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /home/wai/.local/bin/uv run alembic upgrade head'
-          EOF
-
-      - name: Build frontend
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          su - wai -c 'cd /opt/wai-telegram/packages/frontend && set -a && source /opt/wai-telegram/.env.production && set +a && npm ci --prefer-offline && npm run build'
-          EOF
-
-      - name: Deploy systemd services
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          cd /opt/wai-telegram
-          cp systemd/wai-backend.service /etc/systemd/system/
-          cp systemd/wai-celery.service /etc/systemd/system/
-          cp systemd/wai-celery-beat.service /etc/systemd/system/
-          cp systemd/wai-media.service /etc/systemd/system/
-          cp systemd/wai-frontend.service /etc/systemd/system/
-          cp systemd/wai-listener.service /etc/systemd/system/
-          cp systemd/wai-mcp-sse.service /etc/systemd/system/
-          systemctl daemon-reload
-          systemctl enable wai-media
-          EOF
-
-      - name: Restart services
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          set -e
-          systemctl restart wai-backend
-          systemctl restart wai-celery wai-celery-beat wai-media wai-frontend wai-listener wai-mcp-sse
-
-          # Reload nginx config
-          cd /opt/wai-telegram
-          cp nginx/telegram-ai.conf /etc/nginx/sites-available/
-          ln -sf /etc/nginx/sites-available/telegram-ai.conf /etc/nginx/sites-enabled/
-          nginx -t && systemctl reload nginx
-          echo "All services restarted"
-          EOF
-
-      - name: Verify service status
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh $SSH_OPTS ${USER}@${HOST} << 'EOF'
-          SERVICES="wai-backend wai-celery wai-celery-beat wai-media wai-frontend wai-listener wai-mcp-sse"
-
-          # Wait for all systemd services
-          for attempt in 1 2 3 4 5 6; do
-            if systemctl is-active --quiet $SERVICES 2>/dev/null; then
-              echo "All systemd services active"
+          runuser -u wai -- bash -c \
+            "cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/python -m app.cli.bot_api_cutover $bot_mode"
+          systemctl restart $services
+          systemctl reload nginx
+          for attempt in $(seq 1 12); do
+            if systemctl is-active --quiet $services telegram-bot-api \
+              && curl -sf --max-time 10 http://127.0.0.1:8000/health/ready >/dev/null; then
               break
             fi
-            if [ "$attempt" -eq 6 ]; then
-              echo "Services not active after 60s"
-              systemctl --no-pager status $SERVICES || true
-              exit 1
-            fi
-            echo "Waiting for services... (attempt $attempt/6)"
+            [ "$attempt" -eq 12 ] && exit 1
             sleep 10
           done
-
-          docker ps --format '{{.Names}}' | grep -q '^wai-telegram-db$'
-          docker ps --format '{{.Names}}' | grep -q '^wai-telegram-redis$'
-
-          # Wait for backend HTTP to be ready
-          for attempt in 1 2 3 4 5 6; do
-            if curl -sf --max-time 10 http://127.0.0.1:8000/health/ready > /dev/null 2>&1; then
-              echo "Backend health check passed"
-              break
-            fi
-            if [ "$attempt" -eq 6 ]; then
-              echo "Backend health check failed after 60s"
-              exit 1
-            fi
-            echo "Waiting for backend... (attempt $attempt/6)"
-            sleep 10
-          done
-
-          # Celery ping with retries (worker may still be starting)
-          cd /opt/wai-telegram/packages/backend
-          for i in 1 2 3 4 5; do
-            if /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app inspect ping --timeout=15 2>/dev/null | grep -q pong; then
-              echo "Celery worker responding"
-              exit 0
-            fi
-            echo "Celery not ready yet, attempt $i/5..."
-            sleep 10
-          done
-          echo "Celery worker failed to respond"
-          exit 1
+          /opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app \
+            inspect ping --timeout=15 | grep -q pong
+          migration_started=2
+          trap - EXIT
           EOF
 
-      - name: Health check
+      - name: Verify public health and protected MCP
         run: |
-          for i in 1 2 3 4 5 6; do
-            sleep 10
-            if curl -sf --max-time 10 https://telegram.waiwai.is/health/ready; then
-              echo ""
-              echo "Deployment successful!"
-              exit 0
+          for attempt in $(seq 1 6); do
+            if curl -sf --max-time 10 https://telegram.waiwai.is/health/ready >/dev/null; then
+              break
             fi
-            echo "Attempt $i/6 failed, retrying..."
+            [ "$attempt" -eq 6 ] && exit 1
+            sleep 10
           done
-          echo "Health check failed after 6 attempts"
-          exit 1
-
-      - name: Verify MCP endpoint
-        run: |
           status=$(curl -sS -o /tmp/mcp_probe.out -w '%{http_code}' https://telegram.waiwai.is/mcp)
-          cat /tmp/mcp_probe.out
-          if [ "$status" != "401" ]; then
-            echo ""
-            echo "Expected MCP endpoint to require authentication with HTTP 401, got: $status"
+          [ "$status" = "401" ] || {
+            echo "Expected MCP authentication challenge, got HTTP $status" >&2
             exit 1
-          fi
-          echo ""
-          echo "MCP endpoint is reachable and enforcing API key auth"
+          }
+
+      - name: Start checkpointed post-deploy reconciliation
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh_opts=(-i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes)
+          ssh "${ssh_opts[@]}" "${USER}@${HOST}" bash -s << 'EOF'
+          set -euo pipefail
+          systemctl start --no-block wai-search-indexes.service
+          systemctl start --no-block wai-metadata-reconcile.service
+          EOF

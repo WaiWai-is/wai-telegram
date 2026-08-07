@@ -1,0 +1,126 @@
+#!/bin/bash
+set -euo pipefail
+
+readonly ENV_FILE="/opt/wai-telegram/.env.production"
+readonly DATABASE_CONTAINER="wai-telegram-db"
+readonly BOT_API_COMMIT="adfd7f6a8e990272851777eeb3ae0def4216f161"
+
+usage() {
+    echo "Usage: $0 --mode initial-cutover|standard" >&2
+    exit 2
+}
+
+mode=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --mode) mode="${2:-}"; shift 2 ;;
+        *) usage ;;
+    esac
+done
+[ "$mode" = "initial-cutover" ] || [ "$mode" = "standard" ] || usage
+[ "$(id -u)" -eq 0 ] || { echo "Run as root" >&2; exit 1; }
+[ -r "$ENV_FILE" ] || { echo "Missing $ENV_FILE" >&2; exit 1; }
+set -a
+source "$ENV_FILE"
+set +a
+: "${OWNER_USER_ID:?OWNER_USER_ID is required}"
+case "$OWNER_USER_ID" in
+    ????????-????-????-????-????????????) ;;
+    *) echo "OWNER_USER_ID must be a UUID" >&2; exit 1 ;;
+esac
+
+command -v docker >/dev/null || { echo "Missing required command: docker" >&2; exit 1; }
+docker exec "$DATABASE_CONTAINER" pg_isready -U telegram -d telegram_ai >/dev/null
+
+cpu_count=$(nproc)
+memory_kib=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+if mountpoint -q /srv/wai-telegram-media; then
+    media_bytes=$(df --output=size -B1 /srv/wai-telegram-media | tail -n 1)
+else
+    media_bytes=0
+fi
+[ "$cpu_count" -ge 4 ] && [ "$memory_kib" -ge 7500000 ] || {
+    echo "Server must be upgraded to at least 4 CPU / 8 GB RAM" >&2
+    exit 1
+}
+[ "$media_bytes" -ge 450000000000 ] || {
+    echo "A mounted 500 GB-class media volume is required" >&2
+    exit 1
+}
+for required_file in \
+    /etc/wai-telegram/restic.env \
+    /etc/wai-telegram/restic-password \
+    /etc/wai-telegram/auth-backup-passphrase; do
+    [ -r "$required_file" ] || {
+        echo "Missing required root configuration: $required_file" >&2
+        exit 1
+    }
+    [ "$(stat -c '%u:%a' "$required_file")" = "0:600" ] || {
+        echo "Root configuration must be owned by root with mode 0600: $required_file" >&2
+        exit 1
+    }
+done
+
+psql_query() {
+    printf '%s\n' "$1" | docker exec -i "$DATABASE_CONTAINER" psql \
+        --username telegram \
+        --dbname telegram_ai \
+        --no-align \
+        --tuples-only \
+        --set ON_ERROR_STOP=1 \
+        --set owner="$OWNER_USER_ID"
+}
+
+if [ "$mode" = "initial-cutover" ]; then
+    evidence=$(psql_query "
+        WITH expected AS (SELECT :'owner'::uuid AS id),
+        session_users AS (
+          SELECT coalesce(array_agg(DISTINCT user_id ORDER BY user_id), ARRAY[]::uuid[]) AS ids
+          FROM telegram_sessions WHERE is_active IS TRUE
+        ),
+        key_users AS (
+          SELECT coalesce(array_agg(DISTINCT user_id ORDER BY user_id), ARRAY[]::uuid[]) AS ids
+          FROM api_keys
+          WHERE is_active IS TRUE AND last_used_at >= now() - interval '60 minutes'
+        ),
+        volumes AS (
+          SELECT c.user_id, count(DISTINCT c.id) AS chats, count(m.id) AS messages
+          FROM telegram_chats c LEFT JOIN telegram_messages m ON m.chat_id = c.id
+          GROUP BY c.user_id
+        ),
+        top_users AS (
+          SELECT coalesce(array_agg(user_id ORDER BY user_id), ARRAY[]::uuid[]) AS ids
+          FROM volumes WHERE messages = (SELECT max(messages) FROM volumes) AND messages > 0
+        )
+        SELECT
+          (session_users.ids = ARRAY[expected.id])::int || '|' ||
+          (key_users.ids = ARRAY[expected.id])::int || '|' ||
+          (top_users.ids = ARRAY[expected.id])::int || '|' ||
+          coalesce((SELECT chats FROM volumes WHERE user_id = expected.id), 0) || '|' ||
+          coalesce((SELECT messages FROM volumes WHERE user_id = expected.id), 0) || '|' ||
+          (SELECT count(*) FROM users)
+        FROM expected, session_users, key_users, top_users;")
+    IFS='|' read -r session_ok key_ok volume_ok owner_chats owner_messages total_users <<<"$evidence"
+    [ "$session_ok$key_ok$volume_ok" = "111" ] || {
+        echo "Owner evidence is ambiguous; no production mutation is allowed" >&2
+        exit 1
+    }
+    echo "initial-cutover preflight: owner_chats=$owner_chats owner_messages=$owner_messages total_users=$total_users"
+else
+    state=$(psql_query "
+        WITH expected AS (SELECT :'owner'::uuid AS id)
+        SELECT
+          (SELECT count(*) FROM users WHERE is_active IS TRUE) || '|' ||
+          (SELECT count(*) FROM users, expected WHERE users.id = expected.id AND users.is_active IS TRUE) || '|' ||
+          (SELECT count(*) FROM api_keys, expected WHERE api_keys.user_id <> expected.id AND api_keys.is_active IS TRUE) || '|' ||
+          (SELECT count(*) FROM telegram_sessions, expected WHERE telegram_sessions.user_id <> expected.id AND (telegram_sessions.is_active IS TRUE OR telegram_sessions.session_string <> ''))
+        FROM expected;")
+    IFS='|' read -r active_users owner_active archive_keys archive_sessions <<<"$state"
+    [ "$active_users|$owner_active|$archive_keys|$archive_sessions" = "1|1|0|0" ] || {
+        echo "Single-user production invariants failed" >&2
+        exit 1
+    }
+    echo "standard preflight: exactly OWNER_USER_ID is active and archive credentials are revoked"
+fi
+
+echo "read-only infrastructure snapshot: cpu=$cpu_count memory_kib=$memory_kib media_bytes=$media_bytes bot_api_commit=$BOT_API_COMMIT"

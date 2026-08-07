@@ -2,6 +2,7 @@
 Description=WAI Telegram Backend (FastAPI)
 After=network.target docker.service
 Requires=docker.service
+RequiresMountsFor=/srv/wai-telegram-media
 Wants=wai-celery.service
 StartLimitIntervalSec=300
 StartLimitBurst=10
@@ -10,13 +11,14 @@ StartLimitBurst=10
 Type=simple
 User=wai
 Group=wai
+SupplementaryGroups=wai-media
 WorkingDirectory=/opt/wai-telegram/packages/backend
 Environment="PATH=/home/wai/.local/bin:/usr/local/bin:/usr/bin"
 EnvironmentFile=/opt/wai-telegram/.env.production
 
 ExecStartPre=+/bin/sh -c 'n=0; until docker exec wai-telegram-db pg_isready -U telegram -d telegram_ai >/dev/null 2>&1; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 2; done'
 ExecStartPre=+/bin/sh -c 'n=0; until docker exec wai-telegram-redis redis-cli ping >/dev/null 2>&1; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 2; done'
-ExecStart=/opt/wai-telegram/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+ExecStart=/opt/wai-telegram/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log
 
 Restart=always
 RestartSec=5
@@ -31,7 +33,7 @@ SyslogIdentifier=wai-backend
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=false
-ReadWritePaths=/opt/wai-telegram /tmp
+ReadWritePaths=/opt/wai-telegram /srv/wai-telegram-media /tmp
 PrivateTmp=true
 ProtectKernelModules=true
 ProtectKernelTunables=true

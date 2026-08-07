@@ -1,0 +1,21 @@
+[Unit]
+Description=WAI Telegram encrypted media and database backup
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+RequiresMountsFor=/srv/wai-telegram-media
+
+[Service]
+Type=oneshot
+User=root
+CacheDirectory=wai-telegram-restic
+Environment=RESTIC_CACHE_DIR=/var/cache/wai-telegram-restic
+ExecStart=/opt/wai-telegram/scripts/restic-backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/wai-telegram-media /opt/wai-telegram-backups /tmp /var/cache/wai-telegram-restic
