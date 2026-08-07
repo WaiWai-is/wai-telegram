@@ -1,12 +1,14 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.models.chat import ChatType
 
 
 class ChatResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     telegram_chat_id: int
     chat_type: ChatType
@@ -20,9 +22,6 @@ class ChatResponse(BaseModel):
     last_message_sender_name: str | None = None
     unread_count: int = 0
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class ChatListResponse(BaseModel):

@@ -45,6 +45,12 @@ class DigitalAgent(Base):
 
     # Limits
     max_tokens_per_run: Mapped[int] = mapped_column(Integer, default=4096)
+    max_runtime_seconds: Mapped[int] = mapped_column(
+        Integer, default=300, server_default="300"
+    )
+    max_tool_turns: Mapped[int] = mapped_column(
+        Integer, default=10, server_default="10"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

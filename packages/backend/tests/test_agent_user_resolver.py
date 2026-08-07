@@ -1,5 +1,9 @@
-"""Tests for User Resolver — maps Telegram IDs to internal users."""
+"""Tests for the closed single-user Telegram resolver."""
 
+from sqlalchemy import func, select
+
+from app.models.session import TelegramSession
+from app.models.user import User
 from app.services.agent.user_resolver import _cache, clear_cache
 
 
@@ -35,3 +39,50 @@ class TestUserResolverCache:
         assert _cache[111] == uid1
         assert _cache[222] == uid2
         assert _cache[111] != _cache[222]
+
+
+class TestUserResolverDatabase:
+    async def test_active_owner_session_resolves(self, db_session, test_user):
+        session = TelegramSession(
+            user_id=test_user.id,
+            phone_number="+10000000000",
+            session_string="encrypted",
+            telegram_user_id=777,
+            is_active=True,
+        )
+        db_session.add(session)
+        await db_session.flush()
+
+        from app.services.agent.user_resolver import resolve_user_id
+
+        assert await resolve_user_id(db_session, 777) == test_user.id
+
+    async def test_unknown_sender_is_not_created(self, db_session):
+        before = (
+            await db_session.execute(select(func.count()).select_from(User))
+        ).scalar_one()
+
+        from app.services.agent.user_resolver import resolve_user_id
+
+        assert await resolve_user_id(db_session, 999_999) is None
+        after = (
+            await db_session.execute(select(func.count()).select_from(User))
+        ).scalar_one()
+        assert after == before
+
+    async def test_inactive_user_session_is_rejected(self, db_session, test_user):
+        test_user.is_active = False
+        db_session.add(
+            TelegramSession(
+                user_id=test_user.id,
+                phone_number="+10000000000",
+                session_string="encrypted",
+                telegram_user_id=888,
+                is_active=True,
+            )
+        )
+        await db_session.flush()
+
+        from app.services.agent.user_resolver import resolve_user_id
+
+        assert await resolve_user_id(db_session, 888) is None

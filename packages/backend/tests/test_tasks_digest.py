@@ -122,6 +122,36 @@ class TestGetEligibleUserIds:
         # Users without a settings row default to hour 9
         pass
 
+    async def test_inactive_user_is_not_eligible(self, db_session):
+        from contextlib import asynccontextmanager
+
+        user = User(
+            email="archived-digest@example.com",
+            password_hash=hash_password("TestPass1"),
+            is_active=False,
+        )
+        db_session.add(user)
+        await db_session.flush()
+        db_session.add(
+            UserSettings(
+                user_id=user.id,
+                digest_enabled=True,
+                digest_hour_utc=14,
+            )
+        )
+        await db_session.flush()
+
+        @asynccontextmanager
+        async def test_db_context():
+            yield db_session
+
+        with patch(
+            "app.tasks.digest_tasks.get_db_context", side_effect=test_db_context
+        ):
+            from app.tasks.digest_tasks import _get_eligible_user_ids
+
+            assert user.id not in await _get_eligible_user_ids(14)
+
 
 # ---------------------------------------------------------------------------
 # _get_eligible_user_ids — mocked DB path
@@ -214,12 +244,17 @@ class TestGenerateUserDigestAsync:
         mock_digest.digest_date = digest_date
         mock_digest.content = "Test digest content"
 
+        mock_active_result = MagicMock()
+        mock_active_result.scalar_one_or_none.return_value = uid
+
         # Settings query returns None (no telegram delivery)
         mock_settings_result = MagicMock()
         mock_settings_result.scalar_one_or_none.return_value = None
 
         mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(side_effect=[mock_settings_result])
+        mock_db.execute = AsyncMock(
+            side_effect=[mock_active_result, mock_settings_result]
+        )
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
@@ -254,6 +289,9 @@ class TestGenerateUserDigestAsync:
         mock_settings_result = MagicMock()
         mock_settings_result.scalar_one_or_none.return_value = mock_settings
 
+        mock_active_result = MagicMock()
+        mock_active_result.scalar_one_or_none.return_value = uid
+
         mock_session = MagicMock()
         mock_session.telegram_user_id = 123456
 
@@ -262,7 +300,7 @@ class TestGenerateUserDigestAsync:
 
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(
-            side_effect=[mock_settings_result, mock_session_result]
+            side_effect=[mock_active_result, mock_settings_result, mock_session_result]
         )
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
@@ -306,6 +344,9 @@ class TestGenerateUserDigestAsync:
         mock_settings_result = MagicMock()
         mock_settings_result.scalar_one_or_none.return_value = mock_settings
 
+        mock_active_result = MagicMock()
+        mock_active_result.scalar_one_or_none.return_value = uid
+
         mock_session = MagicMock()
         mock_session.telegram_user_id = 999
 
@@ -314,7 +355,7 @@ class TestGenerateUserDigestAsync:
 
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(
-            side_effect=[mock_settings_result, mock_session_result]
+            side_effect=[mock_active_result, mock_settings_result, mock_session_result]
         )
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
@@ -352,13 +393,16 @@ class TestGenerateUserDigestAsync:
         mock_settings_result = MagicMock()
         mock_settings_result.scalar_one_or_none.return_value = mock_settings
 
+        mock_active_result = MagicMock()
+        mock_active_result.scalar_one_or_none.return_value = uid
+
         # No active session
         mock_session_result = MagicMock()
         mock_session_result.scalar_one_or_none.return_value = None
 
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(
-            side_effect=[mock_settings_result, mock_session_result]
+            side_effect=[mock_active_result, mock_settings_result, mock_session_result]
         )
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)

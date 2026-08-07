@@ -1,32 +1,6 @@
 import pytest
-from app.schemas.auth import ApiKeyCreateRequest, RegisterRequest
+from app.schemas.auth import ApiKeyCreateRequest
 from pydantic import ValidationError
-
-
-class TestRegisterRequest:
-    def test_valid_registration(self):
-        req = RegisterRequest(email="user@example.com", password="StrongPass1")
-        assert req.email == "user@example.com"
-
-    def test_password_too_short(self):
-        with pytest.raises(ValidationError, match="at least 8 characters"):
-            RegisterRequest(email="user@example.com", password="Short1")
-
-    def test_password_no_uppercase(self):
-        with pytest.raises(ValidationError, match="uppercase"):
-            RegisterRequest(email="user@example.com", password="alllowercase1")
-
-    def test_password_no_digit(self):
-        with pytest.raises(ValidationError, match="digit"):
-            RegisterRequest(email="user@example.com", password="NoDigitHere")
-
-    def test_valid_strong_password(self):
-        req = RegisterRequest(email="user@example.com", password="MyStr0ng!")
-        assert req.password == "MyStr0ng!"
-
-    def test_invalid_email(self):
-        with pytest.raises(ValidationError):
-            RegisterRequest(email="not-an-email", password="StrongPass1")
 
 
 class TestApiKeyCreateRequest:

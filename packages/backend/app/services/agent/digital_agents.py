@@ -16,10 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.digital_agent import DigitalAgent
 from app.services.generation_service import generate_text
+from app.services.tool_registry import TOOL_DEFINITIONS
 
 logger = logging.getLogger(__name__)
 
-MAX_AGENTS_PER_USER = 5
+_AGENT_TOOL_NAMES = (
+    "search_web",
+    *(definition.name for definition in TOOL_DEFINITIONS),
+)
 
 CREATION_PROMPT = """Analyze this user request and create a digital agent configuration.
 
@@ -33,13 +37,36 @@ Extract:
    - "every Monday" / "каждый понедельник" → "0 9 * * 1"
    - "twice a day" / "два раза в день" → "0 9,21 * * *"
    - If no schedule specified → "manual"
-3. tools — which tools the agent needs (comma-separated):
-   - "search_web" — for internet browsing/monitoring
-   - "search_messages" — for searching user's Telegram history
+3. tools — which tools the agent needs (comma-separated), using only this list:
+{tool_catalog}
 4. system_prompt — optimized prompt for the agent's task. Be specific about output format.
 
 Respond in JSON only, no explanation:
 {{"name": "...", "cron": "...", "tools": "...", "system_prompt": "..."}}"""
+
+
+def _render_creation_prompt(description: str) -> str:
+    catalog = ["   - search_web — search current internet information"]
+    catalog.extend(
+        f"   - {definition.name} — {definition.description}"
+        for definition in TOOL_DEFINITIONS
+    )
+    return CREATION_PROMPT.format(
+        description=description,
+        tool_catalog="\n".join(catalog),
+    )
+
+
+def _normalize_agent_tools(raw_tools: str) -> str:
+    if not isinstance(raw_tools, str):
+        raise ValueError("Scheduled-agent tools must be a comma-separated string")
+    selected = {name.strip() for name in raw_tools.split(",") if name.strip()}
+    unsupported = selected.difference(_AGENT_TOOL_NAMES)
+    if unsupported:
+        raise ValueError(
+            "Unsupported scheduled-agent tool: " + ", ".join(sorted(unsupported))
+        )
+    return ",".join(name for name in _AGENT_TOOL_NAMES if name in selected)
 
 
 async def create_agent_from_description(
@@ -50,19 +77,8 @@ async def create_agent_from_description(
 ) -> DigitalAgent:
     """Parse a natural language description into a structured agent."""
 
-    # Check limit
-    result = await db.execute(
-        select(DigitalAgent).where(
-            DigitalAgent.user_id == user_id,
-            DigitalAgent.status == "active",
-        )
-    )
-    active_count = len(result.scalars().all())
-    if active_count >= MAX_AGENTS_PER_USER:
-        raise ValueError(f"Maximum {MAX_AGENTS_PER_USER} active agents allowed")
-
     raw = await generate_text(
-        CREATION_PROMPT.format(description=description),
+        _render_creation_prompt(description),
         max_output_tokens=500,
     )
     # Strip markdown if present
@@ -71,9 +87,20 @@ async def create_agent_from_description(
         raw = raw.rsplit("```", 1)[0] if "```" in raw else raw
 
     config = json.loads(raw)
+    if not isinstance(config, dict):
+        raise ValueError("Scheduled-agent configuration must be a JSON object")
+    for field in ("name", "cron", "tools", "system_prompt"):
+        if not isinstance(config.get(field), str) or not config[field].strip():
+            raise ValueError(
+                f"Scheduled-agent field {field} must be a non-empty string"
+            )
+
+    name = config["name"].strip()
+    system_prompt = config["system_prompt"].strip()
+    normalized_tools = _normalize_agent_tools(config["tools"])
 
     # Compute next run
-    cron = config.get("cron", "manual")
+    cron = config["cron"].strip()
     next_run = None
     schedule_type = "manual"
     if cron and cron != "manual":
@@ -83,10 +110,10 @@ async def create_agent_from_description(
     agent = DigitalAgent(
         user_id=user_id,
         telegram_chat_id=telegram_chat_id,
-        name=config["name"][:200],
+        name=name[:50],
         description=description,
-        system_prompt=config["system_prompt"],
-        tools=config.get("tools", ""),
+        system_prompt=system_prompt,
+        tools=normalized_tools,
         schedule_type=schedule_type,
         cron_expression=cron if cron != "manual" else None,
         status="active",

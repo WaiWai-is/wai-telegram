@@ -1,8 +1,10 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from app.models.chat import ChatType, TelegramChat
+from app.models.media import TranscriptSegment
 from app.models.message import MediaProcessingStatus, TelegramMessage
 from app.services.telegram_client import TelegramSessionUnauthorizedError
 
@@ -202,6 +204,179 @@ class TestGetMessageContent:
         )
 
         assert response.status_code == 404
+
+
+class TestMessageMediaEndpoints:
+    async def test_transcript_paginates_without_truncation(
+        self,
+        auth_client,
+        db_session,
+        test_user,
+    ):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=55001,
+            chat_type=ChatType.PRIVATE,
+            title="Transcript",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+        message = TelegramMessage(
+            chat_id=chat.id,
+            telegram_message_id=501,
+            has_media=True,
+            media_type="voice",
+            sent_at=datetime.now(UTC),
+        )
+        db_session.add(message)
+        await db_session.flush()
+        db_session.add_all(
+            [
+                TranscriptSegment(
+                    message_id=message.id,
+                    sequence=sequence,
+                    start_ms=sequence * 1000,
+                    end_ms=(sequence + 1) * 1000,
+                    text=f"segment {sequence}",
+                )
+                for sequence in range(3)
+            ]
+        )
+        await db_session.flush()
+
+        first = await auth_client.get(
+            f"/api/v1/chats/{chat.id}/messages/501/transcript",
+            params={"limit": 2},
+        )
+        second = await auth_client.get(
+            f"/api/v1/chats/{chat.id}/messages/501/transcript",
+            params={"cursor": 2, "limit": 2},
+        )
+
+        assert first.status_code == 200
+        assert [row["sequence"] for row in first.json()["segments"]] == [0, 1]
+        assert first.json()["has_more"] is True
+        assert first.json()["next_cursor"] == 2
+        assert second.status_code == 200
+        assert [row["sequence"] for row in second.json()["segments"]] == [2]
+        assert second.json()["has_more"] is False
+        assert second.json()["next_cursor"] is None
+
+    async def test_media_get_and_head_return_nginx_internal_headers(
+        self,
+        auth_client,
+        db_session,
+        test_user,
+    ):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=55003,
+            chat_type=ChatType.PRIVATE,
+            title="Download",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+        message = TelegramMessage(
+            chat_id=chat.id,
+            telegram_message_id=503,
+            has_media=True,
+            media_type="document",
+            sent_at=datetime.now(UTC),
+        )
+        db_session.add(message)
+        await db_session.flush()
+        cached = SimpleNamespace(
+            relative_path="ab/cache/original.pdf",
+            sha256="c" * 64,
+            file_name="report.pdf",
+            mime_type="application/pdf",
+        )
+
+        with patch(
+            "app.api.v1.chats.get_cached_media_for_download",
+            new=AsyncMock(return_value=cached),
+        ):
+            get_response = await auth_client.get(
+                f"/api/v1/chats/{chat.id}/messages/503/media"
+            )
+            head_response = await auth_client.head(
+                f"/api/v1/chats/{chat.id}/messages/503/media"
+            )
+
+        for response in (get_response, head_response):
+            assert response.status_code == 200
+            assert response.headers["x-accel-redirect"].endswith(
+                "/ab/cache/original.pdf"
+            )
+            assert response.headers["etag"] == f'"{"c" * 64}"'
+            assert "report.pdf" in response.headers["content-disposition"]
+        assert head_response.content == b""
+
+    async def test_media_cache_miss_requires_prepare(
+        self,
+        auth_client,
+        db_session,
+        test_user,
+    ):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=55004,
+            chat_type=ChatType.PRIVATE,
+            title="Cache miss",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+        message = TelegramMessage(
+            chat_id=chat.id,
+            telegram_message_id=504,
+            has_media=True,
+            media_type="video",
+            sent_at=datetime.now(UTC),
+        )
+        db_session.add(message)
+        await db_session.flush()
+
+        response = await auth_client.get(f"/api/v1/chats/{chat.id}/messages/504/media")
+
+        assert response.status_code == 409
+        assert "prepare_media" in response.json()["detail"]
+
+    async def test_prepare_is_idempotent_while_dispatch_is_pending(
+        self,
+        auth_client,
+        db_session,
+        test_user,
+    ):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=55002,
+            chat_type=ChatType.PRIVATE,
+            title="Prepare",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+        message = TelegramMessage(
+            chat_id=chat.id,
+            telegram_message_id=502,
+            has_media=True,
+            media_type="document",
+            media_file_name="large.bin",
+            sent_at=datetime.now(UTC),
+        )
+        db_session.add(message)
+        await db_session.flush()
+
+        with patch("app.api.v1.chats.enqueue_media_processing") as enqueue:
+            first = await auth_client.post(
+                f"/api/v1/chats/{chat.id}/messages/502/prepare"
+            )
+            second = await auth_client.post(
+                f"/api/v1/chats/{chat.id}/messages/502/prepare"
+            )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        enqueue.assert_called_once_with([message.id])
 
 
 class TestRefreshChats:

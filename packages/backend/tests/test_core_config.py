@@ -70,6 +70,16 @@ class TestProductionValidation:
                 encryption_key="real-encryption-key",
             )
 
+    def test_production_requires_owner_user_id(self):
+        with pytest.raises(ValidationError, match="OWNER_USER_ID"):
+            Settings(
+                environment="production",
+                secret_key="real-secret-key",
+                encryption_key="real-encryption-key",
+                telegram_api_id=123,
+                telegram_api_hash="hash",
+            )
+
     def test_development_allows_defaults(self):
         s = Settings(environment="development")
         assert s.secret_key == "dev-secret-key-change-in-production"

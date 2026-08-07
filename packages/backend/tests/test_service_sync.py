@@ -3,6 +3,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from app.models.chat import ChatType, TelegramChat
 from app.models.sync_job import SyncJob, SyncStatus
+from app.models.user import User
 from app.services.sync_service import (
     TelegramSessionUnauthorizedError,
     _get_chat_title,
@@ -198,3 +199,34 @@ class TestSyncMessagesResolvesEntity:
         # NOT the bare chat.telegram_chat_id.
         call_args, _ = mock_client.iter_messages.call_args
         assert call_args[0] is resolved_peer
+
+    async def test_rejects_sync_job_owned_by_another_user(self, db_session, test_user):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=987654321,
+            chat_type=ChatType.PRIVATE,
+            title="Owner chat",
+        )
+        archived_user = User(
+            email="archived@example.com",
+            password_hash="not-used",
+            is_active=False,
+        )
+        db_session.add_all([chat, archived_user])
+        await db_session.flush()
+        foreign_job = SyncJob(
+            user_id=archived_user.id,
+            chat_id=None,
+            status=SyncStatus.PENDING,
+        )
+        db_session.add(foreign_job)
+        await db_session.flush()
+
+        with pytest.raises(ValueError, match="Sync job not found"):
+            await sync_messages(
+                db_session,
+                test_user.id,
+                chat.id,
+                foreign_job.id,
+                client=MagicMock(),
+            )

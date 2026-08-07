@@ -16,10 +16,6 @@ Inline queries are handled via Telegram's answerInlineQuery API.
 import hashlib
 import logging
 
-import httpx
-
-from app.core.config import get_settings
-
 logger = logging.getLogger(__name__)
 
 MAX_INLINE_RESULTS = 5
@@ -140,24 +136,15 @@ def _make_article(title: str, description: str, text: str) -> dict:
 
 async def _answer_inline(query_id: str, results: list[dict]) -> None:
     """Send inline query results back to Telegram."""
-    import os
+    from app.services.telegram_bot_api import get_bot_api_client
 
-    token = os.environ.get("TELEGRAM_BOT_TOKEN") or get_settings().telegram_bot_token
-    if not token:
-        logger.error("No bot token for inline answer")
-        return
-
-    url = f"https://api.telegram.org/bot{token}/answerInlineQuery"
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(
-            url,
-            json={
-                "inline_query_id": query_id,
-                "results": results,
-                "cache_time": 30,  # Cache for 30 seconds
-                "is_personal": True,  # Results are personal to each user
-            },
-        )
-        if resp.status_code != 200:
-            logger.error(f"answerInlineQuery failed: {resp.status_code} {resp.text}")
+    await get_bot_api_client().call(
+        "answerInlineQuery",
+        json={
+            "inline_query_id": query_id,
+            "results": results,
+            "cache_time": 30,
+            "is_personal": True,
+        },
+        timeout=10,
+    )

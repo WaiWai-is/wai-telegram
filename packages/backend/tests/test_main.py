@@ -96,6 +96,19 @@ class TestAPIRouterMounted:
         assert response.status_code == 401
 
 
+class TestOpenAPIContract:
+    async def test_operation_ids_are_unique(self, client):
+        response = await client.get("/openapi.json")
+        assert response.status_code == 200
+        operation_ids = [
+            operation["operationId"]
+            for path in response.json()["paths"].values()
+            for operation in path.values()
+            if "operationId" in operation
+        ]
+        assert len(operation_ids) == len(set(operation_ids))
+
+
 class TestLifespan:
     async def test_marks_orphaned_jobs_without_heartbeat(self):
         from app.main import lifespan

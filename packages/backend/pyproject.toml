@@ -4,28 +4,28 @@ version = "0.1.0"
 description = "FastAPI backend for Telegram AI Message Manager"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.115.0",
+    "fastapi==0.141.1",
     "uvicorn[standard]>=0.32.0",
     "sqlalchemy[asyncio]>=2.0.0",
     "asyncpg>=0.30.0",
     "alembic>=1.14.0",
     "pydantic>=2.10.0",
-    "pydantic-settings>=2.6.0",
-    "PyJWT>=2.8.0",  # Replaced python-jose (CVE-2024-33663, CVE-2025-61152)
-    "passlib[bcrypt]>=1.7.4",
-    "bcrypt>=4.0.0,<4.1.0",  # Pin bcrypt for passlib compatibility
-    "cryptography>=46.0.0",  # Updated from 44.0.0 for security fixes
-    "telethon>=1.38.0",
-    "celery[redis]>=5.4.0",
+    "pydantic-settings==2.14.2",
+    "PyJWT==2.13.0",  # Replaced python-jose (CVE-2024-33663, CVE-2025-61152)
+    "pwdlib[argon2,bcrypt]==0.3.0",
+    "cryptography==50.0.0",
+    "telethon==1.44.0",
+    "cryptg==0.6.0",
+    "celery[redis]==5.6.3",
     "redis>=5.2.0",
-    "openai==2.47.0",
+    "openai==2.53.0",
     "pgvector>=0.3.0",
-    "python-multipart>=0.0.18",
+    "python-multipart==0.0.32",
     "httpx>=0.28.0",
     "email-validator>=2.2.0",
     "slowapi>=0.1.9",  # Rate limiting
     "sentry-sdk[fastapi]>=2.0.0",  # Error tracking
-    "markitdown[pdf,docx,pptx,xlsx,xls,outlook]==0.1.6",
+    "markitdown[pdf,docx,pptx,xlsx,xls,outlook]==0.1.7",
     "croniter>=2.0.0",  # Cron expression parsing for digital agents
 ]
 

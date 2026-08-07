@@ -24,6 +24,7 @@ class UserFactory:
             "id": uuid4(),
             "email": f"user-{uuid4().hex[:8]}@example.com",
             "password_hash": hash_password("TestPassword1"),
+            "is_active": True,
             "created_at": datetime.now(UTC),
         }
         defaults.update(kwargs)

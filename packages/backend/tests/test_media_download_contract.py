@@ -1,19 +1,17 @@
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 
 from app.models.chat import ChatType, TelegramChat
+from app.models.media import MediaObject, MediaObjectStatus, MediaStage
 from app.models.message import TelegramMessage
 from app.services.media_access import (
     create_media_download_token,
     decode_media_download_token,
 )
-from app.services.media_download_service import DownloadedMedia
-from app.services.media_download_service import download_telegram_media
 from app.services.telegram_links import build_telegram_message_url
 
 
@@ -82,67 +80,11 @@ def test_media_download_token_rejects_tampering():
 
 
 @pytest.mark.asyncio
-async def test_download_service_fetches_original_telegram_media(
-    db_session, test_user, tmp_path
-):
-    chat = TelegramChat(
-        user_id=test_user.id,
-        telegram_chat_id=54321,
-        chat_type=ChatType.PRIVATE,
-        title="Media chat",
-    )
-    db_session.add(chat)
-    await db_session.flush()
-
-    telegram_message = MagicMock()
-    telegram_message.media = object()
-    telegram_message.file = MagicMock(mime_type="audio/ogg", name=None)
-    client = AsyncMock()
-    client.get_messages.return_value = telegram_message
-    client.download_media.side_effect = lambda _message, file: _write_file(file)
-    destination = tmp_path / "source"
-
-    with (
-        patch(
-            "app.services.media_download_service.get_client",
-            new_callable=AsyncMock,
-            return_value=client,
-        ),
-        patch(
-            "app.services.media_download_service._resolve_chat_entity",
-            new_callable=AsyncMock,
-            return_value="peer",
-        ),
-    ):
-        result = await download_telegram_media(
-            db_session,
-            test_user.id,
-            chat.id,
-            42,
-            destination,
-        )
-
-    assert result.path == destination
-    assert result.file_name == "telegram-media.oga"
-    assert result.mime_type == "audio/ogg"
-    assert result.file_size == len(b"media")
-    client.get_messages.assert_awaited_once_with("peer", ids=42)
-    client.download_media.assert_awaited_once_with(
-        telegram_message, file=str(destination)
-    )
-    client.disconnect.assert_awaited_once()
-
-
-def _write_file(path: str) -> str:
-    Path(path).write_bytes(b"media")
-    return path
-
-
-@pytest.mark.asyncio
 async def test_content_response_exposes_signed_media_url(
     auth_client,
     db_session,
     test_user,
+    tmp_path,
 ):
     chat = TelegramChat(
         user_id=test_user.id,
@@ -166,8 +108,30 @@ async def test_content_response_exposes_signed_media_url(
     )
     db_session.add(message)
     await db_session.flush()
+    relative_path = "aa/cache/original.mp4"
+    cached_path = tmp_path / relative_path
+    cached_path.parent.mkdir(parents=True)
+    cached_path.write_bytes(b"video")
+    db_session.add(
+        MediaObject(
+            user_id=test_user.id,
+            message_id=message.id,
+            cache_key="a" * 64,
+            relative_path=relative_path,
+            file_name="clip.mp4",
+            mime_type="video/mp4",
+            size_bytes=5,
+            sha256="b" * 64,
+            byte_offset=5,
+            status=MediaObjectStatus.READY,
+            stage=MediaStage.COMPLETE,
+        )
+    )
+    await db_session.flush()
 
-    response = await auth_client.get(f"/api/v1/chats/{chat.id}/messages/42/content")
+    with patch("app.services.media_cache_service.settings") as cache_settings:
+        cache_settings.media_root = tmp_path
+        response = await auth_client.get(f"/api/v1/chats/{chat.id}/messages/42/content")
 
     assert response.status_code == 200
     payload = response.json()
@@ -184,6 +148,7 @@ async def test_signed_media_url_downloads_binary_without_bearer(
     client,
     db_session,
     test_user,
+    tmp_path,
 ):
     chat = TelegramChat(
         user_id=test_user.id,
@@ -204,28 +169,129 @@ async def test_signed_media_url_downloads_binary_without_bearer(
     )
     db_session.add(message)
     await db_session.flush()
-
-    content_response = await auth_client.get(
-        f"/api/v1/chats/{chat.id}/messages/43/content"
-    )
-    media_url = content_response.json()["media_download_url"]
-
-    async def fake_download(
-        _db, _user_id, _chat_id, _message_id, destination, **_kwargs
-    ):
-        destination.write_bytes(b"audio fixture")
-        return DownloadedMedia(
-            path=destination,
+    relative_path = "cc/cache/original.ogg"
+    cached_path = tmp_path / relative_path
+    cached_path.parent.mkdir(parents=True)
+    cached_path.write_bytes(b"audio fixture")
+    db_session.add(
+        MediaObject(
+            user_id=test_user.id,
+            message_id=message.id,
+            cache_key="c" * 64,
+            relative_path=relative_path,
             file_name="voice.ogg",
             mime_type="audio/ogg",
-            file_size=13,
+            size_bytes=13,
+            sha256="d" * 64,
+            byte_offset=13,
+            status=MediaObjectStatus.READY,
+            stage=MediaStage.COMPLETE,
         )
+    )
+    await db_session.flush()
 
-    with pytest.MonkeyPatch.context() as monkeypatch:
-        monkeypatch.setattr("app.api.v1.chats.download_telegram_media", fake_download)
+    with patch("app.services.media_cache_service.settings") as cache_settings:
+        cache_settings.media_root = tmp_path
+        content_response = await auth_client.get(
+            f"/api/v1/chats/{chat.id}/messages/43/content"
+        )
+        media_url = content_response.json()["media_download_url"]
         response = await client.get(media_url)
 
     assert response.status_code == 200
-    assert response.content == b"audio fixture"
+    assert response.content == b""
     assert response.headers["content-type"] == "audio/ogg"
     assert "voice.ogg" in response.headers["content-disposition"]
+    assert response.headers["x-accel-redirect"].endswith(relative_path)
+    assert response.headers["etag"] == f'"{"d" * 64}"'
+    assert "accept-ranges" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_signed_media_url_stops_working_after_user_deactivation(
+    auth_client,
+    client,
+    db_session,
+    test_user,
+    tmp_path,
+):
+    chat = TelegramChat(
+        user_id=test_user.id,
+        telegram_chat_id=54322,
+        chat_type=ChatType.PRIVATE,
+        title="Deactivated media",
+    )
+    db_session.add(chat)
+    await db_session.flush()
+    message = TelegramMessage(
+        chat_id=chat.id,
+        telegram_message_id=44,
+        has_media=True,
+        media_type="document",
+        media_file_name="archive.pdf",
+        media_mime_type="application/pdf",
+        sent_at=datetime.now(UTC),
+    )
+    db_session.add(message)
+    await db_session.flush()
+    relative_path = "ee/cache/original.pdf"
+    path = tmp_path / relative_path
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"pdf")
+    db_session.add(
+        MediaObject(
+            user_id=test_user.id,
+            message_id=message.id,
+            cache_key="e" * 64,
+            relative_path=relative_path,
+            file_name="archive.pdf",
+            mime_type="application/pdf",
+            size_bytes=3,
+            sha256="f" * 64,
+            byte_offset=3,
+            status=MediaObjectStatus.READY,
+            stage=MediaStage.COMPLETE,
+        )
+    )
+    await db_session.flush()
+
+    with patch("app.services.media_cache_service.settings") as cache_settings:
+        cache_settings.media_root = tmp_path
+        content_response = await auth_client.get(
+            f"/api/v1/chats/{chat.id}/messages/44/content"
+        )
+    media_url = content_response.json()["media_download_url"]
+    test_user.is_active = False
+    await db_session.flush()
+
+    response = await client.get(media_url)
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_uncached_content_requires_prepare(auth_client, db_session, test_user):
+    chat = TelegramChat(
+        user_id=test_user.id,
+        telegram_chat_id=54323,
+        chat_type=ChatType.PRIVATE,
+        title="Uncached",
+    )
+    db_session.add(chat)
+    await db_session.flush()
+    db_session.add(
+        TelegramMessage(
+            chat_id=chat.id,
+            telegram_message_id=45,
+            has_media=True,
+            media_type="video",
+            sent_at=datetime.now(UTC),
+        )
+    )
+    await db_session.flush()
+
+    response = await auth_client.get(f"/api/v1/chats/{chat.id}/messages/45/content")
+
+    assert response.status_code == 200
+    assert response.json()["media_download_url"] is None
+    assert "prepare_media" in response.json()["next_action"]

@@ -1,6 +1,7 @@
 """Tests for the Responses API agent loop and its tool boundary."""
 
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, patch
 from uuid import uuid4
@@ -97,6 +98,12 @@ def test_data_classes_and_defaults():
 def test_tool_definitions_convert_to_responses_api_schema():
     assert {tool["name"] for tool in TOOLS} == {
         "search_messages",
+        "get_message",
+        "prepare_media",
+        "download_media",
+        "get_message_content",
+        "get_transcript_segments",
+        "get_data_status",
         "get_digest",
         "track_commitment",
         "extract_entities",
@@ -111,15 +118,26 @@ def test_tool_definitions_convert_to_responses_api_schema():
 @pytest.mark.asyncio
 async def test_execute_tool_dispatches_and_reports_unknown_tools():
     context = _context()
-    with patch(
-        "app.services.agent.loop._tool_search_messages",
-        new_callable=AsyncMock,
-        return_value="found",
-    ) as search:
-        assert (
-            await execute_tool("search_messages", {"query": "test"}, context) == "found"
-        )
-        search.assert_awaited_once_with({"query": "test"}, context)
+    db = AsyncMock()
+
+    @asynccontextmanager
+    async def db_context():
+        yield db
+
+    with (
+        patch("app.core.database.get_db_context", side_effect=db_context),
+        patch(
+            "app.services.tool_registry.execute_data_tool",
+            new_callable=AsyncMock,
+            return_value={"results": [], "has_more": False},
+        ) as execute,
+    ):
+        result = await execute_tool("search_messages", {"query": "test"}, context)
+
+    assert json.loads(result) == {"results": [], "has_more": False}
+    execute.assert_awaited_once_with(
+        db, context.user_id, "search_messages", {"query": "test"}
+    )
 
     assert "Unknown tool" in await execute_tool("missing", {}, context)
 

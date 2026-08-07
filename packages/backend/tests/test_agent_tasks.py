@@ -9,7 +9,13 @@ from uuid import uuid4
 import pytest
 
 from app.models.digital_agent import DigitalAgent
-from app.services.agent.digital_agents import compute_next_run, format_agents_list
+from app.services.agent.digital_agents import (
+    _normalize_agent_tools,
+    _render_creation_prompt,
+    compute_next_run,
+    format_agents_list,
+)
+from app.services.tool_registry import TOOL_DEFINITIONS
 from app.tasks.agent_tasks import (
     MAX_TOOL_ROUNDS,
     _build_tools_for_agent,
@@ -25,6 +31,9 @@ def _agent(**overrides):
         "tools": "",
         "system_prompt": "You are a test agent.",
         "max_tokens_per_run": 1024,
+        "max_runtime_seconds": 300,
+        "max_tool_turns": 10,
+        "user_id": uuid4(),
         "name": "Test Agent",
         "telegram_chat_id": 123456,
         "cron_expression": None,
@@ -97,15 +106,26 @@ def test_format_agents_list():
 def test_build_tools_uses_responses_function_schema():
     assert _build_tools_for_agent("") == []
     tools = _build_tools_for_agent(" search_web , search_messages ")
-    assert tools == [
-        {
-            "type": "function",
-            "name": "search_web",
-            "description": tools[0]["description"],
-            "parameters": tools[0]["parameters"],
-        }
-    ]
+    assert [tool["name"] for tool in tools] == ["search_web", "search_messages"]
     assert tools[0]["parameters"]["required"] == ["query"]
+
+
+def test_agent_creation_prompt_exposes_every_shared_data_tool():
+    prompt = _render_creation_prompt("summarize old videos")
+    for definition in TOOL_DEFINITIONS:
+        assert definition.name in prompt
+
+
+def test_agent_tool_configuration_rejects_unknown_tools():
+    with pytest.raises(ValueError, match="Unsupported scheduled-agent tool"):
+        _normalize_agent_tools("search_messages,run_shell")
+
+
+def test_agent_tool_configuration_is_deduplicated_in_registry_order():
+    assert (
+        _normalize_agent_tools("download_media,search_messages,download_media")
+        == "search_messages,download_media"
+    )
 
 
 @pytest.mark.asyncio
@@ -177,7 +197,9 @@ async def test_agent_function_call_is_executed_and_replayed():
         result = await _execute_agent(agent.id)
 
     assert result["status"] == "completed"
-    execute.assert_awaited_once_with("search_web", {"query": "crypto news today"})
+    execute.assert_awaited_once_with(
+        "search_web", {"query": "crypto news today"}, agent.user_id
+    )
     assert generation.await_count == 2
     second_input = generation.await_args_list[1].args[0]
     assert second_input[-1] == {
@@ -212,3 +234,7 @@ async def test_agent_tool_limit_is_reported_as_error_without_sending():
     assert "tool rounds" in result["error"]
     assert generation.await_count == MAX_TOOL_ROUNDS + 1
     send.assert_not_awaited()
+
+
+def test_scheduled_agents_allow_ten_tool_turns():
+    assert MAX_TOOL_ROUNDS == 10

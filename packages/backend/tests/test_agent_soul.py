@@ -1,6 +1,7 @@
 """Tests for the Soul Prompt assembly."""
 
 from app.services.agent.soul import build_soul_prompt
+from app.services.tool_registry import TOOL_DEFINITIONS
 
 
 class TestSoulPromptAssembly:
@@ -25,6 +26,13 @@ class TestSoulPromptAssembly:
         prompt = build_soul_prompt()
         assert "[Available actions]" in prompt
         assert "search_messages" in prompt
+        for definition in TOOL_DEFINITIONS:
+            assert definition.name in prompt
+
+    def test_does_not_claim_unavailable_email_or_calendar_tools(self):
+        prompt = build_soul_prompt()
+        assert "send_email(" not in prompt
+        assert "create_event(" not in prompt
 
     def test_includes_user_name(self):
         prompt = build_soul_prompt(user_name="Mik")

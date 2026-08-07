@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 from datetime import UTC, date, datetime, time
@@ -237,6 +238,17 @@ def format_message_content(
             else "Extracted content:"
         )
         lines.extend(["", section, content])
+
+    if result.get("has_more"):
+        lines.extend(
+            [
+                "",
+                f"More content is available. next_cursor={result.get('next_cursor')}",
+            ]
+        )
+    next_action = result.get("next_action")
+    if next_action:
+        lines.extend(["", f"Next action: {next_action}"])
 
     if status == "failed":
         error_code = result.get("media_processing_error_code") or "unknown"
@@ -517,7 +529,30 @@ def format_media_download(result: dict, base_url: str) -> list:
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available MCP tools."""
-    return [
+    api = get_client()
+    try:
+        payload = await api.list_data_tools()
+    finally:
+        await api.close()
+    definitions = payload.get("tools") if isinstance(payload, dict) else None
+    if not isinstance(definitions, list):
+        raise RuntimeError("Backend returned an invalid shared tool registry")
+    shared_tools: list[Tool] = []
+    for definition in definitions:
+        if not isinstance(definition, dict):
+            raise RuntimeError("Backend returned an invalid shared tool definition")
+        name = definition.get("name")
+        description = definition.get("description")
+        parameters = definition.get("parameters")
+        if (
+            not isinstance(name, str)
+            or not isinstance(description, str)
+            or not isinstance(parameters, dict)
+        ):
+            raise RuntimeError("Backend returned an invalid shared tool definition")
+        shared_tools.append(Tool(name=name, description=description, inputSchema=parameters))
+    shared_names = {tool.name for tool in shared_tools}
+    legacy_tools = [
         Tool(
             name="get_data_status",
             description=(
@@ -547,9 +582,10 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "The search query - describe what you're looking for",
                     },
-                    "chat_id": {
-                        "type": "string",
-                        "description": "Optional: Limit search to a specific chat ID",
+                    "chat_ids": {
+                        "type": "array",
+                        "items": {"type": "string", "format": "uuid"},
+                        "description": "Optional: Limit search to one or more chat IDs",
                     },
                     "limit": {
                         "type": "integer",
@@ -563,6 +599,10 @@ async def list_tools() -> list[Tool]:
                     "date_to": {
                         "type": "string",
                         "description": "Optional: Only return messages sent before this date (ISO 8601, e.g. 2025-02-15)",
+                    },
+                    "cursor": {
+                        "type": "string",
+                        "description": "Opaque next_cursor returned by the previous search page",
                     },
                 },
                 "required": ["query"],
@@ -648,6 +688,32 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_message",
+            description=("Return complete metadata, links and lifecycle for one Telegram message."),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chat_id": {"type": "string"},
+                    "telegram_message_id": {"type": "integer"},
+                },
+                "required": ["chat_id", "telegram_message_id"],
+            },
+        ),
+        Tool(
+            name="prepare_media",
+            description=(
+                "Idempotently fetch/process original media and return progress, retry_after and next action."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chat_id": {"type": "string"},
+                    "telegram_message_id": {"type": "integer"},
+                },
+                "required": ["chat_id", "telegram_message_id"],
+            },
+        ),
+        Tool(
             name="get_message_content",
             description=(
                 "Get the complete background-processed content for one media message: "
@@ -665,6 +731,30 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "The numeric Telegram message ID shown as msg#",
                     },
+                    "cursor": {"type": "integer", "minimum": 0},
+                    "limit_chars": {
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 50000,
+                    },
+                },
+                "required": ["chat_id", "telegram_message_id"],
+            },
+        ),
+        Tool(
+            name="get_transcript_segments",
+            description=(
+                "Read timestamped transcript segments with speaker, confidence and language."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chat_id": {"type": "string"},
+                    "telegram_message_id": {"type": "integer"},
+                    "cursor": {"type": "integer", "minimum": 0},
+                    "start_ms": {"type": "integer", "minimum": 0},
+                    "end_ms": {"type": "integer", "minimum": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
                 },
                 "required": ["chat_id", "telegram_message_id"],
             },
@@ -856,6 +946,7 @@ async def list_tools() -> list[Tool]:
             },
         ),
     ]
+    return shared_tools + [tool for tool in legacy_tools if tool.name not in shared_names]
 
 
 @server.call_tool()
@@ -867,27 +958,32 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
     try:
         api = get_client()
         if name == "get_data_status":
-            settings = await api.get_settings()
-            chats_result = await _list_all_chats(api)
-            return format_data_status(settings, chats_result)
+            result = await api.execute_data_tool("get_data_status")
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
 
         elif name == "search_messages":
             query = _require_str(args, "query")
             limit = _optional_int(args, "limit", default=20, minimum=1, maximum=100)
             date_from = _optional_iso_datetime(args, "date_from")
             date_to = _optional_iso_datetime(args, "date_to", end_of_day=True)
-            chat_id = args.get("chat_id")
-            if chat_id is not None and not isinstance(chat_id, str):
-                raise ValueError('"chat_id" must be a string UUID')
-            fetch_limit = _search_fetch_limit(limit, chat_id)
-            result = await api.search_messages(
-                query=query,
-                chat_ids=[chat_id] if chat_id else None,
-                limit=fetch_limit,
-                date_from=date_from,
-                date_to=date_to,
+            chat_ids = args.get("chat_ids")
+            if chat_ids is not None and (
+                not isinstance(chat_ids, list)
+                or not all(isinstance(chat_id, str) for chat_id in chat_ids)
+            ):
+                raise ValueError('"chat_ids" must be an array of UUID strings')
+            tool_arguments = {
+                "query": query,
+                "limit": limit,
+                "date_from": date_from.isoformat() if date_from else None,
+                "date_to": date_to.isoformat() if date_to else None,
+                "chat_ids": chat_ids,
+                "cursor": args.get("cursor"),
+            }
+            result = await api.execute_data_tool(
+                "search_messages",
+                {key: value for key, value in tool_arguments.items() if value is not None},
             )
-            result["results"] = _rerank_search_results(query, result.get("results", []), limit)
             return format_search_results(result, _client_base_url(api))
 
         elif name == "search_chats":
@@ -920,20 +1016,35 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
             )
             return format_chat_messages(result, _client_base_url(api))
 
-        elif name == "get_message_content":
+        elif name in {
+            "get_message",
+            "prepare_media",
+            "get_message_content",
+            "get_transcript_segments",
+        }:
             chat_id = _require_str(args, "chat_id")
             telegram_message_id = args.get("telegram_message_id")
             if not isinstance(telegram_message_id, int):
                 raise ValueError('"telegram_message_id" must be an integer')
-            result = await api.get_message_content(chat_id, telegram_message_id)
-            return format_message_content(result, _client_base_url(api))
+            tool_arguments = dict(args)
+            tool_arguments["chat_id"] = chat_id
+            result = await api.execute_data_tool(name, tool_arguments)
+            if name == "get_message_content":
+                return format_message_content(result, _client_base_url(api))
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
 
         elif name == "download_media":
             chat_id = _require_str(args, "chat_id")
             telegram_message_id = args.get("telegram_message_id")
             if not isinstance(telegram_message_id, int):
                 raise ValueError('"telegram_message_id" must be an integer')
-            result = await api.get_message_content(chat_id, telegram_message_id)
+            result = await api.execute_data_tool(
+                "download_media",
+                {
+                    "chat_id": chat_id,
+                    "telegram_message_id": telegram_message_id,
+                },
+            )
             return format_media_download(result, _client_base_url(api))
 
         elif name == "get_daily_digest":
@@ -1059,7 +1170,17 @@ def format_search_results(
             resource = _media_resource_link(r, base_url)
             if resource:
                 resources.append(resource)
+        urls = list(dict.fromkeys([*(r.get("visible_urls") or []), *(r.get("hidden_urls") or [])]))
+        if urls:
+            details.append(f"Links: {', '.join(urls)}")
+        if r.get("deleted_at"):
+            details.append(f"Deleted in Telegram: {_format_date(r['deleted_at'])}")
         lines.append(f"[{chat_title}] {sender}: {text}\n  - {' | '.join(details)}\n")
+    if result.get("has_more"):
+        lines.append(
+            "More results are available. Call search_messages again with "
+            f"cursor={result.get('next_cursor')}."
+        )
     return [TextContent(type="text", text="\n".join(lines)), *resources]
 
 

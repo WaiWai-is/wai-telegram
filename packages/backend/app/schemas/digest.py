@@ -2,18 +2,17 @@ from datetime import date as date_type
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DigestResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     digest_date: date_type
     content: str
     summary_stats: dict
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class DigestGenerateRequest(BaseModel):

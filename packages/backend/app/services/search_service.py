@@ -1,12 +1,12 @@
 import logging
-import re
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.cursor import CursorError, decode_cursor, encode_cursor
 from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
 from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
@@ -21,28 +21,23 @@ settings = get_settings()
 
 
 class SearchServiceError(RuntimeError):
-    """Raised when search cannot be completed by any available strategy."""
+    """Raised when full hybrid search cannot be completed."""
 
 
 def _empty_response(query: str) -> SearchResponse:
     return SearchResponse(results=[], query=query, total=0)
 
 
-def _search_log_extra(
-    user_id: UUID,
-    request: SearchRequest,
-    **extra: object,
-) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "user_id": str(user_id),
-        "query_length": len(request.query.strip()),
-        "chat_filter_count": len(request.chat_ids or []),
-        "has_date_from": request.date_from is not None,
-        "has_date_to": request.date_to is not None,
-        "limit": request.limit,
-    }
-    payload.update(extra)
-    return payload
+def _search_offset(cursor: str | None) -> int:
+    if not cursor:
+        return 0
+    try:
+        value = int(decode_cursor(cursor).get("offset", 0))
+    except (CursorError, TypeError, ValueError) as exc:
+        raise SearchServiceError("Invalid search cursor") from exc
+    if value < 0:
+        raise SearchServiceError("Invalid search cursor")
+    return value
 
 
 def _base_where_clauses(
@@ -50,191 +45,263 @@ def _base_where_clauses(
     request: SearchRequest,
 ) -> tuple[list[str], dict[str, object]]:
     where_clauses = ["c.user_id = :user_id"]
+    offset = _search_offset(request.cursor)
     params: dict[str, object] = {
         "user_id": str(user_id),
-        "limit": request.limit,
+        "query": request.query.strip(),
+        "query_pattern": f"%{request.query.strip()}%",
+        "limit": request.limit + 1,
+        "offset": offset,
+        "candidate_limit": max(100, (offset + request.limit + 1) * 10),
+        "rrf_k": 60.0,
     }
-
     if request.chat_ids:
-        where_clauses.append("m.chat_id = ANY(:chat_ids)")
-        params["chat_ids"] = [str(cid) for cid in request.chat_ids]
-
+        where_clauses.append("m.chat_id = ANY(CAST(:chat_ids AS uuid[]))")
+        params["chat_ids"] = [str(chat_id) for chat_id in request.chat_ids]
     if request.date_from:
         where_clauses.append("m.sent_at >= :date_from")
         params["date_from"] = request.date_from
-
     if request.date_to:
         where_clauses.append("m.sent_at <= :date_to")
         params["date_to"] = request.date_to
-
     return where_clauses, params
 
 
-def _rows_to_response(rows: list, query: str, user_id: UUID) -> SearchResponse:
-    results = [
-        SearchResultItem(
-            id=row.id,
-            chat_id=row.chat_id,
-            chat_title=row.chat_title,
-            chat_type=_normalize_chat_type(row.chat_type),
-            chat_telegram_id=row.chat_telegram_id,
-            chat_username=row.chat_username,
-            telegram_message_id=row.telegram_message_id,
-            text=row.text,
-            sender_name=row.sender_name,
-            is_outgoing=row.is_outgoing,
-            sent_at=row.sent_at,
-            similarity=row.similarity,
-            has_media=row.has_media,
-            media_type=row.media_type,
-            content_summary=getattr(row, "content_summary", None),
-            content_preview=getattr(row, "content_preview", None),
-            media_processing_status=getattr(row, "media_processing_status", None),
-            media_file_name=getattr(row, "media_file_name", None),
-            media_mime_type=getattr(row, "media_mime_type", None),
-            media_file_size=getattr(row, "media_file_size", None),
-            transcribed_at=row.transcribed_at,
-            telegram_message_url=build_telegram_message_url(
-                chat_type=_normalize_chat_type(row.chat_type),
-                telegram_chat_id=row.chat_telegram_id,
-                username=row.chat_username,
-                message_id=row.telegram_message_id,
-            ),
-            media_download_url=(
-                build_media_download_url(
-                    base_path=(
-                        f"/api/v1/chats/{row.chat_id}/messages/"
-                        f"{row.telegram_message_id}/media"
-                    ),
-                    user_id=user_id,
-                    chat_id=row.chat_id,
-                    telegram_message_id=row.telegram_message_id,
-                )
-                if getattr(row, "has_media", False)
-                else None
-            ),
-        )
-        for row in rows
-    ]
-
-    return SearchResponse(
-        results=results,
-        query=query,
-        total=len(results),
-    )
-
-
-def _normalize_chat_type(value: object) -> object:
+def _normalize_chat_type(value: object) -> ChatType | None:
     if value is None or isinstance(value, ChatType):
         return value
-
     if isinstance(value, str):
-        normalized = value.strip().lower()
         try:
-            return ChatType(normalized)
+            return ChatType(value.strip().lower())
         except ValueError:
             logger.warning(
                 "Unknown chat_type in search result", extra={"chat_type": value}
             )
-            return None
-
     return None
 
 
-def _like_pattern(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
-
-
-def _query_tokens(query: str) -> list[str]:
-    seen: set[str] = set()
-    tokens: list[str] = []
-    for token in re.findall(r"\w+", query, flags=re.UNICODE):
-        normalized = token.strip()
-        if not normalized:
-            continue
-        lowered = normalized.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        tokens.append(normalized)
-        if len(tokens) >= 8:
-            break
-    return tokens
-
-
-async def _keyword_search(
-    db: AsyncSession,
+def _rows_to_response(
+    rows: list,
+    query: str,
     user_id: UUID,
-    request: SearchRequest,
+    *,
+    limit: int,
+    offset: int,
 ) -> SearchResponse:
-    """Fallback search that matches query terms directly in message text and metadata."""
-    normalized_query = request.query.strip()
-    if not normalized_query:
-        return _empty_response(request.query)
-
-    where_clauses, params = _base_where_clauses(user_id, request)
-    where_clauses.append(
-        "(m.text IS NOT NULL OR m.content_summary IS NOT NULL "
-        "OR m.content_text IS NOT NULL)"
-    )
-
-    searchable_text = (
-        "concat_ws(' ', coalesce(m.text, ''), "
-        "coalesce(m.content_summary, ''), coalesce(m.content_text, ''), "
-        "coalesce(m.sender_name, ''), "
-        "coalesce(c.title, ''), coalesce(c.username, ''))"
-    )
-    match_clauses = [f"{searchable_text} ILIKE :query_pattern"]
-    score_terms = [
-        f"CASE WHEN {searchable_text} ILIKE :query_pattern THEN 2 ELSE 0 END"
-    ]
-    params["query_pattern"] = _like_pattern(normalized_query)
-
-    for idx, token in enumerate(_query_tokens(normalized_query)):
-        param_name = f"token_{idx}"
-        match_clauses.append(f"{searchable_text} ILIKE :{param_name}")
-        score_terms.append(
-            f"CASE WHEN {searchable_text} ILIKE :{param_name} THEN 1 ELSE 0 END"
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    results = []
+    for row in rows:
+        chat_type = _normalize_chat_type(row.chat_type)
+        media_cached = bool(getattr(row, "media_cached", False))
+        results.append(
+            SearchResultItem(
+                id=row.id,
+                chat_id=row.chat_id,
+                chat_title=row.chat_title,
+                chat_type=chat_type,
+                chat_telegram_id=row.chat_telegram_id,
+                chat_username=row.chat_username,
+                telegram_message_id=row.telegram_message_id,
+                text=row.text,
+                sender_name=row.sender_name,
+                is_outgoing=row.is_outgoing,
+                sent_at=row.sent_at,
+                similarity=float(row.similarity),
+                has_media=row.has_media,
+                media_type=row.media_type,
+                content_summary=getattr(row, "content_summary", None),
+                content_preview=getattr(row, "content_preview", None),
+                media_processing_status=getattr(row, "media_processing_status", None),
+                media_file_name=getattr(row, "media_file_name", None),
+                media_mime_type=getattr(row, "media_mime_type", None),
+                media_file_size=getattr(row, "media_file_size", None),
+                visible_urls=getattr(row, "visible_urls", None) or [],
+                hidden_urls=getattr(row, "hidden_urls", None) or [],
+                deleted_at=getattr(row, "deleted_at", None),
+                transcribed_at=row.transcribed_at,
+                telegram_message_url=build_telegram_message_url(
+                    chat_type=chat_type,
+                    telegram_chat_id=row.chat_telegram_id,
+                    username=row.chat_username,
+                    message_id=row.telegram_message_id,
+                ),
+                media_download_url=(
+                    build_media_download_url(
+                        base_path=(
+                            f"/api/v1/chats/{row.chat_id}/messages/"
+                            f"{row.telegram_message_id}/media"
+                        ),
+                        user_id=user_id,
+                        chat_id=row.chat_id,
+                        telegram_message_id=row.telegram_message_id,
+                    )
+                    if media_cached
+                    else None
+                ),
+            )
         )
-        params[param_name] = _like_pattern(token)
+    return SearchResponse(
+        results=results,
+        query=query,
+        total=len(results),
+        has_more=has_more,
+        next_cursor=(
+            encode_cursor({"offset": offset + len(results)}) if has_more else None
+        ),
+    )
 
-    where_clauses.append("(" + " OR ".join(match_clauses) + ")")
-    where_sql = " AND ".join(where_clauses)
-    score_sql = f"(({' + '.join(score_terms)})::float / {len(score_terms) + 1})"
 
-    sql = text(f"""
+def _hybrid_search_sql(dimensions: int, where_sql: str):
+    """Build simple-FTS + trigram + pgvector retrieval fused with RRF."""
+    return text(f"""
+        WITH search_query AS (
+            SELECT websearch_to_tsquery('simple', :query) AS tsq
+        ),
+        lexical_raw AS (
+            SELECT
+                m.id AS message_id,
+                greatest(
+                    ts_rank_cd(m.search_vector, q.tsq, 32),
+                    similarity(m.media_file_name, :query),
+                    similarity(m.searchable_metadata, :query),
+                    CASE WHEN m.media_file_name ILIKE :query_pattern
+                        THEN 1.5 ELSE 0 END,
+                    CASE WHEN m.searchable_metadata ILIKE :query_pattern
+                        THEN 1.5 ELSE 0 END
+                ) AS lexical_score,
+                left(m.content_text, 1200) AS matched_content
+            FROM telegram_messages m
+            JOIN telegram_chats c ON c.id = m.chat_id
+            CROSS JOIN search_query q
+            WHERE {where_sql}
+              AND (
+                m.search_vector @@ q.tsq
+                OR m.media_file_name ILIKE :query_pattern
+                OR m.searchable_metadata ILIKE :query_pattern
+                OR similarity(m.media_file_name, :query) > 0.2
+                OR similarity(m.searchable_metadata, :query) > 0.2
+              )
+            UNION ALL
+            SELECT
+                m.id AS message_id,
+                ts_rank_cd(mc.search_vector, q.tsq, 32) AS lexical_score,
+                left(mc.text, 1200) AS matched_content
+            FROM message_content_chunks mc
+            JOIN telegram_messages m ON m.id = mc.message_id
+            JOIN telegram_chats c ON c.id = m.chat_id
+            CROSS JOIN search_query q
+            WHERE {where_sql} AND mc.search_vector @@ q.tsq
+        ),
+        lexical_best AS (
+            SELECT DISTINCT ON (message_id)
+                message_id, lexical_score, matched_content
+            FROM lexical_raw
+            ORDER BY message_id, lexical_score DESC
+        ),
+        lexical_ranked AS (
+            SELECT
+                message_id,
+                row_number() OVER (
+                    ORDER BY lexical_score DESC, message_id DESC
+                ) AS lexical_rank,
+                matched_content
+            FROM lexical_best
+            ORDER BY lexical_score DESC, message_id DESC
+            LIMIT :candidate_limit
+        ),
+        vector_raw AS (
+            SELECT
+                m.id AS message_id,
+                1 - (m.embedding <=> cast(:embedding AS vector({dimensions})))
+                    AS vector_score,
+                NULL::text AS matched_content
+            FROM telegram_messages m
+            JOIN telegram_chats c ON c.id = m.chat_id
+            WHERE {where_sql} AND m.embedding IS NOT NULL
+            ORDER BY m.embedding <=> cast(:embedding AS vector({dimensions}))
+            LIMIT :candidate_limit
+        ),
+        vector_chunks AS (
+            SELECT
+                m.id AS message_id,
+                1 - (mc.embedding <=> cast(:embedding AS vector({dimensions})))
+                    AS vector_score,
+                left(mc.text, 1200) AS matched_content
+            FROM message_content_chunks mc
+            JOIN telegram_messages m ON m.id = mc.message_id
+            JOIN telegram_chats c ON c.id = m.chat_id
+            WHERE {where_sql} AND mc.embedding IS NOT NULL
+            ORDER BY mc.embedding <=> cast(:embedding AS vector({dimensions}))
+            LIMIT :candidate_limit
+        ),
+        vector_best AS (
+            SELECT DISTINCT ON (message_id)
+                message_id, vector_score, matched_content
+            FROM (
+                SELECT * FROM vector_raw
+                UNION ALL
+                SELECT * FROM vector_chunks
+            ) candidates
+            ORDER BY message_id, vector_score DESC
+        ),
+        vector_ranked AS (
+            SELECT
+                message_id,
+                row_number() OVER (
+                    ORDER BY vector_score DESC, message_id DESC
+                ) AS vector_rank,
+                matched_content
+            FROM vector_best
+            ORDER BY vector_score DESC, message_id DESC
+            LIMIT :candidate_limit
+        ),
+        fused AS (
+            SELECT
+                coalesce(l.message_id, v.message_id) AS message_id,
+                (
+                    coalesce(1.0 / (:rrf_k + l.lexical_rank), 0) +
+                    coalesce(1.0 / (:rrf_k + v.vector_rank), 0)
+                ) / (2.0 / (:rrf_k + 1.0)) AS similarity,
+                coalesce(l.matched_content, v.matched_content) AS matched_content
+            FROM lexical_ranked l
+            FULL OUTER JOIN vector_ranked v ON v.message_id = l.message_id
+        )
         SELECT
             m.id,
             m.chat_id,
-            c.title as chat_title,
-            c.chat_type as chat_type,
-            c.telegram_chat_id as chat_telegram_id,
-            c.username as chat_username,
+            c.title AS chat_title,
+            c.chat_type AS chat_type,
+            c.telegram_chat_id AS chat_telegram_id,
+            c.username AS chat_username,
             m.telegram_message_id,
             m.text,
             m.sender_name,
             m.is_outgoing,
             m.sent_at,
-            {score_sql} as similarity,
+            fused.similarity,
             m.has_media,
             m.media_type,
             m.content_summary,
-            left(m.content_text, 1200) as content_preview,
+            coalesce(fused.matched_content, left(m.content_text, 1200))
+                AS content_preview,
             m.media_processing_status,
             m.media_file_name,
             m.media_mime_type,
             m.media_file_size,
-            m.transcribed_at
-        FROM telegram_messages m
-        JOIN telegram_chats c ON m.chat_id = c.id
-        WHERE {where_sql}
+            m.visible_urls,
+            m.hidden_urls,
+            m.deleted_at,
+            m.transcribed_at,
+            (mo.relative_path IS NOT NULL AND mo.sha256 IS NOT NULL) AS media_cached
+        FROM fused
+        JOIN telegram_messages m ON m.id = fused.message_id
+        JOIN telegram_chats c ON c.id = m.chat_id
+        LEFT JOIN media_objects mo ON mo.message_id = m.id
         ORDER BY similarity DESC, m.sent_at DESC, m.telegram_message_id DESC
         LIMIT :limit
+        OFFSET :offset
     """)
-
-    result = await db.execute(sql, params)
-    return _rows_to_response(result.fetchall(), request.query, user_id)
 
 
 async def semantic_search(
@@ -242,173 +309,51 @@ async def semantic_search(
     user_id: UUID,
     request: SearchRequest,
 ) -> SearchResponse:
-    """Perform semantic search across user's messages."""
+    """Run mandatory lexical/vector retrieval and Reciprocal Rank Fusion."""
     normalized_query = request.query.strip()
     if not normalized_query:
         logger.info(
             "Search skipped for blank query",
-            extra=_search_log_extra(user_id, request, mode="blank_query"),
+            extra={"user_id": str(user_id), "query_length": 0},
         )
         return _empty_response(request.query)
-
-    # Generate query embedding
     try:
         query_embedding = await generate_query_embedding(normalized_query)
-    except Exception:
+    except Exception as exc:
         logger.exception(
-            "Semantic search embedding generation failed; falling back to keyword search",
-            extra=_search_log_extra(user_id, request, mode="embedding_failure"),
+            "Hybrid search embedding generation failed",
+            extra={"user_id": str(user_id), "query_length": len(normalized_query)},
         )
-        try:
-            response = await _keyword_search(db, user_id, request)
-            logger.info(
-                "Keyword search fallback succeeded after embedding failure",
-                extra=_search_log_extra(
-                    user_id,
-                    request,
-                    mode="keyword_fallback_after_embedding_failure",
-                    results=response.total,
-                ),
-            )
-            return response
-        except Exception as fallback_exc:
-            logger.exception(
-                "Keyword search fallback failed after embedding failure",
-                extra=_search_log_extra(
-                    user_id,
-                    request,
-                    mode="keyword_fallback_failure_after_embedding_failure",
-                ),
-            )
-            raise SearchServiceError(
-                "Search is temporarily unavailable"
-            ) from fallback_exc
-
+        raise SearchServiceError(
+            "Hybrid search is unavailable because query embedding failed"
+        ) from exc
     if not query_embedding:
-        logger.info(
-            "Search returned empty embedding result",
-            extra=_search_log_extra(user_id, request, mode="empty_embedding"),
+        raise SearchServiceError(
+            "Hybrid search is unavailable because query embedding was empty"
         )
-        return _empty_response(request.query)
 
-    dimensions = settings.embedding_dimensions
-
-    # Build query dynamically to avoid asyncpg AmbiguousParameterError
-    # when optional filters are None.
     where_clauses, params = _base_where_clauses(user_id, request)
-    # Format embedding as pgvector string literal for parameterized query
-    embedding_literal = "[" + ",".join(str(x) for x in query_embedding) + "]"
-    params["embedding"] = embedding_literal
-    params["candidate_limit"] = request.limit * 5
-
-    where_sql = " AND ".join(where_clauses)
-
-    sql = text(f"""
-        WITH message_candidates AS (
-            SELECT
-                m.id as message_id,
-                1 - (
-                    m.embedding <=> cast(:embedding as vector({dimensions}))
-                ) as similarity,
-                NULL::text as matched_content
-            FROM telegram_messages m
-            JOIN telegram_chats c ON m.chat_id = c.id
-            WHERE {where_sql}
-              AND m.embedding IS NOT NULL
-            ORDER BY m.embedding <=> cast(:embedding as vector({dimensions}))
-            LIMIT :candidate_limit
-        ),
-        chunk_candidates AS (
-            SELECT
-                m.id as message_id,
-                1 - (
-                    mc.embedding <=> cast(:embedding as vector({dimensions}))
-                ) as similarity,
-                left(mc.text, 1200) as matched_content
-            FROM message_content_chunks mc
-            JOIN telegram_messages m ON mc.message_id = m.id
-            JOIN telegram_chats c ON m.chat_id = c.id
-            WHERE {where_sql}
-              AND mc.embedding IS NOT NULL
-            ORDER BY mc.embedding <=> cast(:embedding as vector({dimensions}))
-            LIMIT :candidate_limit
-        ),
-        best_matches AS (
-            SELECT DISTINCT ON (message_id)
-                message_id,
-                similarity,
-                matched_content
-            FROM (
-                SELECT * FROM message_candidates
-                UNION ALL
-                SELECT * FROM chunk_candidates
-            ) candidates
-            ORDER BY message_id, similarity DESC
-        )
-        SELECT
-            m.id,
-            m.chat_id,
-            c.title as chat_title,
-            c.chat_type as chat_type,
-            c.telegram_chat_id as chat_telegram_id,
-            c.username as chat_username,
-            m.telegram_message_id,
-            m.text,
-            m.sender_name,
-            m.is_outgoing,
-            m.sent_at,
-            best_matches.similarity,
-            m.has_media,
-            m.media_type,
-            m.content_summary,
-            coalesce(
-                best_matches.matched_content,
-                left(m.content_text, 1200)
-            ) as content_preview,
-            m.media_processing_status,
-            m.media_file_name,
-            m.media_mime_type,
-            m.media_file_size,
-            m.transcribed_at
-        FROM best_matches
-        JOIN telegram_messages m ON best_matches.message_id = m.id
-        JOIN telegram_chats c ON m.chat_id = c.id
-        ORDER BY similarity DESC, m.sent_at DESC, m.telegram_message_id DESC
-        LIMIT :limit
-    """)
-
+    params["embedding"] = "[" + ",".join(str(value) for value in query_embedding) + "]"
+    sql = _hybrid_search_sql(
+        settings.embedding_dimensions,
+        " AND ".join(where_clauses),
+    )
     try:
+        await db.execute(text("SET LOCAL hnsw.iterative_scan = 'strict_order'"))
         result = await db.execute(sql, params)
-        return _rows_to_response(result.fetchall(), request.query, user_id)
-    except Exception:
+    except Exception as exc:
         logger.exception(
-            "Semantic vector search failed; falling back to keyword search",
-            extra=_search_log_extra(user_id, request, mode="vector_query_failure"),
+            "Hybrid lexical/vector query failed",
+            extra={"user_id": str(user_id), "query_length": len(normalized_query)},
         )
-        try:
-            response = await _keyword_search(db, user_id, request)
-            logger.info(
-                "Keyword search fallback succeeded after vector search failure",
-                extra=_search_log_extra(
-                    user_id,
-                    request,
-                    mode="keyword_fallback_after_vector_failure",
-                    results=response.total,
-                ),
-            )
-            return response
-        except Exception as fallback_exc:
-            logger.exception(
-                "Keyword search fallback failed after vector search failure",
-                extra=_search_log_extra(
-                    user_id,
-                    request,
-                    mode="keyword_fallback_failure_after_vector_failure",
-                ),
-            )
-            raise SearchServiceError(
-                "Search is temporarily unavailable"
-            ) from fallback_exc
+        raise SearchServiceError("Hybrid search is temporarily unavailable") from exc
+    return _rows_to_response(
+        result.fetchall(),
+        request.query,
+        user_id,
+        limit=request.limit,
+        offset=int(params["offset"]),
+    )
 
 
 async def get_recent_messages(
@@ -418,11 +363,7 @@ async def get_recent_messages(
     hours: int = 24,
     limit: int = 100,
 ) -> list[TelegramMessage]:
-    """Get recent messages for a user."""
-    from datetime import UTC, timedelta
-
     cutoff = datetime.now(UTC) - timedelta(hours=hours)
-
     query = (
         select(TelegramMessage)
         .join(TelegramChat)
@@ -431,11 +372,9 @@ async def get_recent_messages(
             TelegramMessage.sent_at >= cutoff,
         )
     )
-
     if chat_id:
         query = query.where(TelegramMessage.chat_id == chat_id)
-
-    query = query.order_by(TelegramMessage.sent_at.desc()).limit(limit)
-
-    result = await db.execute(query)
+    result = await db.execute(
+        query.order_by(TelegramMessage.sent_at.desc()).limit(limit)
+    )
     return list(result.scalars().all())

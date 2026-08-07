@@ -178,6 +178,20 @@ class TestDistributedLock:
         lock2.release()
 
 
+class TestInactiveUserGate:
+    @patch("app.tasks.sync_tasks.run_async", return_value=False)
+    @patch("app.tasks.sync_tasks.check_budget")
+    def test_single_sync_stops_before_budget_and_lock(self, budget, run):
+        from app.tasks.sync_tasks import sync_chat_task
+
+        result = sync_chat_task.run(str(uuid4()), str(uuid4()))
+
+        assert result == {"status": "skipped", "reason": "inactive_user"}
+        budget.assert_not_called()
+        assert run.call_count == 1
+        run.call_args.args[0].close()
+
+
 # ---------------------------------------------------------------------------
 # Heartbeat key helpers
 # ---------------------------------------------------------------------------

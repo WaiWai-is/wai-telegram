@@ -152,6 +152,7 @@ async def test_user(db_session):
         id=uuid4(),
         email="test@example.com",
         password_hash=hash_password("TestPassword1"),
+        is_active=True,
         created_at=datetime.now(UTC),
     )
     db_session.add(user)

@@ -1,6 +1,7 @@
 """Tests for app.services.messaging_service — pure unit tests (no Telegram calls)."""
 
 import socket
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -392,9 +393,16 @@ class TestResolveChatEntity:
 
 
 class _FakeStreamResponse:
-    def __init__(self, chunks: list[bytes]):
+    def __init__(self, chunks: list[bytes], *, content_length: int | None = None):
         self._chunks = chunks
-        self.headers = {"content-length": str(sum(len(chunk) for chunk in chunks))}
+        self.headers = {
+            "content-length": str(
+                content_length
+                if content_length is not None
+                else sum(len(chunk) for chunk in chunks)
+            )
+        }
+        self.status_code = 200
 
     async def __aenter__(self):
         return self
@@ -411,8 +419,9 @@ class _FakeStreamResponse:
 
 
 class _FakeHTTPClient:
-    def __init__(self, chunks: list[bytes]):
+    def __init__(self, chunks: list[bytes], *, content_length: int | None = None):
         self._chunks = chunks
+        self._content_length = content_length
 
     async def __aenter__(self):
         return self
@@ -423,11 +432,27 @@ class _FakeHTTPClient:
     def stream(self, method: str, url: str):
         assert method == "GET"
         assert url == "https://example.com/doc.pdf"
-        return _FakeStreamResponse(self._chunks)
+        return _FakeStreamResponse(
+            self._chunks,
+            content_length=self._content_length,
+        )
+
+
+class _RedirectHTTPClient(_FakeHTTPClient):
+    def stream(self, method: str, url: str):
+        response = _FakeStreamResponse([])
+        response.status_code = 302
+        response.headers = {"location": "http://127.0.0.1/private"}
+        return response
 
 
 class TestSendFile:
-    async def test_send_file_streams_to_temp_file(self, db_session, test_user):
+    async def test_send_file_has_no_service_size_limit_and_uses_media_volume(
+        self,
+        db_session,
+        test_user,
+        tmp_path,
+    ):
         from app.services.messaging_service import send_file
         from tests.factories import TelegramChatFactory
 
@@ -446,7 +471,8 @@ class TestSendFile:
             observed["chat_id"] = chat_id
             observed["caption"] = caption
             observed["file_name"] = file_name
-            observed["file_bytes"] = open(file_path, "rb").read()
+            observed["file_bytes"] = Path(file_path).read_bytes()
+            observed["file_path"] = Path(file_path)
             return mock_result
 
         mock_client = AsyncMock()
@@ -454,13 +480,28 @@ class TestSendFile:
         mock_client.disconnect = AsyncMock()
         resolved_entity = object()
 
-        fake_http_client = _FakeHTTPClient([b"hello ", b"world"])
+        fake_http_client = _FakeHTTPClient(
+            [b"hello ", b"world"],
+            content_length=10_000_000_000,
+        )
+        http_client_factory = MagicMock(return_value=fake_http_client)
+        media_root = tmp_path / "media"
+        service_settings = SimpleNamespace(
+            environment="production",
+            media_root=media_root,
+            media_download_stall_timeout_seconds=120.0,
+            media_download_chunk_bytes=512 * 1024,
+        )
 
         with (
             patch("app.services.messaging_service._validate_url", return_value=None),
             patch(
                 "app.services.messaging_service.httpx.AsyncClient",
-                return_value=fake_http_client,
+                http_client_factory,
+            ),
+            patch(
+                "app.services.messaging_service.get_settings",
+                return_value=service_settings,
             ),
             patch(
                 "app.services.messaging_service.get_client", return_value=mock_client
@@ -485,7 +526,42 @@ class TestSendFile:
         assert observed["caption"] == "Report"
         assert observed["file_name"] == "doc.pdf"
         assert observed["file_bytes"] == b"hello world"
+        assert media_root / "outbound-work" in observed["file_path"].parents
+        timeout = http_client_factory.call_args.kwargs["timeout"]
+        assert timeout.read == 120.0
         mock_client.disconnect.assert_awaited_once()
+
+    async def test_send_file_revalidates_redirect_targets(
+        self,
+        db_session,
+        test_user,
+    ):
+        from app.services.messaging_service import send_file
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(user_id=test_user.id)
+        db_session.add(chat)
+        await db_session.flush()
+
+        validate_url = MagicMock(
+            side_effect=[None, ValueError("private redirect is forbidden")]
+        )
+        with (
+            patch("app.services.messaging_service._validate_url", validate_url),
+            patch(
+                "app.services.messaging_service.httpx.AsyncClient",
+                return_value=_RedirectHTTPClient([]),
+            ),
+            pytest.raises(ValueError, match="private redirect"),
+        ):
+            await send_file(
+                db_session,
+                test_user.id,
+                chat.id,
+                "https://example.com/doc.pdf",
+            )
+
+        assert validate_url.call_count == 2
 
 
 # ---------------------------------------------------------------------------

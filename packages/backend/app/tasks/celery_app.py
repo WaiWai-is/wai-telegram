@@ -35,11 +35,13 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    task_time_limit=3600,  # 1 hour max
     worker_prefetch_multiplier=1,
     task_acks_late=True,
+    task_reject_on_worker_lost=True,
     task_routes={
-        "app.tasks.media_tasks.process_message_media": {"queue": "media"},
+        "app.tasks.media_tasks.fetch_message_media": {"queue": "media-fetch"},
+        "app.tasks.media_tasks.process_message_media": {"queue": "media-process"},
+        "app.tasks.media_tasks.index_message_media": {"queue": "media-index"},
     },
 )
 

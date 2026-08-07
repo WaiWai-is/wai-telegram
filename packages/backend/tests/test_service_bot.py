@@ -41,47 +41,40 @@ class TestSplitMessage:
 
 class TestSendTelegramMessage:
     async def test_send_success(self):
-        mock_response = AsyncMock()
-        mock_response.status_code = 200
-
-        with patch("app.services.bot_service.settings") as mock_settings:
-            mock_settings.telegram_bot_token = "bot-token"
-            with patch("httpx.AsyncClient") as mock_client_cls:
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-                mock_client.__aexit__ = AsyncMock(return_value=False)
-                mock_client_cls.return_value = mock_client
-
-                await send_telegram_message(12345, "Hello")
-                mock_client.post.assert_called_once()
+        bot_client = AsyncMock()
+        with patch(
+            "app.services.bot_service.get_bot_api_client",
+            return_value=bot_client,
+        ):
+            await send_telegram_message(12345, "Hello")
+        bot_client.call.assert_awaited_once_with(
+            "sendMessage",
+            json={"chat_id": 12345, "text": "Hello", "parse_mode": "Markdown"},
+        )
 
     async def test_send_no_token_raises(self):
-        with patch("app.services.bot_service.settings") as mock_settings:
-            mock_settings.telegram_bot_token = ""
-            with pytest.raises(ValueError, match="not configured"):
-                await send_telegram_message(12345, "Hello")
+        with (
+            patch(
+                "app.services.bot_service.get_bot_api_client",
+                side_effect=RuntimeError("not configured"),
+            ),
+            pytest.raises(RuntimeError, match="not configured"),
+        ):
+            await send_telegram_message(12345, "Hello")
 
     async def test_send_http_error_does_not_leak_token(self):
         """A failing send must raise without exposing the bot token."""
-        token = "8759392549:AAGhrnMPOI0rijnXQswljKGMkSCXWxYP_HA"
-        mock_response = AsyncMock()
-        mock_response.status_code = 401
-        mock_response.text = (
-            '{"ok":false,"error_code":401,"description":"Unauthorized"}'
-        )
-
-        with patch("app.services.bot_service.settings") as mock_settings:
-            mock_settings.telegram_bot_token = token
-            with patch("httpx.AsyncClient") as mock_client_cls:
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-                mock_client.__aexit__ = AsyncMock(return_value=False)
-                mock_client_cls.return_value = mock_client
-
-                with pytest.raises(RuntimeError) as exc_info:
-                    await send_telegram_message(12345, "Hello")
+        token = "example-telegram-bot-token-that-must-not-leak"
+        bot_client = AsyncMock()
+        bot_client.call.side_effect = RuntimeError("Telegram Bot API failed: 401")
+        with (
+            patch(
+                "app.services.bot_service.get_bot_api_client",
+                return_value=bot_client,
+            ),
+            pytest.raises(RuntimeError) as exc_info,
+        ):
+            await send_telegram_message(12345, "Hello")
 
         assert token not in str(exc_info.value)
         assert "401" in str(exc_info.value)

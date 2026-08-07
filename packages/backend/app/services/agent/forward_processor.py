@@ -64,14 +64,18 @@ def parse_forwarded_message(message: dict) -> ForwardedContent:
     content.text = message.get("text", "") or message.get("caption", "") or ""
 
     # Detect content type
-    if message.get("voice") or message.get("audio"):
+    if message.get("voice"):
         content.content_type = "voice"
+    elif message.get("audio"):
+        content.content_type = "audio"
     elif message.get("photo"):
         content.content_type = "photo"
     elif message.get("document"):
         content.content_type = "document"
     elif message.get("video"):
         content.content_type = "video"
+    elif message.get("video_note"):
+        content.content_type = "video_note"
     elif message.get("sticker"):
         content.content_type = "sticker"
     else:
@@ -113,9 +117,11 @@ async def process_forwarded_message(
     type_icons = {
         "text": "💬",
         "voice": "🎤",
+        "audio": "🎵",
         "photo": "📷",
         "document": "📄",
         "video": "🎬",
+        "video_note": "🎥",
         "sticker": "😀",
     }
     icon = type_icons.get(content.content_type, "📝")

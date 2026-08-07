@@ -5,13 +5,15 @@ from datetime import UTC, datetime, timedelta
 import jwt
 from cryptography.fernet import Fernet
 from jwt.exceptions import PyJWTError
-from passlib.context import CryptContext
+from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
+from pwdlib.hashers.bcrypt import BcryptHasher
 
 from app.core.config import get_settings
 
 settings = get_settings()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+password_hash = PasswordHash((Argon2Hasher(), BcryptHasher()))
 
 
 def get_fernet() -> Fernet:
@@ -31,19 +33,19 @@ def decrypt_session(encrypted_session: str) -> str:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return password_hash.verify(plain_password, hashed_password)
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return password_hash.hash(password)
 
 
 def hash_api_key(api_key: str) -> str:
-    return pwd_context.hash(api_key)
+    return password_hash.hash(api_key)
 
 
 def verify_api_key(api_key: str, hashed_key: str) -> bool:
-    return pwd_context.verify(api_key, hashed_key)
+    return password_hash.verify(api_key, hashed_key)
 
 
 def compute_api_key_prefix(api_key: str) -> str:

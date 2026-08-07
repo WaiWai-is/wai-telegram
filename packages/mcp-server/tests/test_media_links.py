@@ -8,7 +8,7 @@ from telegram_wai_mcp import server
 @pytest.mark.asyncio
 async def test_get_message_content_returns_download_resource_link():
     mock_api = AsyncMock()
-    mock_api.get_message_content.return_value = {
+    mock_api.execute_data_tool.return_value = {
         "telegram_message_id": 42,
         "media_type": "audio",
         "media_file_name": "voice.ogg",
@@ -39,7 +39,7 @@ async def test_get_message_content_returns_download_resource_link():
 @pytest.mark.asyncio
 async def test_download_media_is_a_discoverable_mcp_tool():
     mock_api = AsyncMock()
-    mock_api.get_message_content.return_value = {
+    mock_api.execute_data_tool.return_value = {
         "telegram_message_id": 42,
         "media_type": "video",
         "media_file_name": "clip.mp4",
@@ -56,9 +56,23 @@ async def test_download_media_is_a_discoverable_mcp_tool():
     content = result.content if hasattr(result, "content") else result
     text = next(item.text for item in content if hasattr(item, "text"))
     assert "Download URL:" in text
-    mock_api.get_message_content.assert_awaited_once_with("chat-1", 42)
+    mock_api.execute_data_tool.assert_awaited_once_with(
+        "download_media",
+        {"chat_id": "chat-1", "telegram_message_id": 42},
+    )
 
-    tools = await server.list_tools()
+    discovery_api = AsyncMock()
+    discovery_api.list_data_tools.return_value = {
+        "tools": [
+            {
+                "name": "download_media",
+                "description": "Get a short-lived original media link.",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ]
+    }
+    with patch("telegram_wai_mcp.server.get_client", return_value=discovery_api):
+        tools = await server.list_tools()
     download_tool = next(tool for tool in tools if tool.name == "download_media")
     assert "short-lived" in download_tool.description
 
