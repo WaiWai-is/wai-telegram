@@ -30,9 +30,11 @@ not start media workers, local Bot API, reconciliation, or restic timers.
 ## Cutover guarantees
 
 Before changing code or stopping services, the workflow creates an
-authenticated GPG-encrypted custom-format PostgreSQL dump, verifies both the
-plain and decrypted copies with `pg_restore --list`, and then runs an off-host
-Restic backup that includes the cutover dump and media volume.
+authenticated GPG-encrypted custom-format PostgreSQL dump without writing a
+plaintext dump to disk. It fully verifies the authenticated GPG stream and then
+validates the decrypted archive TOC with `pg_restore --list`. Full media mode
+also runs an off-host Restic backup that includes the cutover dump and media
+volume.
 
 The owner dry-run must identify the same `OWNER_USER_ID` from all three signals:
 the only active Telegram session, a recently used active API key, and the largest

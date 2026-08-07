@@ -16,10 +16,17 @@ readonly PASSPHRASE_FILE="/etc/wai-telegram/auth-backup-passphrase"
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 destination="$BACKUP_ROOT/auth-cutover-$timestamp"
-mkdir -p "$destination"
-encrypted_dump="$destination/database.dump.gpg"
-plain_list="$destination/database.restore-list.txt"
-decrypted_list="$destination/database.decrypted-restore-list.txt"
+incomplete_destination="$BACKUP_ROOT/.auth-cutover-$timestamp.incomplete"
+mkdir -p "$incomplete_destination"
+encrypted_dump="$incomplete_destination/database.dump.gpg"
+restore_list="$incomplete_destination/database.restore-list.txt"
+checksum_file="$incomplete_destination/SHA256SUMS"
+
+cleanup() {
+    rm -f -- "$encrypted_dump" "$restore_list" "$checksum_file"
+    rmdir -- "$incomplete_destination" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 docker exec "$DATABASE_CONTAINER" pg_dump \
     --username telegram \
@@ -27,22 +34,32 @@ docker exec "$DATABASE_CONTAINER" pg_dump \
     --format custom \
     --no-owner \
     --no-acl \
-    | tee >(docker exec -i "$DATABASE_CONTAINER" pg_restore --list > "$plain_list") \
     | gpg --batch --yes --pinentry-mode loopback --cipher-algo AES256 --force-mdc \
     --s2k-digest-algo SHA512 --s2k-count 65011712 \
     --passphrase-file "$PASSPHRASE_FILE" \
     --symmetric --output "$encrypted_dump"
-wait
-[ -s "$plain_list" ] || { echo "Plain backup verification produced no manifest" >&2; exit 1; }
+
+# Consume the entire authenticated stream first. pg_restore --list only needs the
+# custom archive TOC and may close stdin early, so it cannot be the integrity check.
+gpg --batch --yes --pinentry-mode loopback \
+    --passphrase-file "$PASSPHRASE_FILE" \
+    --decrypt "$encrypted_dump" >/dev/null
+
+set +o pipefail
 gpg --batch --yes --pinentry-mode loopback \
     --passphrase-file "$PASSPHRASE_FILE" \
     --decrypt "$encrypted_dump" \
-    | docker exec -i "$DATABASE_CONTAINER" pg_restore --list > "$decrypted_list"
-cmp --silent "$plain_list" "$decrypted_list" || {
-    echo "Plain and decrypted backup manifests differ" >&2
+    | docker exec -i "$DATABASE_CONTAINER" pg_restore --list > "$restore_list"
+restore_status="${PIPESTATUS[1]}"
+set -o pipefail
+[ "$restore_status" -eq 0 ] || {
+    echo "pg_restore could not read the encrypted backup" >&2
     exit 1
 }
-sha256sum "$encrypted_dump" > "$destination/SHA256SUMS"
-chmod 0600 "$encrypted_dump" "$destination/SHA256SUMS" \
-    "$plain_list" "$decrypted_list"
+[ -s "$restore_list" ] || { echo "Backup verification produced no manifest" >&2; exit 1; }
+
+sha256sum "$encrypted_dump" > "$checksum_file"
+chmod 0600 "$encrypted_dump" "$checksum_file" "$restore_list"
+mv "$incomplete_destination" "$destination"
+trap - EXIT
 echo "$destination"
