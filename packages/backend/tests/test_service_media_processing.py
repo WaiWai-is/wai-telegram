@@ -313,9 +313,15 @@ async def test_audio_split_has_only_one_output_target(tmp_path):
         process.communicate.return_value = (b"", b"")
         return process
 
-    with patch(
-        "app.services.media_processing_service.asyncio.create_subprocess_exec",
-        side_effect=create_fake_process,
+    with (
+        patch(
+            "app.services.media_processing_service.shutil.which",
+            return_value="/usr/bin/ffmpeg",
+        ),
+        patch(
+            "app.services.media_processing_service.asyncio.create_subprocess_exec",
+            side_effect=create_fake_process,
+        ),
     ):
         chunks = await split_audio_for_transcription(source)
 
