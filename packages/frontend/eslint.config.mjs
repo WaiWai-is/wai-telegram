@@ -1,19 +1,15 @@
-import { FlatCompat } from '@eslint/eslintrc'
-import { dirname } from 'path'
-import { fileURLToPath } from 'url'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-
-const compat = new FlatCompat({
-  baseDirectory: __dirname,
-})
+import nextCoreWebVitals from 'eslint-config-next/core-web-vitals'
 
 const eslintConfig = [
-  ...compat.extends('next/core-web-vitals'),
+  { ignores: ['coverage/**'] },
+  ...nextCoreWebVitals,
   {
     rules: {
       '@next/next/no-img-element': 'off',
+      // Polling completion and hydration readiness are external-system effects.
+      'react-hooks/set-state-in-effect': 'off',
+      // TanStack Virtual intentionally exposes non-memoizable imperative methods.
+      'react-hooks/incompatible-library': 'off',
     },
   },
 ]

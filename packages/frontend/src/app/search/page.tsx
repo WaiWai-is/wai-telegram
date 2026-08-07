@@ -1,10 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { format } from 'date-fns'
-import { api } from '@/lib/api'
+import { api, resolveApiUrl } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { useRouter } from 'next/navigation'
@@ -22,11 +22,14 @@ export default function SearchPage() {
     }
   }, [user, authLoading, router])
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey: ['search', searchQuery],
-    queryFn: () => api.search(searchQuery),
+    queryFn: ({ pageParam }) => api.search(searchQuery, undefined, 20, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
     enabled: !!user && !!searchQuery,
   })
+  const results = data?.pages.flatMap((page) => page.results) ?? []
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
@@ -86,12 +89,12 @@ export default function SearchPage() {
           <div className="p-4 border rounded-lg text-primary">
             Search failed. Please try again.
           </div>
-        ) : data?.results.length ? (
+        ) : results.length ? (
           <div className="space-y-4">
             <p className="text-sm text-tertiary">
-              Found {data.total} results
+              Loaded {results.length} results
             </p>
-            {data.results.map((result) => (
+            {results.map((result) => (
               <div
                 key={result.id}
                 className="p-4 border rounded-lg"
@@ -111,13 +114,41 @@ export default function SearchPage() {
                   </div>
                 </div>
                 <p className="text-secondary whitespace-pre-wrap">
-                  {result.text}
+                  {result.text || result.content_summary || result.content_preview || `[${result.media_type || 'media'}]`}
                 </p>
+                {result.media_file_name && (
+                  <p className="mt-2 text-sm font-medium text-secondary">{result.media_file_name}</p>
+                )}
+                {(result.visible_urls?.length || result.hidden_urls?.length) ? (
+                  <div className="mt-2 space-y-1 text-xs">
+                    {Array.from(new Set([...(result.visible_urls || []), ...(result.hidden_urls || [])])).map((url) => {
+                      const href = /^https?:\/\//i.test(url) || /^tg:\/\//i.test(url) ? url : `https://${url}`
+                      return <a key={url} href={href} target="_blank" rel="noreferrer" className="block break-all underline">{url}</a>
+                    })}
+                  </div>
+                ) : null}
+                <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                  {result.telegram_message_url && <a href={result.telegram_message_url} target="_blank" rel="noreferrer" className="underline">Open in Telegram</a>}
+                  {result.media_download_url && resolveApiUrl(result.media_download_url) && (
+                    <a href={resolveApiUrl(result.media_download_url) ?? undefined} download className="underline">Download media</a>
+                  )}
+                  {result.deleted_at && <span className="text-red-600">Deleted in Telegram · kept in archive</span>}
+                </div>
                 <div className="mt-2 text-xs text-tertiary">
                   Relevance: {(result.similarity * 100).toFixed(0)}%
                 </div>
               </div>
             ))}
+            {hasNextPage && (
+              <button
+                type="button"
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                className="w-full px-4 py-3 border rounded-lg text-primary hover:bg-secondary/10 disabled:opacity-50"
+              >
+                {isFetchingNextPage ? 'Loading more…' : 'Load more results'}
+              </button>
+            )}
           </div>
         ) : searchQuery ? (
           <div className="text-center py-8 text-tertiary">

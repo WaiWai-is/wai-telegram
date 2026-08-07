@@ -3,15 +3,19 @@
 import clsx from 'clsx'
 import { formatMessageTime, getSenderColor } from '@/lib/chat-utils'
 import type { Message } from '@/lib/api'
+import { useState } from 'react'
+import { MessageMediaDetails } from './MessageMediaDetails'
 
 interface MessageBubbleProps {
   message: Message
   isFirstInGroup: boolean
   isLastInGroup: boolean
   isDark: boolean
+  chatId: string
 }
 
-export function MessageBubble({ message, isFirstInGroup, isLastInGroup, isDark }: MessageBubbleProps) {
+export function MessageBubble({ message, isFirstInGroup, isLastInGroup, isDark, chatId }: MessageBubbleProps) {
+  const [showMedia, setShowMedia] = useState(false)
   const isOut = message.is_outgoing
   const time = formatMessageTime(message.sent_at)
   const isTranscribed = !!message.transcribed_at
@@ -69,6 +73,17 @@ export function MessageBubble({ message, isFirstInGroup, isLastInGroup, isDark }
           {/* Invisible spacer to prevent timestamp from overlapping text */}
           <span className="inline-block w-[52px]" />
         </div>
+
+        {message.has_media && (
+          <button
+            type="button"
+            onClick={() => setShowMedia((value) => !value)}
+            className="mt-1 block text-xs font-medium underline underline-offset-2"
+          >
+            {showMedia ? 'Hide media' : 'Media details'}
+          </button>
+        )}
+        {showMedia && <MessageMediaDetails chatId={chatId} message={message} />}
 
         {/* Floating timestamp */}
         <span className="absolute bottom-[4px] right-[8px] text-[11.5px] text-timestamp leading-none select-none">

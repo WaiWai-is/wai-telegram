@@ -13,7 +13,6 @@ interface AuthState {
   refreshToken: string | null
   isLoading: boolean
   login: (email: string, password: string) => Promise<void>
-  register: (email: string, password: string) => Promise<void>
   logout: () => void
   checkAuth: () => Promise<void>
 }
@@ -45,18 +44,6 @@ export const useAuth = create<AuthState>()(
 
         login: async (email: string, password: string) => {
           const tokens = await api.login(email, password)
-          api.setAccessToken(tokens.access_token)
-          api.setRefreshToken(tokens.refresh_token)
-          const user = await api.getMe()
-          set({
-            user,
-            accessToken: tokens.access_token,
-            refreshToken: tokens.refresh_token,
-          })
-        },
-
-        register: async (email: string, password: string) => {
-          const tokens = await api.register(email, password)
           api.setAccessToken(tokens.access_token)
           api.setRefreshToken(tokens.refresh_token)
           const user = await api.getMe()

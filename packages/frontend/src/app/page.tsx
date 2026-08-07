@@ -25,18 +25,12 @@ export default function Home() {
           Search your Telegram messages with AI-powered semantic search.
           Get daily digests and integrate with Claude via MCP.
         </p>
-        <div className="flex gap-4">
+        <div>
           <Link
             href="/login"
             className="px-6 py-3 bg-primary text-surface rounded-lg hover:opacity-80 transition-opacity"
           >
             Sign In
-          </Link>
-          <Link
-            href="/register"
-            className="px-6 py-3 border rounded-lg text-primary hover:bg-surface-hover transition-colors"
-          >
-            Create Account
           </Link>
         </div>
       </main>

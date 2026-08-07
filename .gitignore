@@ -53,6 +53,8 @@ Thumbs.db
 # Testing
 .coverage
 htmlcov/
+coverage/
+*.tsbuildinfo
 .pytest_cache/
 
 # Logs

@@ -323,6 +323,7 @@ export function MessageList({ chatId }: MessageListProps) {
                 {item.type === 'message' && (
                   <MessageBubble
                     message={item.message}
+                    chatId={chatId}
                     isFirstInGroup={item.isFirstInGroup}
                     isLastInGroup={item.isLastInGroup}
                     isDark={isDark}

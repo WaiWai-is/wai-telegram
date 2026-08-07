@@ -1,4 +1,17 @@
-const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? '').trim()
+function configuredApiUrl() {
+  return (process.env.NEXT_PUBLIC_API_URL ?? '').trim()
+}
+
+export function resolveApiUrl(value: string) {
+  const baseUrl = configuredApiUrl()
+    || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')
+  try {
+    const url = new URL(value, baseUrl)
+    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : null
+  } catch {
+    return null
+  }
+}
 
 class ApiClient {
   private accessToken: string | null = null
@@ -24,7 +37,8 @@ class ApiClient {
   }
 
   private getBaseUrl() {
-    if (API_URL) return API_URL
+    const apiUrl = configuredApiUrl()
+    if (apiUrl) return apiUrl
     if (typeof window !== 'undefined') return window.location.origin
     return 'http://localhost:3000'
   }
@@ -132,14 +146,6 @@ class ApiClient {
     return response.json()
   }
 
-  async register(email: string, password: string) {
-    return this.request<{ access_token: string; refresh_token: string }>(
-      'POST',
-      '/api/v1/auth/register',
-      { body: { email, password } }
-    )
-  }
-
   async getMe() {
     return this.request<{ id: string; email: string }>(
       'GET',
@@ -239,6 +245,28 @@ class ApiClient {
     )
   }
 
+  async getMessageContent(chatId: string, telegramMessageId: number) {
+    return this.request<MessageContent>(
+      'GET',
+      `/api/v1/chats/${chatId}/messages/${telegramMessageId}/content`
+    )
+  }
+
+  async prepareMessageMedia(chatId: string, telegramMessageId: number) {
+    return this.request<MediaPrepareResult>(
+      'POST',
+      `/api/v1/chats/${chatId}/messages/${telegramMessageId}/prepare`
+    )
+  }
+
+  async getTranscriptSegments(chatId: string, telegramMessageId: number, cursor = 0) {
+    return this.request<TranscriptSegmentPage>(
+      'GET',
+      `/api/v1/chats/${chatId}/messages/${telegramMessageId}/transcript`,
+      { params: { cursor: String(cursor), limit: '100' } }
+    )
+  }
+
   // Sync
   async syncChat(chatId: string, limit?: number) {
     const params: Record<string, string> = {}
@@ -263,11 +291,11 @@ class ApiClient {
   }
 
   // Search
-  async search(query: string, chatIds?: string[], limit = 20) {
-    return this.request<{ results: SearchResult[]; total: number }>(
+  async search(query: string, chatIds?: string[], limit = 20, cursor?: string) {
+    return this.request<{ results: SearchResult[]; total: number; has_more: boolean; next_cursor: string | null }>(
       'POST',
       '/api/v1/search',
-      { body: { query, chat_ids: chatIds, limit } }
+      { body: { query, chat_ids: chatIds, limit, cursor } }
     )
   }
 
@@ -331,6 +359,24 @@ export interface Message {
   is_outgoing: boolean
   sent_at: string
   transcribed_at: string | null
+  media_file_name?: string | null
+  media_mime_type?: string | null
+  media_file_size?: number | null
+  media_duration_seconds?: number | null
+  content_summary?: string | null
+  content_preview?: string | null
+  media_processing_status?: string | null
+  media_processing_error_code?: string | null
+  telegram_message_url?: string | null
+  media_download_url?: string | null
+  media_cache_status?: string | null
+  media_cache_stage?: string | null
+  media_cached_bytes?: number | null
+  media_sha256?: string | null
+  visible_urls?: string[]
+  hidden_urls?: string[]
+  edited_at?: string | null
+  deleted_at?: string | null
 }
 
 export interface SearchResult {
@@ -345,6 +391,74 @@ export interface SearchResult {
   has_media: boolean
   media_type: string | null
   transcribed_at: string | null
+  telegram_message_id?: number
+  content_summary?: string | null
+  content_preview?: string | null
+  media_file_name?: string | null
+  media_mime_type?: string | null
+  media_file_size?: number | null
+  visible_urls?: string[]
+  hidden_urls?: string[]
+  deleted_at?: string | null
+  telegram_message_url?: string | null
+  media_download_url?: string | null
+}
+
+export interface MessageContent {
+  id: string
+  telegram_message_id: number
+  text: string | null
+  media_type: string | null
+  media_file_name: string | null
+  media_mime_type: string | null
+  media_file_size: number | null
+  media_duration_seconds: number | null
+  content_text: string | null
+  content_summary: string | null
+  media_processing_status: string | null
+  media_processing_error_code: string | null
+  media_processing_error: string | null
+  transcribed_at: string | null
+  media_processed_at: string | null
+  content_model: string | null
+  summary_model: string | null
+  telegram_message_url: string | null
+  media_download_url: string | null
+  media_cache_status: string | null
+  media_cache_stage: string | null
+  media_sha256: string | null
+  media_cached_bytes: number | null
+  next_action: string | null
+}
+
+export interface MediaPrepareResult {
+  message_id: string
+  status: string
+  stage: string
+  byte_offset: number
+  size_bytes: number | null
+  sha256: string | null
+  retry_after: string | null
+  error_code: string | null
+  error_detail: string | null
+  media_download_url: string | null
+  next_action: string
+}
+
+export interface TranscriptSegment {
+  sequence: number
+  start_ms: number
+  end_ms: number
+  speaker: string | null
+  confidence: number | null
+  language: string | null
+  text: string
+}
+
+export interface TranscriptSegmentPage {
+  segments: TranscriptSegment[]
+  has_more: boolean
+  next_cursor: number | null
 }
 
 export interface ChatListPage {
