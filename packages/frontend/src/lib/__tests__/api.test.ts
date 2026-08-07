@@ -13,12 +13,27 @@ function jsonResponse(data: unknown, status = 200) {
 }
 
 // Import the api singleton after stubbing fetch
-import { api } from '../api'
+import { api, resolveApiUrl } from '../api'
 
 beforeEach(() => {
+  vi.unstubAllEnvs()
   mockFetch.mockReset()
   api.setAccessToken(null)
   api.setRefreshToken(null)
+})
+
+describe('resolveApiUrl', () => {
+  it('resolves signed relative media paths against the configured backend', () => {
+    vi.stubEnv('NEXT_PUBLIC_API_URL', 'http://127.0.0.1:8001')
+
+    expect(resolveApiUrl('/api/v1/media?token=test')).toBe(
+      'http://127.0.0.1:8001/api/v1/media?token=test'
+    )
+  })
+
+  it('rejects non-HTTP protocols', () => {
+    expect(resolveApiUrl('javascript:alert(1)')).toBeNull()
+  })
 })
 
 describe('ApiClient', () => {
@@ -50,20 +65,6 @@ describe('ApiClient', () => {
       await expect(api.login('test@example.com', 'wrong')).rejects.toThrow(
         'Invalid email or password'
       )
-    })
-  })
-
-  describe('register', () => {
-    it('sends JSON body and returns tokens', async () => {
-      mockFetch.mockResolvedValueOnce(
-        jsonResponse({
-          access_token: 'test-access-token',
-          refresh_token: 'test-refresh-token',
-        })
-      )
-
-      const result = await api.register('new@example.com', 'Password1')
-      expect(result.access_token).toBe('test-access-token')
     })
   })
 

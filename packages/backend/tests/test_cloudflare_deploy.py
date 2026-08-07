@@ -40,17 +40,7 @@ class TestDeployToCloudflarePages:
                 },
             ),
             patch("asyncio.create_subprocess_exec", return_value=mock_proc),
-            patch(
-                "asyncio.wait_for", return_value=(mock_proc.communicate.return_value)
-            ),
         ):
-            # Need to mock wait_for properly
-            mock_proc.communicate = AsyncMock(
-                return_value=(
-                    b"Deployment complete! Take a peek over at https://abc123.wai-sites.pages.dev\n",
-                    b"",
-                )
-            )
             result = await deploy_to_cloudflare_pages("test-slug", "<html>test</html>")
 
         assert result["success"]
@@ -74,13 +64,7 @@ class TestDeployToCloudflarePages:
                 },
             ),
             patch("asyncio.create_subprocess_exec", return_value=mock_proc),
-            patch(
-                "asyncio.wait_for", return_value=(b"", b"Error: authentication failed")
-            ),
         ):
-            mock_proc.communicate = AsyncMock(
-                return_value=(b"", b"Error: authentication failed")
-            )
             result = await deploy_to_cloudflare_pages("test-slug", "<html>test</html>")
 
         assert not result["success"]

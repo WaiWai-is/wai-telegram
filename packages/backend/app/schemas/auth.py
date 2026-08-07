@@ -1,24 +1,7 @@
-import re
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
-
-
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-    @field_validator("password")
-    @classmethod
-    def validate_password_strength(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters")
-        if not re.search(r"[A-Z]", v):
-            raise ValueError("Password must contain at least 1 uppercase letter")
-        if not re.search(r"\d", v):
-            raise ValueError("Password must contain at least 1 digit")
-        return v
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class LoginRequest(BaseModel):
@@ -37,12 +20,11 @@ class RefreshRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     email: str
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 # --- API Key schemas ---
@@ -60,7 +42,7 @@ class ApiKeyCreateRequest(BaseModel):
         description="Key expiration in days (1-3650). Null for no expiration.",
     )
     scopes: list[str] = Field(
-        default=["read", "write"],
+        default_factory=lambda: ["read", "write"],
         description="Permission scopes: 'read' and/or 'write'.",
     )
 
@@ -76,6 +58,8 @@ class ApiKeyCreateRequest(BaseModel):
 
 
 class ApiKeyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     name: str
     key_hint: str
@@ -84,9 +68,6 @@ class ApiKeyResponse(BaseModel):
     last_used_at: datetime | None
     expires_at: datetime | None
     scopes: list[str]
-
-    class Config:
-        from_attributes = True
 
 
 class ApiKeyCreateResponse(BaseModel):

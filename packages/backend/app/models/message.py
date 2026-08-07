@@ -11,11 +11,13 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import TSVECTOR
 
 from app.core.config import get_settings
 from app.core.database import Base
@@ -85,6 +87,30 @@ class TelegramMessage(Base):
     transcribed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    entities: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    visible_urls: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    hidden_urls: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    buttons: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    webpage_preview: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    reply_to_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    thread_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    forward_origin: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    album_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reactions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    edited_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    poll: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    contact: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    location: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    service_event: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    searchable_metadata: Mapped[str | None] = mapped_column(Text, nullable=True)
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR().with_variant(Text(), "sqlite"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -95,6 +121,19 @@ class TelegramMessage(Base):
     )
     content_chunks: Mapped[list["MessageContentChunk"]] = relationship(
         "MessageContentChunk",
+        back_populates="message",
+        cascade="all, delete-orphan",
+    )
+    media_object: Mapped["MediaObject | None"] = relationship(
+        "MediaObject", back_populates="message", uselist=False
+    )
+    transcript_segments: Mapped[list["TranscriptSegment"]] = relationship(
+        "TranscriptSegment",
+        back_populates="message",
+        cascade="all, delete-orphan",
+    )
+    revisions: Mapped[list["MessageRevision"]] = relationship(
+        "MessageRevision",
         back_populates="message",
         cascade="all, delete-orphan",
     )
@@ -124,6 +163,9 @@ class MessageContentChunk(Base):
     )
     chunk_index: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR().with_variant(Text(), "sqlite"), nullable=True
+    )
     embedding: Mapped[list[float] | None] = mapped_column(
         Vector(settings.embedding_dimensions), nullable=True
     )
@@ -154,4 +196,31 @@ class MessageContentChunk(Base):
     )
 
 
+class MessageRevision(Base):
+    __tablename__ = "message_revisions"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    message_id: Mapped[UUID] = mapped_column(
+        ForeignKey("telegram_messages.id", ondelete="CASCADE"), index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entities: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    edited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    message: Mapped["TelegramMessage"] = relationship(
+        "TelegramMessage", back_populates="revisions"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id", "revision", name="uq_message_revisions_message_revision"
+        ),
+    )
+
+
 from app.models.chat import TelegramChat  # noqa: E402
+from app.models.media import MediaObject, TranscriptSegment  # noqa: E402

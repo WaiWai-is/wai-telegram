@@ -2,7 +2,6 @@ from app.schemas.auth import (
     ApiKeyResponse,
     LoginRequest,
     RefreshRequest,
-    RegisterRequest,
     TokenResponse,
     UserResponse,
 )
@@ -22,7 +21,6 @@ from app.schemas.telegram import (
 __all__ = [
     # Auth
     "LoginRequest",
-    "RegisterRequest",
     "TokenResponse",
     "RefreshRequest",
     "UserResponse",

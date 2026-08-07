@@ -92,17 +92,23 @@ Connected services: {services_str}""")
         recall_lines = "\n".join(f"- {m}" for m in recalled_memories[:15])
         sections.append(f"[Recalled memories]\n{recall_lines}")
 
-    # Layer 5: Available actions
-    sections.append("""[Available actions]
-You can:
-- search_messages(query, chat_filter?, date_range?) — find past messages by meaning
-- get_digest(date?) — get AI summary of a day's activity
-- transcribe_voice(message) — transcribe a voice message
-- extract_entities(text) — find people, topics, decisions, commitments
-- send_email(to, subject, body) — send email via connected Gmail
-- create_event(title, datetime, attendees?) — create calendar event
-- deploy_site(content, slug) — deploy a static site to slug.wai.sh
-- track_commitment(who, what, deadline) — track a promise
-- search_web(query) — search the internet""")
+    # Layer 5: Available actions. Keep this generated from the same registry
+    # that supplies the actual function schemas so the prompt cannot drift.
+    from app.services.tool_registry import TOOL_DEFINITIONS
+
+    action_lines = [
+        f"- {definition.name} — {definition.description}"
+        for definition in TOOL_DEFINITIONS
+    ]
+    action_lines.extend(
+        [
+            "- get_digest — get an AI summary of Telegram activity",
+            "- track_commitment — track a promise",
+            "- extract_entities — find people, topics, decisions and commitments",
+            "- list_commitments — list open promises",
+            "- search_web — search current internet information",
+        ]
+    )
+    sections.append("[Available actions]\nYou can:\n" + "\n".join(action_lines))
 
     return "\n\n".join(sections)

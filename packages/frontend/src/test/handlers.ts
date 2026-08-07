@@ -17,14 +17,6 @@ export const handlers = [
     })
   }),
 
-  http.post(`${API_BASE}/auth/register`, async ({ request }) => {
-    return HttpResponse.json({
-      access_token: 'test-access-token',
-      refresh_token: 'test-refresh-token',
-      token_type: 'bearer',
-    })
-  }),
-
   http.post(`${API_BASE}/auth/refresh`, () => {
     return HttpResponse.json({
       access_token: 'new-access-token',

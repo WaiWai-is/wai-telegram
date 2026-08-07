@@ -18,6 +18,10 @@ from app.core.security import (
 
 
 class TestPasswordHashing:
+    def test_verifies_existing_owner_bcrypt_hash(self):
+        existing_hash = "$2b$12$hj9oL8IxMgOEHVBi2gUpZe.tJs5ZDQdyJSRJ.tyuPab7XnsNgvD.y"
+        assert verify_password("ExistingOwnerPassword1!", existing_hash) is True
+
     def test_hash_and_verify(self):
         password = "SecureP@ssw0rd"
         hashed = hash_password(password)
@@ -32,7 +36,7 @@ class TestPasswordHashing:
         password = "SamePassword1"
         h1 = hash_password(password)
         h2 = hash_password(password)
-        assert h1 != h2  # bcrypt uses random salt
+        assert h1 != h2
 
 
 class TestApiKeys:

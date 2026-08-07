@@ -13,32 +13,18 @@ from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
 
 
-class TestRegister:
-    async def test_register_success(self, client):
+class TestRegistrationClosed:
+    async def test_register_returns_404(self, client):
         response = await client.post(
             "/api/v1/auth/register",
             json={"email": "new@example.com", "password": "StrongPass1"},
         )
+        assert response.status_code == 404
+
+    async def test_register_is_absent_from_openapi(self, client):
+        response = await client.get("/openapi.json")
         assert response.status_code == 200
-        data = response.json()
-        assert "access_token" in data
-        assert "refresh_token" in data
-        assert data["token_type"] == "bearer"
-
-    async def test_register_duplicate_email(self, client, test_user):
-        response = await client.post(
-            "/api/v1/auth/register",
-            json={"email": test_user.email, "password": "StrongPass1"},
-        )
-        assert response.status_code == 400
-        assert "already registered" in response.json()["detail"]
-
-    async def test_register_weak_password(self, client):
-        response = await client.post(
-            "/api/v1/auth/register",
-            json={"email": "weak@example.com", "password": "short"},
-        )
-        assert response.status_code == 422
+        assert "/api/v1/auth/register" not in response.json()["paths"]
 
 
 class TestLogin:
@@ -66,6 +52,18 @@ class TestLogin:
             data={"username": "noone@example.com", "password": "AnyPass1"},
         )
         assert response.status_code == 401
+
+    async def test_login_inactive_user_is_rejected(self, client, db_session, test_user):
+        test_user.is_active = False
+        await db_session.flush()
+
+        response = await client.post(
+            "/api/v1/auth/login",
+            data={"username": test_user.email, "password": "TestPassword1"},
+        )
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Invalid email or password"
 
 
 class TestRefresh:
@@ -101,6 +99,20 @@ class TestRefresh:
             "/api/v1/auth/refresh",
             json={"refresh_token": refresh},
         )
+        assert response.status_code == 401
+
+    async def test_refresh_inactive_user_is_rejected(
+        self, client, db_session, test_user
+    ):
+        refresh = create_refresh_token({"sub": str(test_user.id)})
+        test_user.is_active = False
+        await db_session.flush()
+
+        response = await client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": refresh},
+        )
+
         assert response.status_code == 401
 
 

@@ -32,6 +32,7 @@ from app.services.telegram_client import (
     invalidate_client_authorization,
     is_session_authorization_error,
 )
+from app.services.telegram_metadata import extract_message_metadata
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -77,7 +78,7 @@ def _get_media_type(message: Message) -> str | None:
     return info.media_type if info else None
 
 
-def _media_values(message: Message) -> dict:
+def _media_values(message: Message, *, queue_processing: bool = False) -> dict:
     info = get_media_info(message)
     if info is None:
         return {
@@ -89,7 +90,7 @@ def _media_values(message: Message) -> dict:
             "media_duration_seconds": None,
             "media_processing_status": None,
         }
-    processable = info.media_type != "other"
+    processable = queue_processing and info.media_type != "other"
     return {
         "has_media": True,
         "media_type": info.media_type,
@@ -224,7 +225,13 @@ async def sync_messages(
         raise ValueError("Chat not found")
 
     # Get job
-    result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
+    result = await db.execute(
+        select(SyncJob).where(
+            SyncJob.id == job_id,
+            SyncJob.user_id == user_id,
+            SyncJob.chat_id == chat_id,
+        )
+    )
     job = result.scalar_one_or_none()
     if not job:
         raise ValueError("Sync job not found")
@@ -265,10 +272,18 @@ async def sync_messages(
                 on_progress(messages_seen, iter_total)
                 total_reported = True
 
-            if not message.text and not message.media:
+            if (
+                not message.text
+                and not message.media
+                and not getattr(message, "action", None)
+            ):
                 continue
 
             media_values = _media_values(message)
+            metadata_values = extract_message_metadata(
+                message,
+                file_name=media_values["media_file_name"],
+            )
             msg_values = {
                 "chat_id": chat_id,
                 "telegram_message_id": message.id,
@@ -279,6 +294,7 @@ async def sync_messages(
                 "sent_at": message.date,
                 "transcribed_at": None,
                 **media_values,
+                **metadata_values,
             }
 
             batch_values.append(msg_values)

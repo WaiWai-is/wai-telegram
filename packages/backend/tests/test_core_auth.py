@@ -57,6 +57,20 @@ class TestGetCurrentUserJWT:
         )
         assert response.status_code == 401
 
+    async def test_inactive_user_existing_jwt_returns_401(
+        self, client, db_session, test_user
+    ):
+        token = create_access_token({"sub": str(test_user.id)})
+        test_user.is_active = False
+        await db_session.flush()
+
+        response = await client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": "Bearer " + token},
+        )
+
+        assert response.status_code == 401
+
 
 class TestGetCurrentUserApiKey:
     async def test_valid_api_key(self, client, db_session, test_user):
@@ -97,6 +111,30 @@ class TestGetCurrentUserApiKey:
             headers={"Authorization": f"Bearer {raw_key}"},
         )
         assert response.status_code == 401
+
+    async def test_active_key_for_inactive_user_returns_401(
+        self, client, db_session, test_user
+    ):
+        raw_key = "wai_inactiveuser1234567890abcdefgh"
+        api_key = ApiKey(
+            user_id=test_user.id,
+            name="Inactive User Key",
+            key_hash=hash_api_key(raw_key),
+            key_prefix=compute_api_key_prefix(raw_key),
+            key_hint=get_key_hint(raw_key),
+            is_active=True,
+        )
+        db_session.add(api_key)
+        test_user.is_active = False
+        await db_session.flush()
+
+        response = await client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {raw_key}"},
+        )
+
+        assert response.status_code == 401
+        assert api_key.last_used_at is None
 
     async def test_expired_api_key_returns_401(self, client, db_session, test_user):
         raw_key = "wai_expiredkey1234567890abcdefghij"

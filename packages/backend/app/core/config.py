@@ -1,5 +1,8 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
+from uuid import UUID
 
 from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,6 +34,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     algorithm: str = "HS256"
+    owner_user_id: UUID | None = None
 
     # Rate limiting
     rate_limit_per_minute: int = 60
@@ -39,6 +43,7 @@ class Settings(BaseSettings):
     telegram_api_id: int = Field(default=0)
     telegram_api_hash: str = Field(default="")
     telegram_bot_token: str = Field(default="")
+    telegram_bot_api_base_url: str = "http://127.0.0.1:8081"
 
     # OpenAI generation, vision, and embeddings
     openai_api_key: str = Field(default="")
@@ -80,7 +85,19 @@ class Settings(BaseSettings):
     media_embedding_chunk_chars: int = 6_000
     media_embedding_chunk_overlap_chars: int = 600
     document_extraction_timeout_seconds: float = 180.0
-    media_download_timeout_seconds: float = Field(default=120.0, gt=0.0)
+    pdf_ocr_min_text_chars: int = Field(default=200, ge=0)
+    pdf_ocr_batch_pages: int = Field(default=8, ge=1, le=50)
+    pdf_ocr_dpi: int = Field(default=160, ge=72, le=300)
+    video_frame_interval_seconds: int = Field(default=30, ge=1)
+    video_scene_threshold: float = Field(default=0.3, gt=0.0, lt=1.0)
+    video_frame_analysis_batch: int = Field(default=4, ge=1, le=16)
+    media_pipeline_enabled: bool = True
+    media_root: Path = Path("/srv/wai-telegram-media")
+    media_internal_uri_prefix: str = "/_protected_media"
+    media_download_stall_timeout_seconds: float = Field(default=120.0, gt=0.0)
+    media_download_chunk_bytes: int = Field(default=512 * 1024, ge=64 * 1024)
+    media_progress_checkpoint_bytes: int = Field(default=8 * 1024 * 1024, ge=1)
+    media_lock_ttl_seconds: int = Field(default=300, ge=30)
     media_dispatch_target_depth: int = 20
     media_queue_stale_minutes: int = 360
     media_processing_stale_minutes: int = 120
@@ -114,6 +131,14 @@ class Settings(BaseSettings):
                 raise ValueError("ENCRYPTION_KEY must be set in staging/production")
             if not self.telegram_api_id or not self.telegram_api_hash:
                 raise ValueError("TELEGRAM_API_ID and TELEGRAM_API_HASH must be set")
+            if self.environment == "production" and self.owner_user_id is None:
+                raise ValueError("OWNER_USER_ID must be set in production")
+            if self.environment == "production" and self.media_pipeline_enabled:
+                bot_api_host = urlparse(self.telegram_bot_api_base_url).hostname
+                if bot_api_host not in {"127.0.0.1", "localhost", "::1"}:
+                    raise ValueError(
+                        "TELEGRAM_BOT_API_BASE_URL must point to the local Bot API"
+                    )
         return self
 
     @computed_field

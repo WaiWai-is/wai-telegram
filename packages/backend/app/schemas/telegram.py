@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class RequestCodeRequest(BaseModel):
@@ -30,11 +30,10 @@ class VerifyCodeResponse(BaseModel):
 
 
 class SessionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     phone_number: str
     telegram_user_id: int | None
     is_active: bool
     created_at: datetime
-
-    class Config:
-        from_attributes = True

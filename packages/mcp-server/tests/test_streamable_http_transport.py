@@ -11,6 +11,21 @@ class FakeTelegramAIClient:
     async def close(self) -> None:
         return None
 
+    async def list_data_tools(self) -> dict:
+        return {
+            "tools": [
+                {
+                    "name": "search_messages",
+                    "description": "Shared search tool",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                }
+            ]
+        }
+
     async def search_messages(
         self,
         query: str,
@@ -35,6 +50,16 @@ class FakeTelegramAIClient:
             "total": 1,
             "query": query,
         }
+
+    async def execute_data_tool(self, name: str, arguments: dict | None = None) -> dict:
+        if name != "search_messages":
+            raise AssertionError(name)
+        arguments = arguments or {}
+        return await self.search_messages(
+            arguments.get("query", ""),
+            chat_ids=arguments.get("chat_ids"),
+            limit=arguments.get("limit", 20),
+        )
 
 
 def _headers(

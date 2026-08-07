@@ -20,7 +20,6 @@ from app.core.security import (
     generate_api_key,
     get_key_hint,
     hash_api_key,
-    hash_password,
     verify_password,
 )
 from app.models.api_key import ApiKey
@@ -33,57 +32,12 @@ from app.schemas.auth import (
     ApiKeyResponse,
     ApiKeyUpdateRequest,
     RefreshRequest,
-    RegisterRequest,
     TokenResponse,
     UserResponse,
 )
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-@router.post("/register", response_model=TokenResponse)
-@limiter.limit("5/minute")
-async def register(
-    request: Request,
-    register_data: RegisterRequest,
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> TokenResponse:
-    """Register a new user."""
-    # Check if email exists
-    result = await db.execute(select(User).where(User.email == register_data.email))
-    if result.scalar_one_or_none():
-        log_event(
-            logger,
-            logging.WARNING,
-            "Registration rejected because email is already registered",
-            event_name="auth.register.conflict",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered",
-        )
-
-    # Create user
-    user = User(
-        email=register_data.email,
-        password_hash=hash_password(register_data.password),
-    )
-    db.add(user)
-    await db.flush()
-
-    # Generate tokens
-    access_token = create_access_token({"sub": str(user.id)})
-    refresh_token = create_refresh_token({"sub": str(user.id)})
-    log_event(
-        logger,
-        logging.INFO,
-        "User registered successfully",
-        event_name="auth.register.success",
-        user_id=user.id,
-    )
-
-    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -94,7 +48,12 @@ async def login(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TokenResponse:
     """Login with email and password."""
-    result = await db.execute(select(User).where(User.email == form_data.username))
+    result = await db.execute(
+        select(User).where(
+            User.email == form_data.username,
+            User.is_active.is_(True),
+        )
+    )
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(form_data.password, user.password_hash):
@@ -142,7 +101,12 @@ async def refresh_token(
         )
 
     user_id = payload.get("sub")
-    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    result = await db.execute(
+        select(User).where(
+            User.id == UUID(user_id),
+            User.is_active.is_(True),
+        )
+    )
     user = result.scalar_one_or_none()
 
     if not user:

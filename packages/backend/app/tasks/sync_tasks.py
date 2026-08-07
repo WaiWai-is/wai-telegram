@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.database import get_db_context
 from app.models.sync_job import SyncJob, SyncStatus
 from app.services.rate_limiter import check_budget
+from app.services.single_user import is_user_active, is_user_active_in_database
 from app.services.sync_service import create_sync_job, sync_messages
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,17 @@ def sync_chat_task(
     chat_uuid = UUID(chat_id)
     job_uuid = UUID(job_id) if job_id else None
 
+    if not run_async(is_user_active_in_database(user_uuid)):
+        if job_uuid:
+            run_async(
+                _mark_job_state(
+                    job_uuid,
+                    SyncStatus.CANCELLED,
+                    "User is inactive",
+                )
+            )
+        return {"status": "skipped", "reason": "inactive_user"}
+
     if not check_budget():
         logger.warning("Rate budget exhausted, deferring sync for chat %s", chat_id)
         raise self.retry(exc=Exception("Rate budget exhausted"), countdown=300)
@@ -282,8 +294,25 @@ async def _run_sync(
 ) -> dict:
     """Run single chat sync operation."""
     async with get_db_context() as db:
+        if not await is_user_active(db, user_id):
+            if job_id:
+                result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
+                job = result.scalar_one_or_none()
+                if job:
+                    job.status = SyncStatus.CANCELLED
+                    job.error_message = "User is inactive"
+                    job.completed_at = None
+                    await db.commit()
+            return {"status": "skipped", "reason": "inactive_user"}
+
         if job_id:
-            result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
+            result = await db.execute(
+                select(SyncJob).where(
+                    SyncJob.id == job_id,
+                    SyncJob.user_id == user_id,
+                    SyncJob.chat_id == chat_id,
+                )
+            )
             job = result.scalar_one_or_none()
             if not job:
                 raise ValueError(f"Sync job {job_id} not found")
@@ -327,6 +356,16 @@ def sync_all_chats_task(self, user_id: str, job_id: str, limit_per_chat: int = 5
     user_uuid = UUID(user_id)
     job_uuid = UUID(job_id)
 
+    if not run_async(is_user_active_in_database(user_uuid)):
+        run_async(
+            _mark_job_state(
+                job_uuid,
+                SyncStatus.CANCELLED,
+                "User is inactive",
+            )
+        )
+        return {"status": "skipped", "reason": "inactive_user"}
+
     lock = DistributedLock(user_uuid, owner=f"bulk:{job_uuid}")
     if not lock.acquire():
         logger.info("Bulk sync skipped — another sync in progress for user %s", user_id)
@@ -338,8 +377,8 @@ def sync_all_chats_task(self, user_id: str, job_id: str, limit_per_chat: int = 5
         return {"status": "skipped", "reason": "sync_in_progress"}
 
     try:
-        run_async(_run_bulk_sync(user_uuid, job_uuid, limit_per_chat))
-        return {"status": "completed", "job_id": job_id}
+        result = run_async(_run_bulk_sync(user_uuid, job_uuid, limit_per_chat))
+        return result or {"status": "completed", "job_id": job_id}
     except TelegramSessionUnauthorizedError as e:
         run_async(_mark_job_state(job_uuid, SyncStatus.FAILED, str(e)))
         logger.warning(
@@ -357,13 +396,28 @@ def sync_all_chats_task(self, user_id: str, job_id: str, limit_per_chat: int = 5
         _cleanup_bulk_progress(job_uuid)
 
 
-async def _run_bulk_sync(user_id: UUID, job_id: UUID, limit_per_chat: int) -> None:
+async def _run_bulk_sync(
+    user_id: UUID, job_id: UUID, limit_per_chat: int
+) -> dict | None:
     """Run bulk sync for all user chats sequentially."""
     from app.models.chat import TelegramChat
 
     async with get_db_context() as db:
-        result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
+        result = await db.execute(
+            select(SyncJob).where(
+                SyncJob.id == job_id,
+                SyncJob.user_id == user_id,
+                SyncJob.chat_id.is_(None),
+            )
+        )
         job = result.scalar_one()
+        if not await is_user_active(db, user_id):
+            job.status = SyncStatus.CANCELLED
+            job.error_message = "User is inactive"
+            job.completed_at = None
+            await db.commit()
+            return {"status": "skipped", "reason": "inactive_user"}
+
         job.status = SyncStatus.IN_PROGRESS
         job.error_message = None
         job.completed_at = None
@@ -475,13 +529,19 @@ def listener_health_check():
 async def _listener_health_check() -> dict:
     """Ensure listener heartbeats exist for users with realtime sync enabled."""
     from app.models.settings import UserSettings
+    from app.models.user import User
 
     checked = 0
     restarted = 0
 
     async with get_db_context() as db:
         result = await db.execute(
-            select(UserSettings).where(UserSettings.realtime_sync_enabled == True)
+            select(UserSettings)
+            .join(User, User.id == UserSettings.user_id)
+            .where(
+                UserSettings.realtime_sync_enabled == True,
+                User.is_active.is_(True),
+            )
         )
         for user_settings in result.scalars().all():
             user_id = user_settings.user_id

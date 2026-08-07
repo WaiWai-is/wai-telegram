@@ -1,6 +1,4 @@
-import asyncio
 import inspect
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +8,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from telethon.errors import FloodWaitError
 
 from app.listener.main import TelegramListener
 from app.models.message import TelegramMessage
@@ -89,60 +86,28 @@ async def test_telegram_media_download_has_an_operation_timeout(tmp_path):
         existing_content_text=None,
         transcribed_at=None,
     )
-    db = AsyncMock()
-    db_result = MagicMock()
-    db_result.scalar_one_or_none.return_value = object()
-    db.execute.return_value = db_result
-
-    @asynccontextmanager
-    async def test_db_context():
-        yield db
-
-    client = AsyncMock()
-    telegram_message = object()
-    client.get_messages.return_value = telegram_message
-
-    async def never_finishes(*_args, **_kwargs):
-        await asyncio.Event().wait()
-
-    client.download_media.side_effect = never_finishes
-    media_info = MediaInfo(
-        media_type="photo",
+    cached_path = tmp_path / "photo.jpg"
+    cached_path.write_bytes(b"photo")
+    cached = SimpleNamespace(
+        path=cached_path,
         file_name="photo.jpg",
         mime_type="image/jpeg",
-        file_size=None,
-        duration_seconds=None,
+        size_bytes=5,
     )
 
-    with (
-        patch(
-            "app.services.media_processing_service.get_db_context",
-            side_effect=test_db_context,
-        ),
-        patch(
-            "app.services.media_processing_service.get_client",
-            new_callable=AsyncMock,
-            return_value=client,
-        ),
-        patch(
-            "app.services.media_processing_service._resolve_chat_entity",
-            new_callable=AsyncMock,
-            return_value=object(),
-        ),
-        patch(
-            "app.services.media_processing_service.get_media_info",
-            return_value=media_info,
-        ),
-        patch("app.services.media_processing_service.settings") as service_settings,
-    ):
-        service_settings.media_download_timeout_seconds = 0.01
-        with pytest.raises(MediaDownloadError, match="timed out after 0.01 seconds"):
-            await asyncio.wait_for(
-                _download_telegram_media(job, tmp_path),
-                timeout=0.2,
-            )
+    with patch(
+        "app.services.media_processing_service.fetch_media_to_cache",
+        new_callable=AsyncMock,
+        return_value=cached,
+    ) as fetch:
+        path, info = await _download_telegram_media(job, tmp_path)
 
-    client.disconnect.assert_awaited_once()
+    assert path == cached_path
+    assert info.file_size == 5
+    fetch.assert_awaited_once()
+    source = inspect.getsource(_download_telegram_media)
+    assert "asyncio.timeout" not in source
+    assert "media_download_timeout_seconds" not in source
 
 
 async def test_media_worker_reuses_client_and_disconnects_it_on_shutdown():
@@ -169,8 +134,10 @@ async def test_media_worker_reuses_client_and_disconnects_it_on_shutdown():
     client.disconnect.assert_awaited_once()
 
 
-async def test_flood_wait_does_not_discard_reusable_media_client(tmp_path):
-    await disconnect_media_clients()
+async def test_stalled_cache_download_discards_reusable_client(tmp_path):
+    from app.services.media_cache_service import MediaDownloadStalled
+    from app.services.media_processing_service import _media_clients
+
     user_id = uuid4()
     job = ClaimedMediaMessage(
         id=uuid4(),
@@ -186,43 +153,28 @@ async def test_flood_wait_does_not_discard_reusable_media_client(tmp_path):
         existing_content_text=None,
         transcribed_at=None,
     )
-    db = AsyncMock()
-    db_result = MagicMock()
-    db_result.scalar_one_or_none.return_value = object()
-    db.execute.return_value = db_result
-
-    @asynccontextmanager
-    async def test_db_context():
-        yield db
-
     client = MagicMock()
     client.is_connected.return_value = True
     client.disconnect = AsyncMock()
-    client.get_messages = AsyncMock(side_effect=FloodWaitError(None, capture=300))
+    _media_clients[user_id] = client
 
-    with (
-        patch(
-            "app.services.media_processing_service.get_db_context",
-            side_effect=test_db_context,
-        ),
-        patch(
-            "app.services.media_processing_service.get_client",
-            new_callable=AsyncMock,
-            return_value=client,
-        ),
-        patch(
-            "app.services.media_processing_service._resolve_chat_entity",
-            new_callable=AsyncMock,
-            return_value=object(),
-        ),
+    async def get_failed_client(_user_id, _db):
+        return client
+
+    async def stalled(*_args, **kwargs):
+        await kwargs["get_media_client"](user_id, AsyncMock())
+        raise MediaDownloadStalled("no progress")
+
+    with patch(
+        "app.services.media_processing_service.fetch_media_to_cache",
+        new_callable=AsyncMock,
+        side_effect=stalled,
     ):
-        with pytest.raises(MediaDownloadError, match="FloodWaitError"):
+        with pytest.raises(MediaDownloadError, match="download_stalled"):
             await _download_telegram_media(job, tmp_path)
 
-        assert await _get_media_client(user_id, db) is client
-
-    client.disconnect.assert_not_awaited()
-    await disconnect_media_clients()
+    assert user_id not in _media_clients
+    client.disconnect.assert_awaited_once()
 
 
 def test_media_worker_uses_one_persistent_telegram_connection():
@@ -238,3 +190,97 @@ def test_realtime_listener_uses_the_bounded_priority_dispatcher():
     source = inspect.getsource(TelegramListener._handle_message)
 
     assert "enqueue_media_processing" not in source
+
+
+def test_signed_media_download_has_no_application_rate_limit_and_no_token_logs():
+    root = Path(__file__).parents[3]
+    route_source = inspect.getsource(
+        __import__(
+            "app.api.v1.chats", fromlist=["download_message_media"]
+        ).download_message_media
+    )
+    nginx = root.joinpath("nginx/telegram-ai.conf").read_text()
+    backend_service = root.joinpath("systemd/wai-backend.service").read_text()
+
+    assert "limiter.limit" not in route_source
+    signed_location = nginx.split("location ~ ^/api/v1/chats/", 1)[1].split("}", 1)[0]
+    assert "access_log off" in signed_location
+    assert "limit_req" not in signed_location
+    assert "--no-access-log" in backend_service
+
+    mcp_location = nginx.split("location = /mcp {", 1)[1].split("}", 1)[0]
+    assert "access_log off" in mcp_location
+
+
+def test_large_media_pipeline_has_no_document_total_timeout_and_uses_sendfile():
+    root = Path(__file__).parents[3]
+    document_source = inspect.getsource(
+        __import__(
+            "app.services.media_content_service", fromlist=["extract_document_text"]
+        ).extract_document_text
+    )
+    nginx = root.joinpath("nginx/telegram-ai.conf").read_text()
+    protected_location = nginx.split("location /_protected_media/", 1)[1].split("}", 1)[
+        0
+    ]
+
+    assert "wait_for" not in document_source
+    assert "document_extraction_timeout_seconds" not in document_source
+    assert "sendfile on" in protected_location
+    assert "directio" not in protected_location
+
+
+def test_cutover_backup_secret_is_not_exposed_to_application_services():
+    root = Path(__file__).parents[3]
+    production_env = root.joinpath(".env.production.example").read_text()
+    workflow = root.joinpath(".github/workflows/deploy.yml").read_text()
+    backup_script = root.joinpath("scripts/auth-cutover-backup.sh").read_text()
+
+    assert "BACKUP_ENCRYPTION_PASSPHRASE" not in production_env
+    assert "BACKUP_ENCRYPTION_PASSPHRASE" not in workflow
+    assert "/etc/wai-telegram/auth-backup-passphrase" in backup_script
+    assert "--passphrase-file" in backup_script
+
+    preflight = root.joinpath("scripts/single-user-preflight.sh").read_text()
+    assert "stat -c '%u:%a'" in preflight
+    assert '"0:600"' in preflight
+
+
+def test_media_writers_have_explicit_media_volume_group():
+    root = Path(__file__).parents[3]
+    for unit_name in (
+        "wai-backend.service",
+        "wai-media.service",
+        "wai-media-process.service",
+        "wai-media-index.service",
+    ):
+        unit = root.joinpath("systemd", unit_name).read_text()
+        assert "SupplementaryGroups=wai-media" in unit
+
+
+def test_restic_is_pinned_and_checksum_verified_before_backup_setup():
+    root = Path(__file__).parents[3]
+    installer = root.joinpath("scripts/install-restic.sh").read_text()
+    workflow = root.joinpath(".github/workflows/deploy.yml").read_text()
+
+    assert 'RESTIC_VERSION="0.19.1"' in installer
+    assert "restic_0.19.1_linux_amd64.bz2" in installer
+    assert "restic_0.19.1_linux_arm64.bz2" in installer
+    assert "sha256sum --check" in installer
+    assert "^restic 0\\.19\\.1 compiled with go" in installer
+    assert '"$release_dir/scripts/install-restic.sh"' in workflow
+
+
+def test_deferred_media_deploy_is_explicit_and_skips_heavy_runtime():
+    root = Path(__file__).parents[3]
+    workflow = root.joinpath(".github/workflows/deploy.yml").read_text()
+    preflight = root.joinpath("scripts/single-user-preflight.sh").read_text()
+    backup = root.joinpath("scripts/auth-cutover-backup.sh").read_text()
+
+    assert "media_mode" in workflow
+    assert "deferred" in workflow
+    assert '[ "$MEDIA_PIPELINE_ENABLED" = "false" ]' in preflight
+    assert 'if [ "$MEDIA_MODE" = "full" ]' in workflow
+    assert "tee >(docker exec -i" in backup
+    assert 'plain_dump="$work_dir/database.dump"' not in backup
+    assert 'verification_dump="$work_dir/database-verify.dump"' not in backup

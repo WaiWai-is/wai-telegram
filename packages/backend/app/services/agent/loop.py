@@ -62,33 +62,7 @@ class AgentResult:
 
 # Provider-neutral function definitions. They are converted to Responses API tools
 # at the model boundary.
-TOOLS = [
-    {
-        "name": "search_messages",
-        "description": "Search user's Telegram message history by semantic meaning. Returns relevant messages with sender, chat, and date.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Natural language search query",
-                },
-                "chat_name": {
-                    "type": "string",
-                    "description": "Optional: filter by chat name",
-                },
-                "date_from": {
-                    "type": "string",
-                    "description": "Optional: start date (YYYY-MM-DD)",
-                },
-                "date_to": {
-                    "type": "string",
-                    "description": "Optional: end date (YYYY-MM-DD)",
-                },
-            },
-            "required": ["query"],
-        },
-    },
+NON_DATA_TOOLS = [
     {
         "name": "get_digest",
         "description": "Get AI-generated summary of user's Telegram activity for a specific date.",
@@ -174,6 +148,22 @@ TOOLS = [
 ]
 
 
+def _data_tools() -> list[dict]:
+    from app.services.tool_registry import TOOL_DEFINITIONS
+
+    return [
+        {
+            "name": definition.name,
+            "description": definition.description,
+            "input_schema": definition.parameters,
+        }
+        for definition in TOOL_DEFINITIONS
+    ]
+
+
+TOOLS = _data_tools() + NON_DATA_TOOLS
+
+
 def _responses_tools() -> list[dict]:
     return [
         {
@@ -194,9 +184,15 @@ async def execute_tool(tool_name: str, tool_input: dict, context: AgentContext) 
     """
     logger.info(f"Executing tool: {tool_name} for user {context.user_id}")
 
-    if tool_name == "search_messages":
-        return await _tool_search_messages(tool_input, context)
-    elif tool_name == "get_digest":
+    from app.services.tool_registry import _DEFINITION_BY_NAME, execute_data_tool
+
+    if tool_name in _DEFINITION_BY_NAME:
+        from app.core.database import get_db_context
+
+        async with get_db_context() as db:
+            result = await execute_data_tool(db, context.user_id, tool_name, tool_input)
+        return json.dumps(result, ensure_ascii=False, default=str)
+    if tool_name == "get_digest":
         return await _tool_get_digest(tool_input, context)
     elif tool_name == "track_commitment":
         return await _tool_track_commitment(tool_input, context)

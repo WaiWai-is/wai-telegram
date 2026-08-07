@@ -61,7 +61,7 @@ async def _get_eligible_user_ids(current_hour: int) -> list[UUID]:
         result = await db.execute(
             select(User.id)
             .outerjoin(UserSettings, User.id == UserSettings.user_id)
-            .where(or_(*conditions))
+            .where(User.is_active.is_(True), or_(*conditions))
         )
         return list(result.scalars().all())
 
@@ -77,6 +77,17 @@ async def _generate_user_digest(user_id: UUID, digest_date: str | None) -> dict:
     target_date = date.fromisoformat(digest_date) if digest_date else None
 
     async with get_db_context() as db:
+        active_user_id = (
+            await db.execute(
+                select(User.id).where(
+                    User.id == user_id,
+                    User.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if active_user_id is None:
+            return {"status": "skipped", "reason": "inactive_user"}
+
         digest = await generate_digest(db, user_id, target_date)
 
         # Check if user wants Telegram bot delivery

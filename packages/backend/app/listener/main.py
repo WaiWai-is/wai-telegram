@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import redis.asyncio as aioredis
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
@@ -21,11 +21,25 @@ from telethon.tl.types import (
 from app.core.config import get_settings
 from app.core.database import get_db_context
 from app.models.chat import ChatType, TelegramChat
-from app.models.message import MediaProcessingStatus, TelegramMessage
+from app.models.message import (
+    MediaProcessingStatus,
+    MessageContentChunk,
+    MessageRevision,
+    TelegramMessage,
+)
+from app.models.media import (
+    MediaObject,
+    MediaObjectStatus,
+    MediaStage,
+    TranscriptSegment,
+)
 from app.models.settings import UserSettings
 from app.models.sync_job import SyncJob, SyncStatus
+from app.models.user import User
 from app.services.embedding_service import embed_messages
 from app.services.media_content_service import get_media_info
+from app.services.media_cache_service import _cache_key, telegram_media_identity
+from app.services.single_user import is_user_active, lock_active_user
 from app.services.sync_service import sync_messages
 from app.services.telegram_client import (
     TelegramSessionUnauthorizedError,
@@ -34,6 +48,7 @@ from app.services.telegram_client import (
     invalidate_client_authorization,
     is_session_authorization_error,
 )
+from app.services.telegram_metadata import extract_message_metadata
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -82,7 +97,12 @@ class TelegramListener:
         """Connect Telethon clients for all users with realtime_sync_enabled."""
         async with get_db_context() as db:
             result = await db.execute(
-                select(UserSettings).where(UserSettings.realtime_sync_enabled == True)
+                select(UserSettings)
+                .join(User, User.id == UserSettings.user_id)
+                .where(
+                    UserSettings.realtime_sync_enabled == True,
+                    User.is_active.is_(True),
+                )
             )
             for user_settings in result.scalars().all():
                 try:
@@ -105,11 +125,22 @@ class TelegramListener:
             return
 
         async with get_db_context() as db:
+            if not await is_user_active(db, user_id):
+                logger.info("Ignored listener start for inactive user %s", user_id)
+                return
             client = await get_client(user_id, db, receive_updates=True)
 
         @client.on(events.NewMessage)
         async def on_message(event):
             await self._handle_message(user_id, event)
+
+        @client.on(events.MessageEdited)
+        async def on_message_edited(event):
+            await self._handle_edit(user_id, event)
+
+        @client.on(events.MessageDeleted)
+        async def on_message_deleted(event):
+            await self._handle_delete(user_id, event)
 
         # Start receiving updates
         try:
@@ -210,7 +241,11 @@ class TelegramListener:
     async def _handle_message(self, user_id: UUID, event):
         """Save incoming message to DB."""
         message = event.message
-        if not message.text and not message.media:
+        if (
+            not message.text
+            and not message.media
+            and not getattr(message, "action", None)
+        ):
             return
 
         try:
@@ -218,6 +253,9 @@ class TelegramListener:
             inserted_id = None
 
             async with get_db_context() as db:
+                if not await lock_active_user(db, user_id):
+                    await self._stop_user(user_id)
+                    return
                 # Find our chat record by telegram_chat_id
                 result = await db.execute(
                     select(TelegramChat).where(
@@ -251,6 +289,10 @@ class TelegramListener:
 
                 media_info = get_media_info(message)
                 media_type = media_info.media_type if media_info else None
+                metadata_values = extract_message_metadata(
+                    message,
+                    file_name=media_info.file_name if media_info else None,
+                )
                 values = {
                     "chat_id": chat.id,
                     "telegram_message_id": message.id,
@@ -272,6 +314,7 @@ class TelegramListener:
                     "sender_name": _get_sender_name(sender),
                     "is_outgoing": message.out,
                     "sent_at": message.date,
+                    **metadata_values,
                 }
 
                 stmt = pg_insert(TelegramMessage).values(**values)
@@ -316,6 +359,164 @@ class TelegramListener:
                 return
             logger.error(f"Error handling real-time message for user {user_id}: {e}")
 
+    async def _handle_edit(self, user_id: UUID, event) -> None:
+        """Keep the previous version and update all searchable metadata."""
+        async with get_db_context() as db:
+            if not await lock_active_user(db, user_id):
+                await self._stop_user(user_id)
+                return
+            chat = (
+                await db.execute(
+                    select(TelegramChat).where(
+                        TelegramChat.user_id == user_id,
+                        TelegramChat.telegram_chat_id == event.chat_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if chat is None:
+                logger.warning(
+                    "Ignored edit for unknown chat %s and active user %s",
+                    event.chat_id,
+                    user_id,
+                )
+                return
+            current = (
+                await db.execute(
+                    select(TelegramMessage)
+                    .where(
+                        TelegramMessage.chat_id == chat.id,
+                        TelegramMessage.telegram_message_id == event.message.id,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if current is None:
+                logger.warning(
+                    "Ignored edit for unsynced Telegram message %s in chat %s",
+                    event.message.id,
+                    event.chat_id,
+                )
+                return
+            next_revision = (
+                await db.execute(
+                    select(func.coalesce(func.max(MessageRevision.revision), 0)).where(
+                        MessageRevision.message_id == current.id
+                    )
+                )
+            ).scalar_one() + 1
+            db.add(
+                MessageRevision(
+                    message_id=current.id,
+                    revision=next_revision,
+                    text=current.text,
+                    entities=current.entities,
+                    edited_at=current.edited_at or current.sent_at,
+                )
+            )
+            info = get_media_info(event.message)
+            metadata = extract_message_metadata(
+                event.message,
+                file_name=info.file_name if info else current.media_file_name,
+            )
+            current.text = event.message.text
+            current.edited_at = event.message.edit_date or datetime.now(UTC)
+            for field, value in metadata.items():
+                setattr(current, field, value)
+            if info is not None:
+                media_object = (
+                    await db.execute(
+                        select(MediaObject).where(MediaObject.message_id == current.id)
+                    )
+                ).scalar_one_or_none()
+                current_identity = telegram_media_identity(event.message)
+                media_changed = bool(
+                    media_object is not None
+                    and media_object.telegram_media_id != current_identity
+                )
+                if media_changed:
+                    media_object.cache_key = _cache_key(
+                        user_id,
+                        chat.telegram_chat_id,
+                        current.telegram_message_id,
+                        current_identity,
+                    )
+                    media_object.telegram_media_id = current_identity
+                    media_object.relative_path = None
+                    media_object.sha256 = None
+                    media_object.byte_offset = 0
+                    media_object.status = MediaObjectStatus.PENDING
+                    media_object.stage = MediaStage.FETCH
+                    media_object.error_code = None
+                    media_object.error_detail = None
+                    current.content_text = None
+                    current.content_summary = None
+                    current.content_model = None
+                    current.summary_model = None
+                    current.embedding = None
+                    current.embedded_at = None
+                    current.transcribed_at = None
+                    current.media_processed_at = None
+                    await db.execute(
+                        delete(MessageContentChunk).where(
+                            MessageContentChunk.message_id == current.id
+                        )
+                    )
+                    await db.execute(
+                        delete(TranscriptSegment).where(
+                            TranscriptSegment.message_id == current.id
+                        )
+                    )
+                current.has_media = True
+                current.media_type = info.media_type
+                current.media_file_name = info.file_name
+                current.media_mime_type = info.mime_type
+                current.media_file_size = info.file_size
+                current.media_duration_seconds = info.duration_seconds
+                if media_changed or current.media_processing_status is None:
+                    current.media_processing_status = MediaProcessingStatus.PENDING
+
+    async def _handle_delete(self, user_id: UUID, event) -> None:
+        """Tombstone Telegram deletes; never erase the local archive."""
+        deleted_ids = list(event.deleted_ids or [])
+        if not deleted_ids:
+            return
+        async with get_db_context() as db:
+            if not await lock_active_user(db, user_id):
+                await self._stop_user(user_id)
+                return
+            owner_chat_ids = select(TelegramChat.id).where(
+                TelegramChat.user_id == user_id
+            )
+            if event.chat_id is None:
+                # Telethon omits Peer information for private-chat deletions.
+                # Message IDs are safe to use only when they resolve to exactly
+                # one chat in this owner's archive; ambiguous IDs stay untouched.
+                message_ids = (
+                    select(TelegramMessage.telegram_message_id)
+                    .where(
+                        TelegramMessage.chat_id.in_(owner_chat_ids),
+                        TelegramMessage.telegram_message_id.in_(deleted_ids),
+                    )
+                    .group_by(TelegramMessage.telegram_message_id)
+                    .having(func.count(func.distinct(TelegramMessage.chat_id)) == 1)
+                )
+                predicate = TelegramMessage.telegram_message_id.in_(message_ids)
+            else:
+                owner_chat_ids = owner_chat_ids.where(
+                    TelegramChat.telegram_chat_id == event.chat_id
+                )
+                predicate = TelegramMessage.telegram_message_id.in_(deleted_ids)
+
+            await db.execute(
+                update(TelegramMessage)
+                .where(
+                    TelegramMessage.chat_id.in_(owner_chat_ids),
+                    predicate,
+                )
+                .values(deleted_at=datetime.now(UTC))
+                .execution_options(synchronize_session=False)
+            )
+
     async def _handle_sync(self, cmd: dict):
         """Perform manual sync using existing sync_messages() function."""
         user_id = UUID(cmd["user_id"])
@@ -337,7 +538,28 @@ class TelegramListener:
 
         try:
             async with get_db_context() as db:
-                result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
+                if not await is_user_active(db, user_id):
+                    result = await db.execute(
+                        select(SyncJob).where(
+                            SyncJob.id == job_id,
+                            SyncJob.user_id == user_id,
+                        )
+                    )
+                    job = result.scalar_one_or_none()
+                    if job:
+                        job.status = SyncStatus.CANCELLED
+                        job.error_message = "User is inactive"
+                        await db.commit()
+                    await self._stop_user(user_id)
+                    return
+
+                result = await db.execute(
+                    select(SyncJob).where(
+                        SyncJob.id == job_id,
+                        SyncJob.user_id == user_id,
+                        SyncJob.chat_id == chat_id,
+                    )
+                )
                 job = result.scalar_one_or_none()
                 if not job:
                     logger.error(f"Sync job {job_id} not found")
@@ -400,7 +622,12 @@ class TelegramListener:
                 error_message = str(e)[:500]
                 logger.error(f"Listener sync failed for chat {chat_id}: {e}")
             async with get_db_context() as db:
-                result = await db.execute(select(SyncJob).where(SyncJob.id == job_id))
+                result = await db.execute(
+                    select(SyncJob).where(
+                        SyncJob.id == job_id,
+                        SyncJob.user_id == user_id,
+                    )
+                )
                 job = result.scalar_one_or_none()
                 if job:
                     job.status = SyncStatus.FAILED
@@ -449,6 +676,11 @@ class TelegramListener:
         while True:
             try:
                 for user_id, client in list(self.clients.items()):
+                    async with get_db_context() as db:
+                        active = await is_user_active(db, user_id)
+                    if not active:
+                        await self._stop_user(user_id)
+                        continue
                     if client.is_connected():
                         await self.redis.set(
                             f"listener:active:{user_id}", "1", ex=ACTIVE_KEY_TTL
@@ -466,6 +698,11 @@ class TelegramListener:
             await asyncio.sleep(HEALTH_CHECK_INTERVAL)
             for user_id, client in list(self.clients.items()):
                 try:
+                    async with get_db_context() as db:
+                        active = await is_user_active(db, user_id)
+                    if not active:
+                        await self._stop_user(user_id)
+                        continue
                     if client.is_connected():
                         await client.catch_up()
                         logger.debug(

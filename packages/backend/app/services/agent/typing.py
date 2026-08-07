@@ -5,11 +5,7 @@ Critical for UX: without it, multi-second responses feel like the bot is dead.
 """
 
 import logging
-import os
-
-import httpx
-
-from app.core.config import get_settings
+from app.services.telegram_bot_api import get_bot_api_client
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +16,11 @@ async def send_typing_action(chat_id: int) -> None:
     This shows "Wai is typing..." in the chat for ~5 seconds.
     Should be called before any slow operation (generation, search, etc).
     """
-    token = os.environ.get("TELEGRAM_BOT_TOKEN") or get_settings().telegram_bot_token
-    if not token:
-        return
-
-    url = f"https://api.telegram.org/bot{token}/sendChatAction"
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(url, json={"chat_id": chat_id, "action": "typing"})
+        await get_bot_api_client().call(
+            "sendChatAction",
+            json={"chat_id": chat_id, "action": "typing"},
+            timeout=5,
+        )
     except Exception as e:
-        logger.debug(f"Typing indicator failed: {e}")
+        logger.debug("Typing indicator failed (%s)", type(e).__name__)

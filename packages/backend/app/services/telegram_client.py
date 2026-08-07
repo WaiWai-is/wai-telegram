@@ -207,9 +207,15 @@ async def get_client(
 
     Clients are intentionally not cached globally to avoid cross-event-loop reuse.
     """
+    from app.models.user import User
+
     result = await db.execute(
-        select(TelegramSession).where(
-            TelegramSession.user_id == user_id, TelegramSession.is_active == True
+        select(TelegramSession)
+        .join(User, User.id == TelegramSession.user_id)
+        .where(
+            TelegramSession.user_id == user_id,
+            TelegramSession.is_active == True,
+            User.is_active.is_(True),
         )
     )
     session = result.scalar_one_or_none()

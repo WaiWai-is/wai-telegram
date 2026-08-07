@@ -1,0 +1,17 @@
+[Unit]
+Description=WAI Telegram restic repository integrity check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+CacheDirectory=wai-telegram-restic
+Environment=RESTIC_CACHE_DIR=/var/cache/wai-telegram-restic
+ExecStart=/opt/wai-telegram/scripts/restic-check.sh
+Nice=15
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/cache/wai-telegram-restic

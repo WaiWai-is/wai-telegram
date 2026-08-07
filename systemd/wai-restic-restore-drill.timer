@@ -1,0 +1,10 @@
+[Unit]
+Description=Quarterly WAI Telegram restore drill
+
+[Timer]
+OnCalendar=*-01,04,07,10-01 05:30:00
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target

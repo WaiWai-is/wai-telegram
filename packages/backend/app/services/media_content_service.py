@@ -1,6 +1,8 @@
 import asyncio
-import base64
+import hashlib
 import logging
+import re
+import shutil
 import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -38,8 +40,16 @@ class MediaProviderResponseError(MediaProcessingError):
     """Raised when a provider returns an unusable response."""
 
 
+class MediaNoSpeechError(MediaProviderResponseError):
+    """Raised when a valid audio stream contains no transcribable speech."""
+
+
 class MediaDocumentExtractionError(MediaProcessingError):
     """Raised when local document extraction fails."""
+
+
+class MediaUnsupportedFormatError(MediaDocumentExtractionError):
+    """Raised when no local converter supports an otherwise downloadable file."""
 
 
 @dataclass(frozen=True)
@@ -49,6 +59,28 @@ class MediaInfo:
     mime_type: str | None = None
     file_size: int | None = None
     duration_seconds: int | None = None
+
+
+@dataclass(frozen=True)
+class TranscriptPart:
+    start_ms: int
+    end_ms: int
+    text: str
+    speaker: str | None = None
+    confidence: float | None = None
+    language: str | None = None
+
+
+@dataclass(frozen=True)
+class TranscriptionResult:
+    text: str
+    segments: tuple[TranscriptPart, ...]
+
+
+@dataclass(frozen=True)
+class VideoFrame:
+    timestamp_ms: int
+    path: Path
 
 
 class ContentSummary(BaseModel):
@@ -245,8 +277,82 @@ def _deepgram_transcript(payload: object) -> str:
     return transcript.strip() if isinstance(transcript, str) else ""
 
 
-async def transcribe_media_file(path: Path, mime_type: str | None) -> str:
-    """Transcribe local audio with Nova-3 multilingual smart formatting."""
+def _finite_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _deepgram_transcription_result(payload: object) -> TranscriptionResult:
+    transcript = _deepgram_transcript(payload)
+    if not isinstance(payload, dict):
+        return TranscriptionResult(text=transcript, segments=())
+    results = payload.get("results")
+    if not isinstance(results, dict):
+        return TranscriptionResult(text=transcript, segments=())
+
+    detected_language: str | None = None
+    channels = results.get("channels")
+    if isinstance(channels, list) and channels and isinstance(channels[0], dict):
+        candidate = channels[0].get("detected_language")
+        if isinstance(candidate, str) and candidate.strip():
+            detected_language = candidate.strip()
+
+    parts: list[TranscriptPart] = []
+    utterances = results.get("utterances")
+    if isinstance(utterances, list):
+        for utterance in utterances:
+            if not isinstance(utterance, dict):
+                continue
+            text = utterance.get("transcript")
+            start = _finite_float(utterance.get("start"))
+            end = _finite_float(utterance.get("end"))
+            if (
+                not isinstance(text, str)
+                or not text.strip()
+                or start is None
+                or end is None
+                or start < 0
+                or end < start
+            ):
+                continue
+            speaker_value = utterance.get("speaker")
+            speaker = (
+                str(speaker_value)
+                if isinstance(speaker_value, (str, int))
+                and not isinstance(speaker_value, bool)
+                else None
+            )
+            confidence = _finite_float(utterance.get("confidence"))
+            language_value = utterance.get("language")
+            language = (
+                language_value.strip()
+                if isinstance(language_value, str) and language_value.strip()
+                else detected_language
+            )
+            parts.append(
+                TranscriptPart(
+                    start_ms=round(start * 1000),
+                    end_ms=round(end * 1000),
+                    text=text.strip(),
+                    speaker=speaker,
+                    confidence=confidence,
+                    language=language,
+                )
+            )
+    if not transcript and parts:
+        transcript = " ".join(part.text for part in parts)
+    return TranscriptionResult(text=transcript, segments=tuple(parts))
+
+
+async def transcribe_media_file_detailed(
+    path: Path,
+    mime_type: str | None,
+) -> TranscriptionResult:
+    """Transcribe audio and retain utterance timecodes and speaker labels."""
     if not settings.deepgram_api_key:
         raise MediaProcessingConfigurationError("DEEPGRAM_API_KEY is required")
     if not path.is_file():
@@ -262,6 +368,8 @@ async def transcribe_media_file(path: Path, mime_type: str | None) -> str:
         "model": settings.deepgram_model,
         "language": settings.deepgram_language,
         "smart_format": "true",
+        "utterances": "true",
+        "diarize": "true",
     }
     timeout = httpx.Timeout(
         settings.deepgram_timeout_seconds,
@@ -291,10 +399,15 @@ async def transcribe_media_file(path: Path, mime_type: str | None) -> str:
             "Deepgram returned an invalid JSON response"
         ) from exc
 
-    transcript = _deepgram_transcript(payload)
-    if not transcript:
-        raise MediaProviderResponseError("Deepgram returned an empty transcript")
-    return transcript
+    result = _deepgram_transcription_result(payload)
+    if not result.text:
+        raise MediaNoSpeechError("Deepgram found no speech in the media")
+    return result
+
+
+async def transcribe_media_file(path: Path, mime_type: str | None) -> str:
+    """Backward-compatible text-only transcription facade."""
+    return (await transcribe_media_file_detailed(path, mime_type)).text
 
 
 def _parsed_response(response, model_type: type[ParsedModel]) -> ParsedModel:
@@ -377,12 +490,17 @@ async def analyze_image(path: Path, mime_type: str | None) -> ImageAnalysis:
     """Extract readable text and a search-oriented summary from an image."""
     if not settings.openai_api_key:
         raise MediaProcessingConfigurationError("OPENAI_API_KEY is required")
-    media_type = mime_type or "image/jpeg"
-    image_data = base64.b64encode(await asyncio.to_thread(path.read_bytes)).decode(
-        "ascii"
-    )
+    if not path.is_file():
+        raise MediaProcessingError("Image file is missing")
     client = await get_openai_client()
+    uploaded = None
     try:
+        with path.open("rb") as source:
+            uploaded = await client.files.create(
+                file=source,
+                purpose="user_data",
+                expires_after={"anchor": "created_at", "seconds": 3600},
+            )
         response = await client.responses.parse(
             model=settings.media_summary_model,
             reasoning={"effort": "none"},
@@ -412,8 +530,8 @@ async def analyze_image(path: Path, mime_type: str | None) -> ImageAnalysis:
                         },
                         {
                             "type": "input_image",
-                            "image_url": f"data:{media_type};base64,{image_data}",
-                            "detail": "low",
+                            "file_id": uploaded.id,
+                            "detail": "high",
                         },
                     ],
                 },
@@ -423,6 +541,9 @@ async def analyze_image(path: Path, mime_type: str | None) -> ImageAnalysis:
         raise MediaProviderResponseError(
             "OpenAI returned invalid structured image output"
         ) from exc
+    finally:
+        if uploaded is not None:
+            await client.files.delete(uploaded.id)
     parsed = _parsed_response(response, ImageAnalysis)
     parsed.visible_text = parsed.visible_text.strip()
     parsed.summary = parsed.summary.strip()
@@ -431,35 +552,254 @@ async def analyze_image(path: Path, mime_type: str | None) -> ImageAnalysis:
     return parsed
 
 
-async def extract_document_text(path: Path) -> str:
-    """Convert a supported local document to searchable Markdown."""
-    destination = path.with_name("extracted-content.md")
+async def _run_process(
+    *args: str,
+    timeout_seconds: float | None = None,
+) -> tuple[int, str]:
     process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "app.services.document_extract_worker",
-        str(path),
-        str(destination),
+        *args,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        _, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=settings.document_extraction_timeout_seconds,
-        )
-    except TimeoutError as exc:
+        if timeout_seconds is None:
+            _, stderr = await process.communicate()
+        else:
+            _, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=timeout_seconds
+            )
+    except TimeoutError:
         process.kill()
         await process.wait()
-        raise MediaDocumentExtractionError("Document extraction timed out") from exc
+        raise
+    return process.returncode or 0, stderr.decode("utf-8", errors="replace")
 
+
+async def extract_video_frames(path: Path) -> list[VideoFrame]:
+    """Persist scene-change frames plus a frame at least every configured interval."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise MediaProcessingConfigurationError("ffmpeg is required for video analysis")
+    output_dir = path.parent / "visual-timeline"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for stale in output_dir.glob("*.jpg"):
+        stale.unlink()
+
+    interval_pattern = output_dir / "interval-%06d.jpg"
+    interval_code, interval_error = await _run_process(
+        ffmpeg,
+        "-nostdin",
+        "-v",
+        "error",
+        "-i",
+        str(path),
+        "-vf",
+        f"fps=1/{settings.video_frame_interval_seconds}",
+        "-q:v",
+        "3",
+        "-y",
+        str(interval_pattern),
+    )
+    interval_paths = sorted(output_dir.glob("interval-*.jpg"))
+    if interval_code != 0 or not interval_paths:
+        detail = interval_error.strip()[:300]
+        raise MediaProcessingError(
+            f"Video frame extraction failed{': ' + detail if detail else ''}"
+        )
+
+    scene_pattern = output_dir / "scene-%06d.jpg"
+    scene_code, scene_error = await _run_process(
+        ffmpeg,
+        "-nostdin",
+        "-v",
+        "info",
+        "-i",
+        str(path),
+        "-vf",
+        (f"select='gt(scene,{settings.video_scene_threshold})',showinfo"),
+        "-fps_mode",
+        "vfr",
+        "-q:v",
+        "3",
+        "-y",
+        str(scene_pattern),
+    )
+    if scene_code != 0:
+        detail = scene_error.strip()[:300]
+        raise MediaProcessingError(
+            f"Video scene-change extraction failed{': ' + detail if detail else ''}"
+        )
+    scene_times = [
+        round(float(value) * 1000)
+        for value in re.findall(r"pts_time:([0-9]+(?:\.[0-9]+)?)", scene_error)
+    ]
+
+    candidates = [
+        VideoFrame(
+            timestamp_ms=index * settings.video_frame_interval_seconds * 1000,
+            path=frame_path,
+        )
+        for index, frame_path in enumerate(interval_paths)
+    ]
+    candidates.extend(
+        VideoFrame(
+            timestamp_ms=(scene_times[index] if index < len(scene_times) else 0),
+            path=frame_path,
+        )
+        for index, frame_path in enumerate(sorted(output_dir.glob("scene-*.jpg")))
+    )
+
+    seen_hashes: set[str] = set()
+    frames: list[VideoFrame] = []
+    for frame in sorted(
+        candidates, key=lambda item: (item.timestamp_ms, item.path.name)
+    ):
+        digest = hashlib.sha256(frame.path.read_bytes()).hexdigest()
+        if digest in seen_hashes:
+            continue
+        seen_hashes.add(digest)
+        frames.append(frame)
+    return frames
+
+
+async def analyze_video_timeline(path: Path) -> str:
+    checkpoint = path.parent / "visual-timeline.md"
+    if checkpoint.is_file():
+        saved = (await asyncio.to_thread(checkpoint.read_text, "utf-8")).strip()
+        if saved:
+            return saved
+    frames = await extract_video_frames(path)
+    lines = []
+    batch_size = settings.video_frame_analysis_batch
+    for batch_start in range(0, len(frames), batch_size):
+        frame_batch = frames[batch_start : batch_start + batch_size]
+        analyses = await asyncio.gather(
+            *(analyze_image(frame.path, "image/jpeg") for frame in frame_batch)
+        )
+        for frame, analysis in zip(frame_batch, analyses, strict=True):
+            timestamp = frame.timestamp_ms / 1000
+            visible = (
+                f" Visible text: {analysis.visible_text}"
+                if analysis.visible_text
+                else ""
+            )
+            lines.append(f"[{timestamp:.3f}s] {analysis.summary}{visible}")
+    content = "\n".join(lines)
+    temporary = checkpoint.with_suffix(".md.part")
+    await asyncio.to_thread(temporary.write_text, content, "utf-8")
+    await asyncio.to_thread(temporary.replace, checkpoint)
+    return content
+
+
+async def _pdf_page_count(path: Path) -> int:
+    pdfinfo = shutil.which("pdfinfo")
+    if pdfinfo is None:
+        raise MediaProcessingConfigurationError(
+            "pdfinfo is required for scanned PDF OCR"
+        )
+    process = await asyncio.create_subprocess_exec(
+        pdfinfo,
+        str(path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
     if process.returncode != 0:
-        reason = stderr.decode("utf-8", errors="replace").strip()[:80]
-        suffix = f": {reason}" if reason else ""
-        raise MediaDocumentExtractionError(f"Document extraction failed{suffix}")
+        detail = stderr.decode("utf-8", errors="replace").strip()[:200]
+        raise MediaDocumentExtractionError(
+            f"Could not inspect PDF pages{': ' + detail if detail else ''}"
+        )
+    match = re.search(r"^Pages:\s+(\d+)\s*$", stdout.decode(errors="replace"), re.M)
+    if match is None or int(match.group(1)) < 1:
+        raise MediaDocumentExtractionError("PDF page count is unavailable")
+    return int(match.group(1))
+
+
+async def extract_scanned_pdf_text(path: Path) -> str:
+    """Render and OCR every PDF page in bounded batches."""
+    checkpoint = path.parent / "pdf-ocr.md"
+    if checkpoint.is_file():
+        saved = (await asyncio.to_thread(checkpoint.read_text, "utf-8")).strip()
+        if saved:
+            return saved
+    pdftoppm = shutil.which("pdftoppm")
+    if pdftoppm is None:
+        raise MediaProcessingConfigurationError(
+            "pdftoppm is required for scanned PDF OCR"
+        )
+    page_count = await _pdf_page_count(path)
+    output_dir = path.parent / "pdf-ocr"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    page_results: list[str] = []
+    batch_size = settings.pdf_ocr_batch_pages
+    for first_page in range(1, page_count + 1, batch_size):
+        last_page = min(page_count, first_page + batch_size - 1)
+        prefix = output_dir / f"batch-{first_page:06d}"
+        code, error = await _run_process(
+            pdftoppm,
+            "-f",
+            str(first_page),
+            "-l",
+            str(last_page),
+            "-r",
+            str(settings.pdf_ocr_dpi),
+            "-jpeg",
+            str(path),
+            str(prefix),
+            timeout_seconds=settings.document_extraction_timeout_seconds,
+        )
+        rendered = sorted(output_dir.glob(f"{prefix.name}-*.jpg"))
+        if code != 0 or len(rendered) != last_page - first_page + 1:
+            detail = error.strip()[:200]
+            raise MediaDocumentExtractionError(
+                f"PDF page rendering failed{': ' + detail if detail else ''}"
+            )
+        analyses = await asyncio.gather(
+            *(analyze_image(rendered_page, "image/jpeg") for rendered_page in rendered)
+        )
+        for offset, analysis in enumerate(analyses):
+            page_number = first_page + offset
+            page_text = analysis.visible_text or analysis.summary
+            page_results.append(f"## Page {page_number}\n\n{page_text}")
+    content = "\n\n".join(page_results).strip()
+    temporary = checkpoint.with_suffix(".md.part")
+    await asyncio.to_thread(temporary.write_text, content, "utf-8")
+    await asyncio.to_thread(temporary.replace, checkpoint)
+    return content
+
+
+async def extract_document_text(path: Path) -> str:
+    """Convert a supported local document to searchable Markdown."""
+    destination = path.with_name("extracted-content.md")
+    is_pdf = path.suffix.lower() == ".pdf"
+    if not destination.is_file():
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "app.services.document_extract_worker",
+            str(path),
+            str(destination),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+        if process.returncode != 0:
+            if is_pdf:
+                return await extract_scanned_pdf_text(path)
+            if process.returncode == 5:
+                raise MediaUnsupportedFormatError(
+                    "Document format is not supported for extraction"
+                )
+            reason = stderr.decode("utf-8", errors="replace").strip()[:80]
+            suffix = f": {reason}" if reason else ""
+            raise MediaDocumentExtractionError(f"Document extraction failed{suffix}")
 
     content = await asyncio.to_thread(destination.read_text, encoding="utf-8")
     content = content.strip()
     if not content:
+        if is_pdf:
+            return await extract_scanned_pdf_text(path)
         raise MediaDocumentExtractionError("Document contains no extractable text")
+    if is_pdf and len(re.sub(r"\s+", "", content)) < settings.pdf_ocr_min_text_chars:
+        return await extract_scanned_pdf_text(path)
     return content

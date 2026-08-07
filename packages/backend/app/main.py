@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -39,6 +39,12 @@ log_event(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if settings.environment == "production":
+        from app.services.single_user import validate_active_owner
+
+        async with async_session_factory() as db:
+            await validate_active_owner(db, settings.owner_user_id)
+
     # Startup: mark orphaned IN_PROGRESS jobs as FAILED
     try:
         import redis as redis_lib
@@ -173,24 +179,41 @@ async def _check_dependencies() -> None:
     r.close()
 
 
-@app.api_route("/health/live", methods=["GET", "HEAD"])
+@app.get("/health/live")
 async def liveness_check():
     """Liveness probe: process is up."""
     return {"status": "alive"}
 
 
-@app.api_route("/health/ready", methods=["GET", "HEAD"])
+@app.head("/health/live", include_in_schema=False)
+async def liveness_head():
+    return Response(status_code=200)
+
+
+@app.get("/health/ready")
 async def readiness_check():
     """Readiness probe: dependencies are reachable."""
     await _check_dependencies()
     return {"status": "ready"}
 
 
-@app.api_route("/health", methods=["GET", "HEAD"])
+@app.head("/health/ready", include_in_schema=False)
+async def readiness_head():
+    await _check_dependencies()
+    return Response(status_code=200)
+
+
+@app.get("/health")
 async def health_check():
     """Backward-compatible health endpoint."""
     await _check_dependencies()
     return {"status": "healthy"}
+
+
+@app.head("/health", include_in_schema=False)
+async def health_head():
+    await _check_dependencies()
+    return Response(status_code=200)
 
 
 @app.get("/metrics")

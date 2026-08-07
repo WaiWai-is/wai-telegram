@@ -6,7 +6,7 @@ import jwt
 
 from app.core.config import get_settings
 
-MEDIA_DOWNLOAD_TOKEN_TTL = timedelta(minutes=15)
+MEDIA_DOWNLOAD_TOKEN_TTL = timedelta(minutes=60)
 
 
 @dataclass(frozen=True)

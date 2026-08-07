@@ -1,0 +1,16 @@
+[Unit]
+Description=WAI Telegram media volume capacity alerts
+After=docker.service
+RequiresMountsFor=/srv/wai-telegram-media
+
+[Service]
+Type=oneshot
+User=wai
+Group=wai
+WorkingDirectory=/opt/wai-telegram/packages/backend
+EnvironmentFile=/opt/wai-telegram/.env.production
+ExecStart=/opt/wai-telegram/.venv/bin/python -m app.cli.media_volume_monitor
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/srv/wai-telegram-media

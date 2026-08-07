@@ -83,6 +83,7 @@ class TelegramAIClient:
         date_from: datetime | None = None,
         date_to: datetime | None = None,
         limit: int = 20,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         """Semantic search across Telegram messages."""
         limit = self._clamp(limit, 1, MAX_LIMIT)
@@ -96,8 +97,26 @@ class TelegramAIClient:
             payload["date_from"] = date_from.isoformat()
         if date_to:
             payload["date_to"] = date_to.isoformat()
+        if cursor:
+            payload["cursor"] = cursor
 
         return await self._request("POST", "/api/v1/search", json=payload)
+
+    async def execute_data_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Execute the backend's shared owner-scoped tool implementation."""
+        return await self._request(
+            "POST",
+            f"/api/v1/tools/{name}",
+            json={"arguments": arguments or {}},
+        )
+
+    async def list_data_tools(self) -> dict[str, Any]:
+        """Fetch the canonical shared tool contract from the backend registry."""
+        return await self._request("GET", "/api/v1/tools")
 
     async def list_chats(
         self,

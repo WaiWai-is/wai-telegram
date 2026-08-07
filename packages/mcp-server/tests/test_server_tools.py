@@ -6,28 +6,77 @@ from mcp.types import CallToolResult
 from telegram_wai_mcp import server
 
 
+def _registry_client():
+    client = AsyncMock()
+    names = (
+        "search_messages",
+        "get_message",
+        "prepare_media",
+        "download_media",
+        "get_message_content",
+        "get_transcript_segments",
+        "get_data_status",
+    )
+    client.list_data_tools.return_value = {
+        "tools": [
+            {
+                "name": name,
+                "description": f"Shared {name}",
+                "parameters": {
+                    "type": "object",
+                    "properties": (
+                        {
+                            "query": {"type": "string"},
+                            "chat_ids": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "uuid"},
+                            },
+                        }
+                        if name == "search_messages"
+                        else {}
+                    ),
+                },
+            }
+            for name in names
+        ]
+    }
+    return client
+
+
 class TestToolList:
     @pytest.mark.asyncio
     async def test_list_tools_returns_expected_tools(self):
-        tools = await server.list_tools()
+        client = _registry_client()
+        with patch("telegram_wai_mcp.server.get_client", return_value=client):
+            tools = await server.list_tools()
         tool_names = {t.name for t in tools}
         expected_tools = {
             "get_data_status",
             "search_messages",
+            "get_message",
+            "prepare_media",
+            "download_media",
             "search_chats",
             "list_chats",
             "get_chat_messages",
             "get_message_content",
+            "get_transcript_segments",
             "sync_chat",
             "get_sync_status",
             "get_daily_digest",
         }
         assert expected_tools.issubset(tool_names)
 
+        search_tool = next(tool for tool in tools if tool.name == "search_messages")
+        assert search_tool.inputSchema["properties"]["chat_ids"]["type"] == "array"
+        assert "chat_id" not in search_tool.inputSchema["properties"]
+        client.list_data_tools.assert_awaited_once()
+        client.close.assert_awaited_once()
+
     @pytest.mark.asyncio
     async def test_get_message_content_returns_summary_and_full_transcript(self):
         mock_api = AsyncMock()
-        mock_api.get_message_content.return_value = {
+        mock_api.execute_data_tool.return_value = {
             "telegram_message_id": 42,
             "text": "Исходная подпись",
             "media_type": "video",
@@ -47,18 +96,23 @@ class TestToolList:
         assert "Обсудили сроки и ответственных." in text
         assert "Полная транскрипция встречи без сокращений." in text
         assert "Исходная подпись" in text
-        mock_api.get_message_content.assert_awaited_once_with("chat-1", 42)
+        mock_api.execute_data_tool.assert_awaited_once_with(
+            "get_message_content",
+            {"chat_id": "chat-1", "telegram_message_id": 42},
+        )
         mock_api.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_each_tool_has_description(self):
-        tools = await server.list_tools()
+        with patch("telegram_wai_mcp.server.get_client", return_value=_registry_client()):
+            tools = await server.list_tools()
         for tool in tools:
             assert tool.description, f"Tool {tool.name} has no description"
 
     @pytest.mark.asyncio
     async def test_each_tool_has_input_schema(self):
-        tools = await server.list_tools()
+        with patch("telegram_wai_mcp.server.get_client", return_value=_registry_client()):
+            tools = await server.list_tools()
         for tool in tools:
             assert tool.inputSchema, f"Tool {tool.name} has no input schema"
 
@@ -107,54 +161,26 @@ class TestCallTool:
         mock_api.close.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_get_data_status_paginates_all_chats(self):
+    async def test_get_data_status_uses_shared_backend_registry(self):
         mock_api = AsyncMock()
-        page_1 = {
-            "chats": [
-                {
-                    "title": f"Chat {i}",
-                    "id": f"id-{i}",
-                    "chat_type": "private",
-                    "total_messages_synced": 1,
-                    "last_sync_at": "2026-04-01T00:00:00+00:00",
-                }
-                for i in range(1, 201)
-            ],
-            "total": 250,
-            "next_cursor": "cursor-2",
+        mock_api.execute_data_tool.return_value = {
+            "chats": 250,
+            "messages": 250,
+            "queue_depths": {"media-fetch": 0},
         }
-        page_2 = {
-            "chats": [
-                {
-                    "title": f"Chat {i}",
-                    "id": f"id-{i}",
-                    "chat_type": "private",
-                    "total_messages_synced": 1,
-                    "last_sync_at": "2026-04-01T00:00:00+00:00",
-                }
-                for i in range(201, 251)
-            ],
-            "total": 250,
-            "next_cursor": None,
-        }
-        mock_api.get_settings.return_value = {
-            "listener_active": True,
-            "realtime_sync_enabled": True,
-        }
-        mock_api.list_chats.side_effect = [page_1, page_2]
 
         with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
             result = await server.call_tool("get_data_status", {})
 
-        assert "Total chats: 250" in result[0].text
-        assert "Total messages synced: 250" in result[0].text
-        assert mock_api.list_chats.await_count == 2
+        assert '"chats": 250' in result[0].text
+        assert '"messages": 250' in result[0].text
+        mock_api.execute_data_tool.assert_awaited_once_with("get_data_status")
         mock_api.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_search_messages_date_filters_expand_date_only_inputs(self):
         mock_api = AsyncMock()
-        mock_api.search_messages.return_value = {"results": [], "total": 0, "query": "test"}
+        mock_api.execute_data_tool.return_value = {"results": [], "total": 0, "query": "test"}
 
         with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
             result = await server.call_tool(
@@ -167,10 +193,48 @@ class TestCallTool:
             )
 
         assert result[0].text.startswith("No messages found")
-        kwargs = mock_api.search_messages.await_args.kwargs
-        assert kwargs["date_from"] == datetime(2026, 1, 29, 0, 0, tzinfo=UTC)
-        assert kwargs["date_to"] == datetime(2026, 1, 29, 23, 59, 59, 999999, tzinfo=UTC)
-        assert kwargs["limit"] == 100
+        tool_name, arguments = mock_api.execute_data_tool.await_args.args
+        assert tool_name == "search_messages"
+        assert arguments["date_from"] == datetime(2026, 1, 29, 0, 0, tzinfo=UTC).isoformat()
+        assert (
+            arguments["date_to"]
+            == datetime(2026, 1, 29, 23, 59, 59, 999999, tzinfo=UTC).isoformat()
+        )
+        assert arguments["limit"] == 20
+        mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_search_messages_forwards_multiple_chat_ids_and_cursor(self):
+        mock_api = AsyncMock()
+        mock_api.execute_data_tool.return_value = {
+            "results": [],
+            "total": 0,
+            "query": "roadmap",
+        }
+        chat_ids = [
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ]
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            await server.call_tool(
+                "search_messages",
+                {
+                    "query": "roadmap",
+                    "chat_ids": chat_ids,
+                    "cursor": "next-page",
+                },
+            )
+
+        mock_api.execute_data_tool.assert_awaited_once_with(
+            "search_messages",
+            {
+                "query": "roadmap",
+                "limit": 20,
+                "chat_ids": chat_ids,
+                "cursor": "next-page",
+            },
+        )
         mock_api.close.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -221,7 +285,7 @@ class TestCallTool:
     @pytest.mark.asyncio
     async def test_search_messages_reranks_exact_text_match_within_chat(self):
         mock_api = AsyncMock()
-        mock_api.search_messages.return_value = {
+        mock_api.execute_data_tool.return_value = {
             "results": [
                 {
                     "text": "Да кто же спорит",
@@ -265,14 +329,14 @@ class TestCallTool:
             )
 
         assert "ЛизаАлерт" in result[0].text
-        kwargs = mock_api.search_messages.await_args.kwargs
-        assert kwargs["limit"] == 50
+        _tool_name, arguments = mock_api.execute_data_tool.await_args.args
+        assert arguments["limit"] == 1
         mock_api.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_search_messages_reranks_person_match_globally(self):
         mock_api = AsyncMock()
-        mock_api.search_messages.return_value = {
+        mock_api.execute_data_tool.return_value = {
             "results": [
                 {
                     "text": "а альта сегодня работает ещё, кто знает?",
@@ -314,8 +378,8 @@ class TestCallTool:
             )
 
         assert "Алиса Лисичкаааааа" in result[0].text
-        kwargs = mock_api.search_messages.await_args.kwargs
-        assert kwargs["limit"] == 100
+        _tool_name, arguments = mock_api.execute_data_tool.await_args.args
+        assert arguments["limit"] == 1
         mock_api.close.assert_awaited_once()
 
 

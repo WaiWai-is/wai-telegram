@@ -57,7 +57,12 @@ async def get_auth_context(
         if payload and payload.get("type") == "access":
             user_id = payload.get("sub")
             if user_id:
-                result = await db.execute(select(User).where(User.id == UUID(user_id)))
+                result = await db.execute(
+                    select(User).where(
+                        User.id == UUID(user_id),
+                        User.is_active.is_(True),
+                    )
+                )
                 user = result.scalar_one_or_none()
                 if user:
                     set_user_context(user_id=user.id, auth_type="jwt")
@@ -76,13 +81,16 @@ async def get_auth_context(
     if api_key and api_key.credentials.startswith("wai_"):
         prefix = compute_api_key_prefix(api_key.credentials)
         result = await db.execute(
-            select(ApiKey).where(
+            select(ApiKey, User)
+            .join(User, User.id == ApiKey.user_id)
+            .where(
                 ApiKey.key_prefix == prefix,
                 ApiKey.is_active == True,
+                User.is_active.is_(True),
             )
         )
         # Iterate candidates to handle (unlikely) prefix collisions
-        for api_key_record in result.scalars().all():
+        for api_key_record, user in result.all():
             if verify_api_key(api_key.credentials, api_key_record.key_hash):
                 # Check expiration
                 if (
@@ -104,27 +112,22 @@ async def get_auth_context(
                     )
                 api_key_record.last_used_at = datetime.now(UTC)
                 await db.flush()
-                result = await db.execute(
-                    select(User).where(User.id == api_key_record.user_id)
+                # Parse scopes from the stored comma-separated string
+                key_scopes = set(api_key_record.scopes.split(",")) & ALL_SCOPES
+                set_user_context(user_id=user.id, auth_type="api_key")
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "API key authentication succeeded",
+                    event_name="auth.context.api_key_authenticated",
+                    user_id=user.id,
+                    scopes=sorted(key_scopes),
                 )
-                user = result.scalar_one_or_none()
-                if user:
-                    # Parse scopes from the stored comma-separated string
-                    key_scopes = set(api_key_record.scopes.split(",")) & ALL_SCOPES
-                    set_user_context(user_id=user.id, auth_type="api_key")
-                    log_event(
-                        logger,
-                        logging.INFO,
-                        "API key authentication succeeded",
-                        event_name="auth.context.api_key_authenticated",
-                        user_id=user.id,
-                        scopes=sorted(key_scopes),
-                    )
-                    return AuthContext(
-                        user=user,
-                        scopes=key_scopes,
-                        auth_type="api_key",
-                    )
+                return AuthContext(
+                    user=user,
+                    scopes=key_scopes,
+                    auth_type="api_key",
+                )
 
     raise credentials_exception
 

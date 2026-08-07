@@ -139,6 +139,24 @@ class TestGetClient:
         with pytest.raises(TelegramSessionUnauthorizedError):
             await get_client(test_user.id, db_session)
 
+    async def test_active_session_for_inactive_user_is_rejected(
+        self, db_session, test_user
+    ):
+        test_user.is_active = False
+        db_session.add(
+            TelegramSession(
+                user_id=test_user.id,
+                phone_number="+1234567890",
+                session_string="encrypted",
+                telegram_user_id=12345,
+                is_active=True,
+            )
+        )
+        await db_session.flush()
+
+        with pytest.raises(NoActiveTelegramSessionError):
+            await get_client(test_user.id, db_session)
+
     async def test_unauthorized_session_is_disabled(self, db_session, test_user):
         active_session = TelegramSession(
             user_id=test_user.id,

@@ -21,8 +21,6 @@ from app.services.bot_service import send_telegram_message, send_telegram_photo
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-PLACEHOLDER_USER = UUID("00000000-0000-0000-0000-000000000000")
-
 # Simple dedup: track last N update_ids to prevent Telegram retry loops
 _seen_updates: set[int] = set()
 _MAX_SEEN = 1000
@@ -41,23 +39,19 @@ def _is_duplicate_update(update_id: int) -> bool:
     return False
 
 
-async def _resolve_user(from_user: dict) -> UUID:
-    """Resolve Telegram user to internal UUID, with fallback."""
-    try:
-        from app.core.database import async_session_factory
-        from app.services.agent.user_resolver import resolve_user_id
+async def _resolve_user(from_user: dict) -> UUID | None:
+    """Resolve only the active owner's Telegram identity."""
+    from app.core.database import async_session_factory
+    from app.services.agent.user_resolver import resolve_user_id
 
-        async with async_session_factory() as db:
-            uid = await resolve_user_id(
-                db,
-                telegram_user_id=from_user.get("id", 0),
-                telegram_username=from_user.get("username"),
-            )
-            await db.commit()
-            return uid
-    except Exception as e:
-        logger.debug(f"User resolution fallback: {e}")
-        return PLACEHOLDER_USER
+    async with async_session_factory() as db:
+        uid = await resolve_user_id(
+            db,
+            telegram_user_id=from_user.get("id", 0),
+            telegram_username=from_user.get("username"),
+        )
+        await db.commit()
+        return uid
 
 
 def _get_bot_token() -> str:
@@ -90,24 +84,31 @@ async def bot_webhook(secret: str, request: Request) -> JSONResponse:
     try:
         update = await request.json()
     except Exception as e:
-        logger.error(f"Invalid JSON in webhook: {e}")
+        logger.error("Invalid JSON in webhook: %s", type(e).__name__)
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
 
     # Deduplicate: Telegram retries on 404/timeout during deploys
     update_id = update.get("update_id")
     if update_id and _is_duplicate_update(update_id):
         return JSONResponse({"ok": True})
-    logger.info(f"Bot webhook update: {update_id}")
+    logger.info("Bot webhook update received")
 
     # Handle inline queries (viral mechanic)
     inline_query = update.get("inline_query")
     if inline_query:
-        from app.services.agent.inline import handle_inline_query
-
         try:
+            if await _resolve_user(inline_query.get("from", {})) is None:
+                return JSONResponse({"ok": True})
+            from app.services.agent.inline import handle_inline_query
+
             await handle_inline_query(inline_query)
         except Exception as e:
-            logger.error(f"Inline query error: {e}", exc_info=True)
+            if update_id:
+                _seen_updates.discard(update_id)
+            logger.error("Inline query failed: %s", type(e).__name__)
+            return JSONResponse(
+                {"ok": False, "error": "temporarily unavailable"}, status_code=503
+            )
         return JSONResponse({"ok": True})
 
     # Process messages in background (don't block Telegram's webhook)
@@ -115,7 +116,12 @@ async def bot_webhook(secret: str, request: Request) -> JSONResponse:
     try:
         await _process_update(update)
     except Exception as e:
-        logger.error(f"Error processing bot update: {e}", exc_info=True)
+        if update_id:
+            _seen_updates.discard(update_id)
+        logger.error("Bot update processing failed: %s", type(e).__name__)
+        return JSONResponse(
+            {"ok": False, "error": "temporarily unavailable"}, status_code=503
+        )
 
     return JSONResponse({"ok": True})
 
@@ -132,9 +138,11 @@ async def _process_update(update: dict) -> None:
     text = message.get("text", "")
     voice = message.get("voice")
 
-    logger.info(
-        f"Processing update: chat_id={chat_id} user={user_name} text={text[:80] if text else '[no text]'}"
-    )
+    resolved_user_id = await _resolve_user(from_user)
+    if resolved_user_id is None:
+        return
+
+    logger.info("Processing authorized Telegram update")
 
     # Rate limiting (invisible to normal users, blocks abuse)
     from app.services.agent.rate_limit import check_rate_limit, get_rate_limit_message
@@ -162,14 +170,11 @@ async def _process_update(update: dict) -> None:
                 from app.services.agent.digital_agents import (
                     create_agent_from_description,
                 )
-                from app.services.agent.user_resolver import resolve_user_id
-
                 from app.core.database import async_session_factory
 
                 async with async_session_factory() as db:
-                    user_id = await resolve_user_id(db, from_user.get("id", 0))
                     agent = await create_agent_from_description(
-                        db, user_id, chat_id, arg
+                        db, resolved_user_id, chat_id, arg
                     )
 
                 schedule_info = (
@@ -199,27 +204,23 @@ async def _process_update(update: dict) -> None:
                 format_agents_list,
                 list_user_agents,
             )
-            from app.services.agent.user_resolver import resolve_user_id
             from app.core.database import async_session_factory
 
             async with async_session_factory() as db:
-                user_id = await resolve_user_id(db, from_user.get("id", 0))
-                agents = await list_user_agents(db, user_id)
+                agents = await list_user_agents(db, resolved_user_id)
                 await send_telegram_message(chat_id, format_agents_list(agents))
             return
 
         if subcommand in ("delete", "run") and arg:
-            from app.services.agent.user_resolver import resolve_user_id
             from app.core.database import async_session_factory
             from app.models.digital_agent import DigitalAgent
 
             from sqlalchemy import select
 
             async with async_session_factory() as db:
-                user_id = await resolve_user_id(db, from_user.get("id", 0))
                 result = await db.execute(
                     select(DigitalAgent).where(
-                        DigitalAgent.user_id == user_id,
+                        DigitalAgent.user_id == resolved_user_id,
                         DigitalAgent.status != "deleted",
                     )
                 )
@@ -235,7 +236,7 @@ async def _process_update(update: dict) -> None:
                 if subcommand == "delete":
                     from app.services.agent.digital_agents import delete_agent
 
-                    await delete_agent(db, user_id, target.id)
+                    await delete_agent(db, resolved_user_id, target.id)
                     await send_telegram_message(
                         chat_id, f"✅ Agent *{target.name}* deleted."
                     )
@@ -267,9 +268,7 @@ async def _process_update(update: dict) -> None:
     if text.strip().startswith("/feedback"):
         feedback_text = text.strip().removeprefix("/feedback").strip()
         if feedback_text:
-            logger.info(
-                f"FEEDBACK from {from_user.get('id')}/{user_name}: {feedback_text}"
-            )
+            logger.info("Telegram feedback received")
             lang = _detect_language(feedback_text)
             if lang == "ru":
                 await send_telegram_message(
@@ -349,17 +348,45 @@ async def _process_update(update: dict) -> None:
             summary = await summarize_voice(voice_transcript, user_name=user_name)
             await send_telegram_message(chat_id, summary)
             logger.info(
-                f"Voice summary sent: {len(voice_transcript)} chars transcript, "
-                f"user={from_user.get('id')}"
+                "Voice summary sent: transcript_chars=%s", len(voice_transcript)
             )
             return
-        else:
-            await send_telegram_message(
-                chat_id,
-                "❌ Could not transcribe this voice message. "
-                "Try sending a clearer recording.",
-            )
-            return
+        await send_telegram_message(
+            chat_id,
+            "❌ Could not transcribe this voice message. "
+            "Try sending a clearer recording.",
+        )
+        return
+
+    # Direct audio/video/video notes use the same full pipeline as archived media.
+    for direct_media_type in ("audio", "video", "video_note"):
+        direct_media = message.get(direct_media_type)
+        if not direct_media:
+            continue
+        from app.services.agent.media_processor import process_bot_media
+        from app.services.agent.typing import send_typing_action
+
+        await send_typing_action(chat_id)
+        defaults = {
+            "audio": ("audio.bin", "application/octet-stream", "🎧"),
+            "video": ("video.mp4", "video/mp4", "🎬"),
+            "video_note": ("video-note.mp4", "video/mp4", "🎥"),
+        }
+        default_name, default_mime, icon = defaults[direct_media_type]
+        processed = await process_bot_media(
+            direct_media.get("file_id", ""),
+            media_type=direct_media_type,
+            file_name=direct_media.get("file_name") or default_name,
+            mime_type=direct_media.get("mime_type") or default_mime,
+            duration_seconds=direct_media.get("duration"),
+        )
+        preview = (processed.content_text or "")[:1500]
+        response = f"{icon} *Processed:*\n{processed.content_summary}"
+        if preview:
+            response += f"\n\n{preview}"
+        response += "\n\n✅ _Remembered._"
+        await send_telegram_message(chat_id, response)
+        return
 
     # Handle /start and /help commands
     if text.strip() in ("/start", "/help"):
@@ -433,7 +460,7 @@ async def _process_update(update: dict) -> None:
     if text.strip().startswith("/status"):
         from app.services.agent.status import get_user_status
 
-        user_id = await _resolve_user(from_user)
+        user_id = resolved_user_id
         lang = _detect_language(user_name or text)
         status = await get_user_status(user_id, user_name=user_name, user_language=lang)
         await send_telegram_message(chat_id, status)
@@ -441,7 +468,7 @@ async def _process_update(update: dict) -> None:
 
     # Handle /build command — generate and deploy a website
     if text.strip().startswith("/build"):
-        logger.info(f"/build command from {chat_id}: {text[:100]}")
+        logger.info("Build command received")
         description = text.strip().removeprefix("/build").strip()
         if not description or len(description) < 10:
             await send_telegram_message(
@@ -731,7 +758,7 @@ async def _process_update(update: dict) -> None:
 
     # Handle /doc command — generate professional document
     if text.strip().startswith("/doc"):
-        logger.info(f"/doc command from {chat_id}: {text[:100]}")
+        logger.info("Document command received")
         description = text.strip().removeprefix("/doc").strip()
         if not description or len(description) < 10:
             await send_telegram_message(
@@ -815,7 +842,7 @@ async def _process_update(update: dict) -> None:
     if text.strip() == "/clear":
         from app.services.agent.conversation import clear_history
 
-        user_id = await _resolve_user(from_user)
+        user_id = resolved_user_id
         clear_history(user_id)
         lang = _detect_language(user_name or "")
         if lang == "ru":
@@ -863,7 +890,7 @@ async def _process_update(update: dict) -> None:
     if text.strip().startswith("/briefing"):
         from app.services.agent.briefing import generate_morning_briefing
 
-        user_id = await _resolve_user(from_user)
+        user_id = resolved_user_id
         lang = _detect_language(user_name or text)
         briefing = await generate_morning_briefing(
             user_id, user_name=user_name, user_language=lang
@@ -927,7 +954,7 @@ async def _process_update(update: dict) -> None:
             get_user_commitments,
         )
 
-        user_id = await _resolve_user(from_user)  # Placeholder
+        user_id = resolved_user_id
         commitments = get_user_commitments(user_id)
         response = format_commitments_for_display(commitments)
         await send_telegram_message(chat_id, response)
@@ -954,7 +981,7 @@ async def _process_update(update: dict) -> None:
         return
 
     # Resolve Telegram user → internal user ID
-    user_id = await _resolve_user(from_user)
+    user_id = resolved_user_id
 
     # Build agent context
     context = AgentContext(
@@ -1086,7 +1113,7 @@ async def _process_update(update: dict) -> None:
         detected = detect_commitments(text, user_name=user_name)
         for c in detected:
             save_commitment(c, user_id)
-            logger.info(f"Auto-commitment: {c.direction.value} - {c.who}: {c.what}")
+            logger.info("Commitment detected: direction=%s", c.direction.value)
     except Exception as e:
         logger.debug(f"Auto-commitment extraction: {e}")
 
@@ -1099,33 +1126,12 @@ async def _process_update(update: dict) -> None:
 async def _transcribe_voice(message: dict) -> str | None:
     """Transcribe a voice message using Deepgram."""
     try:
-        import asyncio
-        import tempfile
-        from pathlib import Path
-
-        # Download voice file from Telegram
         voice = message["voice"]
         file_id = voice["file_id"]
 
-        import httpx
+        from app.services.agent.media_processor import transcribe_bot_voice
 
-        from app.services.media_content_service import transcribe_media_file
-
-        bot_token = _get_bot_token()
-        url = f"https://api.telegram.org/bot{bot_token}/getFile"
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, params={"file_id": file_id})
-            resp.raise_for_status()
-            file_path = resp.json()["result"]["file_path"]
-
-            download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
-            audio_resp = await client.get(download_url)
-            audio_resp.raise_for_status()
-
-        with tempfile.TemporaryDirectory(prefix="wai-bot-voice-") as temp_dir:
-            audio_path = Path(temp_dir) / "voice.ogg"
-            await asyncio.to_thread(audio_path.write_bytes, audio_resp.content)
-            return await transcribe_media_file(audio_path, "audio/ogg")
+        return await transcribe_bot_voice(file_id)
     except Exception as e:
         # Telegram file URLs include the bot token, so never log exception text.
         logger.error("Voice transcription failed (%s)", type(e).__name__)

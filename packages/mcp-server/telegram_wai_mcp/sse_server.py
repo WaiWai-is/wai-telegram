@@ -146,7 +146,13 @@ def main():
     parser.add_argument("--port", type=int, default=8808, help="Port to listen on")
     args = parser.parse_args()
 
-    uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
+    uvicorn.run(
+        create_app(),
+        host=args.host,
+        port=args.port,
+        log_level="info",
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

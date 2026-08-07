@@ -1,12 +1,14 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.models.sync_job import SyncStatus
 
 
 class SyncJobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     chat_id: UUID | None
     status: SyncStatus
@@ -14,9 +16,6 @@ class SyncJobResponse(BaseModel):
     error_message: str | None
     created_at: datetime
     completed_at: datetime | None
-
-    class Config:
-        from_attributes = True
 
 
 class SyncProgressResponse(BaseModel):

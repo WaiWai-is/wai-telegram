@@ -1,10 +1,11 @@
 import ipaddress
+import asyncio
 import logging
 import socket
 import tempfile
 from pathlib import Path
 from typing import NoReturn
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from uuid import UUID
 
 import httpx
@@ -26,6 +27,7 @@ from telethon.tl.types import (
 )
 from telethon.utils import get_peer_id
 
+from app.core.config import get_settings
 from app.models.chat import ChatType, TelegramChat
 from app.services.telegram_client import get_client
 from app.services.telegram_client import (
@@ -37,7 +39,8 @@ from app.services.telegram_client import (
 
 logger = logging.getLogger(__name__)
 
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+_MAX_DOWNLOAD_REDIRECTS = 5
 
 
 def _validate_url(url: str) -> None:
@@ -261,45 +264,59 @@ async def send_file(
     file_name: str | None = None,
 ) -> dict:
     """Download a file from URL and send it to a Telegram chat."""
-    _validate_url(file_url)
+    await asyncio.to_thread(_validate_url, file_url)
     chat = await _get_chat(db, user_id, chat_id)
+    settings = get_settings()
 
     if not file_name:
         path = urlparse(file_url).path
         file_name = Path(path).name or "file"
     file_name = _sanitize_file_name(file_name)
-    suffix = Path(file_name).suffix or ""
+    work_parent: str | None = None
+    if settings.environment == "production":
+        work_root = settings.media_root / "outbound-work"
+        work_root.mkdir(parents=True, exist_ok=True)
+        work_parent = str(work_root)
 
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
-        # Stream download directly to disk to avoid buffering large files in memory.
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as http:
-            async with http.stream("GET", file_url) as response:
-                response.raise_for_status()
+    with tempfile.TemporaryDirectory(
+        prefix="wai-outbound-",
+        dir=work_parent,
+    ) as temp_dir:
+        temp_path = Path(temp_dir) / file_name
+        timeout = httpx.Timeout(
+            connect=30.0,
+            read=settings.media_download_stall_timeout_seconds,
+            write=30.0,
+            pool=30.0,
+        )
+        current_url = file_url
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as http:
+            for redirect_count in range(_MAX_DOWNLOAD_REDIRECTS + 1):
+                async with http.stream("GET", current_url) as response:
+                    if response.status_code in _REDIRECT_STATUSES:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise ValueError("Download redirect is missing Location")
+                        if redirect_count == _MAX_DOWNLOAD_REDIRECTS:
+                            raise ValueError("Too many download redirects")
+                        current_url = urljoin(current_url, location)
+                        await asyncio.to_thread(_validate_url, current_url)
+                        continue
 
-                content_length = response.headers.get("content-length")
-                if content_length and int(content_length) > MAX_FILE_SIZE:
-                    raise ValueError(
-                        f"File too large: {int(content_length)} bytes "
-                        f"(max {MAX_FILE_SIZE // 1024 // 1024} MB)"
-                    )
-
-                total_size = 0
-                async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                    total_size += len(chunk)
-                    if total_size > MAX_FILE_SIZE:
-                        raise ValueError(
-                            f"File exceeds maximum size of "
-                            f"{MAX_FILE_SIZE // 1024 // 1024} MB"
-                        )
-                    tmp.write(chunk)
-                tmp.flush()
+                    response.raise_for_status()
+                    with temp_path.open("wb") as output:
+                        async for chunk in response.aiter_bytes(
+                            chunk_size=settings.media_download_chunk_bytes
+                        ):
+                            output.write(chunk)
+                    break
 
         client = await get_client(user_id, db)
         try:
             entity = await _resolve_chat_entity(client, db, chat)
             result = await client.send_file(
                 entity,
-                tmp.name,
+                str(temp_path),
                 caption=caption,
                 file_name=file_name,
             )

@@ -1,5 +1,7 @@
 """Tests for Forward Processor — the second brain mechanic."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from app.services.agent.commitments import _commitments
@@ -139,8 +141,14 @@ class TestProcessForwarded:
     @pytest.mark.asyncio
     async def test_photo_forward(self):
         msg = {"photo": [{"file_id": "abc"}], "forward_from": {"first_name": "Team"}}
-        result = await process_forwarded_message(msg)
+        with patch(
+            "app.services.agent.media_processor.describe_photo",
+            new_callable=AsyncMock,
+            return_value="A whiteboard roadmap",
+        ):
+            result = await process_forwarded_message(msg)
         assert "Photo" in result or "📷" in result
+        assert "whiteboard roadmap" in result
 
     @pytest.mark.asyncio
     async def test_document_forward(self):
@@ -148,7 +156,12 @@ class TestProcessForwarded:
             "document": {"file_id": "abc", "file_name": "report.pdf"},
             "forward_from": {"first_name": "HR"},
         }
-        result = await process_forwarded_message(msg)
+        with patch(
+            "app.services.agent.media_processor.extract_document_text",
+            new_callable=AsyncMock,
+            return_value="Quarterly hiring report",
+        ):
+            result = await process_forwarded_message(msg)
         assert "report.pdf" in result
 
     @pytest.mark.asyncio

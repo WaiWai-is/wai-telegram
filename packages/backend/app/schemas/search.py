@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.chat import ChatType
 
@@ -12,9 +12,12 @@ class SearchRequest(BaseModel):
     date_from: datetime | None = None
     date_to: datetime | None = None
     limit: int = Field(default=20, ge=1, le=100)
+    cursor: str | None = None
 
 
 class SearchResultItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     chat_id: UUID
     chat_title: str
@@ -35,15 +38,17 @@ class SearchResultItem(BaseModel):
     media_file_name: str | None = None
     media_mime_type: str | None = None
     media_file_size: int | None = None
+    visible_urls: list[str] = Field(default_factory=list)
+    hidden_urls: list[str] = Field(default_factory=list)
+    deleted_at: datetime | None = None
     transcribed_at: datetime | None = None
     telegram_message_url: str | None = None
     media_download_url: str | None = None
-
-    class Config:
-        from_attributes = True
 
 
 class SearchResponse(BaseModel):
     results: list[SearchResultItem]
     query: str
     total: int
+    has_more: bool = False
+    next_cursor: str | None = None

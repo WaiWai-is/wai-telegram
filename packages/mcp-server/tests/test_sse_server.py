@@ -1,13 +1,50 @@
 import json
 
+import pytest
 from starlette.testclient import TestClient
+from telegram_wai_mcp import server as srv
 from telegram_wai_mcp.sse_server import create_app
+
+
+def test_http_server_disables_access_logs_that_could_contain_query_keys():
+    import inspect
+
+    from telegram_wai_mcp.sse_server import main
+
+    assert "access_log=False" in inspect.getsource(main)
+
 
 BASE_HEADERS = {
     "accept": "application/json, text/event-stream",
     "content-type": "application/json",
     "host": "telegram.waiwai.is",
 }
+
+
+class FakeTelegramAIClient:
+    def __init__(self, base_url: str | None = None, api_key: str | None = None):
+        self.base_url = base_url
+        self.api_key = api_key
+
+    async def close(self) -> None:
+        return None
+
+    async def list_data_tools(self) -> dict:
+        return {
+            "tools": [
+                {
+                    "name": "get_data_status",
+                    "description": "Shared status tool",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ]
+        }
+
+
+@pytest.fixture(autouse=True)
+def fake_backend_registry(monkeypatch):
+    monkeypatch.setattr(srv, "TelegramAIClient", FakeTelegramAIClient)
+    srv._session_api_keys.clear()
 
 
 def _initialize(client: TestClient, headers: dict[str, str], path: str = "/mcp") -> str:
