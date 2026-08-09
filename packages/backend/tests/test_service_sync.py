@@ -118,6 +118,46 @@ class TestGetMediaType:
 
 
 class TestSyncChats:
+    @pytest.fixture(autouse=True)
+    def _disable_external_rate_limiter(self):
+        with patch("app.services.sync_service.record_request"):
+            yield
+
+    async def test_uses_canonical_peer_id_for_group_dialogs(
+        self, db_session, test_user
+    ):
+        from telethon.tl.types import Chat, ChatPhotoEmpty
+
+        entity = Chat(
+            id=5461206247,
+            title="Wai News",
+            photo=ChatPhotoEmpty(),
+            participants_count=2,
+            date=None,
+            version=1,
+        )
+        dialog = MagicMock()
+        dialog.entity = entity
+        dialog.message = None
+        dialog.date = None
+        dialog.unread_count = 0
+
+        async def iter_dialogs(*_args, **_kwargs):
+            yield dialog
+
+        mock_client = AsyncMock()
+        mock_client.iter_dialogs = MagicMock(return_value=iter_dialogs())
+
+        with patch(
+            "app.services.sync_service.get_client",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
+            chats = await sync_chats(db_session, test_user.id)
+
+        assert len(chats) == 1
+        assert chats[0].telegram_chat_id == -5461206247
+
     async def test_auth_error_invalidates_client(self, db_session, test_user):
         from telethon.errors import SessionRevokedError
 

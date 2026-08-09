@@ -16,6 +16,7 @@ from telethon.tl.types import (
 from telethon.tl.types import (
     User as TelegramUser,
 )
+from telethon.utils import get_peer_id
 
 from app.core.config import get_settings
 from app.models.chat import ChatType, TelegramChat
@@ -146,7 +147,11 @@ async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
 
             values = {
                 "user_id": user_id,
-                "telegram_chat_id": dialog.entity.id,
+                # Store the canonical peer ID used by Telethon events. Raw
+                # entity IDs are positive for legacy groups and channels,
+                # while event.chat_id is negative (or -100-prefixed). Mixing
+                # the two forms creates duplicate rows for the same dialog.
+                "telegram_chat_id": get_peer_id(dialog.entity),
                 "access_hash": getattr(dialog.entity, "access_hash", None),
                 "chat_type": _get_chat_type(dialog),
                 "title": _get_chat_title(dialog),
