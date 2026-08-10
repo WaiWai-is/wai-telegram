@@ -288,6 +288,10 @@ def test_deferred_media_deploy_is_explicit_and_skips_heavy_runtime():
     )
     assert '--decrypt "$encrypted_dump" >/dev/null' in backup
     assert 'restore_status="${PIPESTATUS[1]}"' in backup
+    assert 'cd "$incomplete_destination"' in backup
+    assert "sha256sum database.dump.gpg > SHA256SUMS" in backup
+    assert "sha256sum --check SHA256SUMS" in backup
+    assert 'sha256sum "$encrypted_dump"' not in backup
     assert 'plain_dump="$work_dir/database.dump"' not in backup
     assert 'verification_dump="$work_dir/database-verify.dump"' not in backup
 

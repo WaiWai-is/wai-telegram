@@ -58,7 +58,11 @@ set -o pipefail
 }
 [ -s "$restore_list" ] || { echo "Backup verification produced no manifest" >&2; exit 1; }
 
-sha256sum "$encrypted_dump" > "$checksum_file"
+(
+    cd "$incomplete_destination"
+    sha256sum database.dump.gpg > SHA256SUMS
+    sha256sum --check SHA256SUMS
+)
 chmod 0600 "$encrypted_dump" "$checksum_file" "$restore_list"
 mv "$incomplete_destination" "$destination"
 trap - EXIT
