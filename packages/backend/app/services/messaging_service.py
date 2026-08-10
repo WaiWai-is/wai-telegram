@@ -17,6 +17,7 @@ from telethon.errors import (
     RPCError,
     UserBannedInChannelError,
 )
+from telethon.tl.functions.messages import SaveDraftRequest
 from telethon.tl.types import (
     Channel,
     Chat,
@@ -238,6 +239,46 @@ async def send_message(
             "telegram_message_id": result.id,
             "chat_id": str(chat_id),
             "text": text,
+        }
+    except (
+        FloodWaitError,
+        ChatWriteForbiddenError,
+        UserBannedInChannelError,
+        RPCError,
+        ConnectionError,
+        OSError,
+    ) as e:
+        if is_session_authorization_error(e):
+            await invalidate_client_authorization(client, user_id, e)
+            raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE) from e
+        _handle_telethon_error(e)
+    finally:
+        await client.disconnect()
+
+
+async def save_draft(
+    db: AsyncSession,
+    user_id: UUID,
+    chat_id: UUID,
+    text: str,
+) -> dict:
+    """Save a server-synced Telegram draft without sending a message."""
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Draft text must not be empty")
+
+    chat = await _get_chat(db, user_id, chat_id)
+    client = await get_client(user_id, db)
+    try:
+        entity = await _resolve_chat_entity(client, db, chat)
+        saved = await client(SaveDraftRequest(peer=entity, message=text))
+        if not saved:
+            raise ValueError("Telegram did not confirm that the draft was saved")
+        return {
+            "chat_id": str(chat_id),
+            "text": text,
+            "saved": True,
+            "sent": False,
+            "replaces_existing_draft": True,
         }
     except (
         FloodWaitError,

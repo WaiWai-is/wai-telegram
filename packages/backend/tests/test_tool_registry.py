@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 from app.core.security import compute_api_key_prefix, get_key_hint, hash_api_key
 from app.models.api_key import ApiKey
@@ -124,12 +125,42 @@ async def test_tools_api_lists_all_shared_data_tools(auth_client):
     assert names == {
         "search_messages",
         "get_message",
+        "save_draft",
         "prepare_media",
         "download_media",
         "get_message_content",
         "get_transcript_segments",
         "get_data_status",
     }
+
+
+async def test_save_draft_tool_preserves_text_and_uses_owner_chat_id(
+    db_session, test_user
+):
+    chat_id = uuid4()
+    text = "  Черновик\nс форматированием  "
+    expected = {
+        "chat_id": str(chat_id),
+        "text": text,
+        "saved": True,
+        "sent": False,
+        "replaces_existing_draft": True,
+    }
+
+    with patch(
+        "app.services.tool_registry.save_telegram_draft",
+        new_callable=AsyncMock,
+        return_value=expected,
+    ) as save:
+        result = await execute_data_tool(
+            db_session,
+            test_user.id,
+            "save_draft",
+            {"chat_id": str(chat_id), "text": text},
+        )
+
+    assert result == expected
+    save.assert_awaited_once_with(db_session, test_user.id, chat_id, text)
 
 
 async def test_shared_registry_rejects_a_deactivated_user(db_session, test_user):
@@ -237,4 +268,128 @@ async def test_read_only_api_key_cannot_start_media_processing(
     )
 
     assert discovery.status_code == 200
+    names = {tool["name"] for tool in discovery.json()["tools"]}
+    assert "prepare_media" not in names
+    assert "save_draft" not in names
     assert mutation.status_code == 403
+
+
+async def test_read_only_api_key_cannot_save_draft(client, db_session, test_user):
+    raw_key = "wai_read_only_draft_key_abcdefghijklmnopqrstuvwxyz"
+    db_session.add(
+        ApiKey(
+            user_id=test_user.id,
+            name="Read only",
+            key_hash=hash_api_key(raw_key),
+            key_prefix=compute_api_key_prefix(raw_key),
+            key_hint=get_key_hint(raw_key),
+            scopes="read",
+            is_active=True,
+        )
+    )
+    await db_session.flush()
+
+    with patch(
+        "app.services.tool_registry.save_telegram_draft",
+        new_callable=AsyncMock,
+    ) as save:
+        response = await client.post(
+            "/api/v1/tools/save_draft",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={
+                "arguments": {
+                    "chat_id": str(uuid4()),
+                    "text": "Must not be saved",
+                }
+            },
+        )
+
+    assert response.status_code == 403
+    save.assert_not_awaited()
+
+
+async def test_jwt_can_save_draft_through_shared_tools_api(
+    auth_client, db_session, test_user
+):
+    chat_id = uuid4()
+    text = "Черновик 🌱\nhttps://example.com"
+    expected = {
+        "chat_id": str(chat_id),
+        "text": text,
+        "saved": True,
+        "sent": False,
+        "replaces_existing_draft": True,
+    }
+
+    with patch(
+        "app.services.tool_registry.save_telegram_draft",
+        new_callable=AsyncMock,
+        return_value=expected,
+    ) as save:
+        response = await auth_client.post(
+            "/api/v1/tools/save_draft",
+            json={"arguments": {"chat_id": str(chat_id), "text": text}},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == expected
+    save.assert_awaited_once_with(db_session, test_user.id, chat_id, text)
+
+
+async def test_write_scoped_api_key_can_save_draft(client, db_session, test_user):
+    raw_key = "wai_write_draft_key_abcdefghijklmnopqrstuvwxyz"
+    chat_id = uuid4()
+    text = "Production MCP draft"
+    expected = {
+        "chat_id": str(chat_id),
+        "text": text,
+        "saved": True,
+        "sent": False,
+        "replaces_existing_draft": True,
+    }
+    db_session.add(
+        ApiKey(
+            user_id=test_user.id,
+            name="MCP write",
+            key_hash=hash_api_key(raw_key),
+            key_prefix=compute_api_key_prefix(raw_key),
+            key_hint=get_key_hint(raw_key),
+            scopes="read,write",
+            is_active=True,
+        )
+    )
+    await db_session.flush()
+    headers = {"Authorization": f"Bearer {raw_key}"}
+
+    with patch(
+        "app.services.tool_registry.save_telegram_draft",
+        new_callable=AsyncMock,
+        return_value=expected,
+    ) as save:
+        discovery = await client.get("/api/v1/tools", headers=headers)
+        response = await client.post(
+            "/api/v1/tools/save_draft",
+            headers=headers,
+            json={"arguments": {"chat_id": str(chat_id), "text": text}},
+        )
+
+    assert discovery.status_code == 200
+    assert "save_draft" in {tool["name"] for tool in discovery.json()["tools"]}
+    assert response.status_code == 200
+    assert response.json() == expected
+    save.assert_awaited_once_with(db_session, test_user.id, chat_id, text)
+
+
+async def test_save_draft_api_rejects_blank_text(auth_client):
+    response = await auth_client.post(
+        "/api/v1/tools/save_draft",
+        json={
+            "arguments": {
+                "chat_id": str(uuid4()),
+                "text": " \n\t ",
+            }
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "text must be a non-empty string"

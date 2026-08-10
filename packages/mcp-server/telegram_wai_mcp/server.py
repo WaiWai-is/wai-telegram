@@ -1033,6 +1033,17 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
                 return format_message_content(result, _client_base_url(api))
             return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
 
+        elif name == "save_draft":
+            chat_id = _require_str(args, "chat_id")
+            text = args.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError('"text" must be a non-empty string')
+            result = await api.execute_data_tool(
+                "save_draft",
+                {"chat_id": chat_id, "text": text},
+            )
+            return format_draft_result(result)
+
         elif name == "download_media":
             chat_id = _require_str(args, "chat_id")
             telegram_message_id = args.get("telegram_message_id")
@@ -1432,6 +1443,24 @@ def format_send_result(result: dict, action: str) -> list[TextContent]:
     text = result.get("text")
     if text:
         lines.append(f"Text: {text[:200]}")
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+def format_draft_result(result: dict) -> list[TextContent]:
+    """Format a draft mutation while making the no-send guarantee explicit."""
+    if result.get("saved") is not True:
+        raise ValueError("Backend did not confirm that the draft was saved")
+    if result.get("sent") is not False:
+        raise ValueError("Backend did not confirm the draft-only no-send invariant")
+    chat_id = result.get("chat_id", "unknown")
+    text = result.get("text", "")
+    lines = [
+        "Draft saved successfully.",
+        "No Telegram message was sent.",
+        f"Chat ID: {chat_id}",
+    ]
+    if text:
+        lines.append(f"Draft: {text}")
     return [TextContent(type="text", text="\n".join(lines))]
 
 

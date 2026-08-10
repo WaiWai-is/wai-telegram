@@ -22,6 +22,7 @@ from app.services.media_cache_service import (
     get_or_create_media_object,
     media_preparation_needs_enqueue,
 )
+from app.services.messaging_service import save_draft as save_telegram_draft
 from app.services.search_service import semantic_search
 from app.services.telegram_links import (
     build_media_download_url,
@@ -85,6 +86,18 @@ TOOL_DEFINITIONS = (
         },
     ),
     ToolDefinition(
+        "save_draft",
+        "Save or replace a server-synced Telegram text draft in a chat. This never sends a message and replaces any existing draft in that chat.",
+        {
+            "type": "object",
+            "properties": {
+                "chat_id": {"type": "string", "format": "uuid"},
+                "text": {"type": "string", "minLength": 1},
+            },
+            "required": ["chat_id", "text"],
+        },
+    ),
+    ToolDefinition(
         "prepare_media",
         "Idempotently fetch and process original Telegram media. Returns progress and retry_after; historical media is fetched only through this call.",
         {
@@ -142,6 +155,7 @@ TOOL_DEFINITIONS = (
 )
 
 _DEFINITION_BY_NAME = {definition.name: definition for definition in TOOL_DEFINITIONS}
+WRITE_TOOL_NAMES = frozenset({"prepare_media", "save_draft"})
 
 
 def responses_tool_definitions(names: set[str] | None = None) -> list[dict[str, Any]]:
@@ -166,6 +180,13 @@ def _required_int(arguments: dict[str, Any], name: str) -> int:
         raise ToolInputError(f"{name} must be an integer") from exc
     if value <= 0:
         raise ToolInputError(f"{name} must be positive")
+    return value
+
+
+def _required_text(arguments: dict[str, Any], name: str) -> str:
+    value = arguments.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise ToolInputError(f"{name} must be a non-empty string")
     return value
 
 
@@ -283,6 +304,17 @@ async def _get_message(
         "telegram_message_url": _telegram_url(message, chat),
         "media_download_url": _download_url(user_id, message, media_object),
     }
+
+
+async def _save_draft(
+    db: AsyncSession, user_id: UUID, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    chat_id = _required_uuid(arguments, "chat_id")
+    text = _required_text(arguments, "text")
+    try:
+        return await save_telegram_draft(db, user_id, chat_id, text)
+    except ValueError as exc:
+        raise ToolInputError(str(exc)) from exc
 
 
 async def _prepare_media(
@@ -587,6 +619,7 @@ ToolHandler = Callable[[AsyncSession, UUID, dict[str, Any]], Awaitable[dict[str,
 _HANDLERS: dict[str, ToolHandler] = {
     "search_messages": _search_messages,
     "get_message": _get_message,
+    "save_draft": _save_draft,
     "prepare_media": _prepare_media,
     "download_media": _download_media,
     "get_message_content": _get_message_content,

@@ -99,6 +99,7 @@ def test_tool_definitions_convert_to_responses_api_schema():
     assert {tool["name"] for tool in TOOLS} == {
         "search_messages",
         "get_message",
+        "save_draft",
         "prepare_media",
         "download_media",
         "get_message_content",

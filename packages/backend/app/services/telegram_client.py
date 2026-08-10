@@ -9,7 +9,6 @@ from telethon import TelegramClient
 from telethon.errors import (
     AuthKeyUnregisteredError,
     FloodWaitError,
-    InputUserDeactivatedError,
     SessionExpiredError,
     SessionPasswordNeededError,
     SessionRevokedError,
@@ -37,7 +36,6 @@ AUTH_SESSION_ERRORS = (
     SessionExpiredError,
     UserDeactivatedError,
     UserDeactivatedBanError,
-    InputUserDeactivatedError,
 )
 
 
