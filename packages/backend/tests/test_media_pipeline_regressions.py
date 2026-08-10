@@ -297,6 +297,9 @@ def test_production_deploy_tolerates_slow_imports_and_stalled_ssh_sessions():
     workflow = root.joinpath(".github/workflows/deploy.yml").read_text()
 
     assert "inspect ping --timeout=30" in workflow
+    assert "celery_ping_output=$(" in workflow
+    assert '[[ "$celery_ping_output" == *pong* ]]' in workflow
+    assert "| grep -q pong" not in workflow
     assert workflow.count("-o ConnectTimeout=10") == 6
     assert workflow.count("-o ServerAliveInterval=15") == 6
     assert workflow.count("-o ServerAliveCountMax=2") == 6
