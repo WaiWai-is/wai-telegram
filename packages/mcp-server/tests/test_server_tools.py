@@ -11,6 +11,7 @@ def _registry_client():
     names = (
         "search_messages",
         "get_message",
+        "save_draft",
         "prepare_media",
         "download_media",
         "get_message_content",
@@ -54,6 +55,7 @@ class TestToolList:
             "get_data_status",
             "search_messages",
             "get_message",
+            "save_draft",
             "prepare_media",
             "download_media",
             "search_chats",
@@ -159,6 +161,83 @@ class TestCallTool:
         assert result.isError is True
         assert "Backend returned HTTP 400" in result.content[0].text
         mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_save_draft_uses_shared_registry_and_reports_no_send(self):
+        mock_api = AsyncMock()
+        text = "Черновик 🌱\nhttps://example.com"
+        mock_api.execute_data_tool.return_value = {
+            "chat_id": "chat-123",
+            "text": text,
+            "saved": True,
+            "sent": False,
+            "replaces_existing_draft": True,
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "save_draft",
+                {"chat_id": "chat-123", "text": text},
+            )
+
+        assert "Draft saved successfully" in result[0].text
+        assert "No Telegram message was sent" in result[0].text
+        mock_api.execute_data_tool.assert_awaited_once_with(
+            "save_draft",
+            {"chat_id": "chat-123", "text": text},
+        )
+        mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_save_draft_rejects_blank_text(self):
+        result = await server.call_tool(
+            "save_draft",
+            {"chat_id": "chat-123", "text": " \n "},
+        )
+
+        assert isinstance(result, CallToolResult)
+        assert result.isError is True
+        assert '"text" must be a non-empty string' in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_save_draft_result_does_not_truncate_text(self):
+        mock_api = AsyncMock()
+        text = "A" * 500
+        mock_api.execute_data_tool.return_value = {
+            "chat_id": "chat-123",
+            "text": text,
+            "saved": True,
+            "sent": False,
+            "replaces_existing_draft": True,
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "save_draft",
+                {"chat_id": "chat-123", "text": text},
+            )
+
+        assert text in result[0].text
+
+    @pytest.mark.asyncio
+    async def test_mcp_save_draft_rejects_unconfirmed_backend_result(self):
+        mock_api = AsyncMock()
+        mock_api.execute_data_tool.return_value = {
+            "chat_id": "chat-123",
+            "text": "Draft",
+            "saved": False,
+            "sent": False,
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "save_draft",
+                {"chat_id": "chat-123", "text": "Draft"},
+            )
+
+        assert isinstance(result, CallToolResult)
+        assert result.isError is True
+        assert "did not confirm" in result.content[0].text
 
     @pytest.mark.asyncio
     async def test_get_data_status_uses_shared_backend_registry(self):

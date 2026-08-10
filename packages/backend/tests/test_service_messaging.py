@@ -267,6 +267,201 @@ class TestSendMessage:
 
 
 # ---------------------------------------------------------------------------
+# save_draft (mock Telethon)
+# ---------------------------------------------------------------------------
+
+
+class TestSaveDraft:
+    async def test_save_draft_success_does_not_send_message(
+        self, db_session, test_user
+    ):
+        from app.services.messaging_service import save_draft
+        from telethon.tl.functions.messages import SaveDraftRequest
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(user_id=test_user.id)
+        db_session.add(chat)
+        await db_session.flush()
+
+        mock_client = AsyncMock(return_value=True)
+        mock_client.disconnect = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        resolved_entity = object()
+        text = "Черновик с emoji 🌱 и ссылкой https://example.com\nВторая строка"
+
+        with (
+            patch(
+                "app.services.messaging_service.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.services.messaging_service._resolve_chat_entity",
+                new_callable=AsyncMock,
+                return_value=resolved_entity,
+            ),
+        ):
+            result = await save_draft(db_session, test_user.id, chat.id, text)
+
+        request = mock_client.await_args.args[0]
+        assert isinstance(request, SaveDraftRequest)
+        assert request.peer is resolved_entity
+        assert request.message == text
+        assert result == {
+            "chat_id": str(chat.id),
+            "text": text,
+            "saved": True,
+            "sent": False,
+            "replaces_existing_draft": True,
+        }
+        mock_client.send_message.assert_not_awaited()
+        mock_client.disconnect.assert_awaited_once()
+
+    async def test_save_draft_rejects_blank_text_before_connecting(
+        self, db_session, test_user
+    ):
+        from app.services.messaging_service import save_draft
+
+        with (
+            patch("app.services.messaging_service.get_client") as get_client,
+            pytest.raises(ValueError, match="must not be empty"),
+        ):
+            await save_draft(db_session, test_user.id, uuid4(), " \n\t ")
+
+        get_client.assert_not_called()
+
+    async def test_save_draft_chat_not_found(self, db_session, test_user):
+        from app.services.messaging_service import save_draft
+
+        with pytest.raises(ValueError, match="not found"):
+            await save_draft(db_session, test_user.id, uuid4(), "Draft")
+
+    async def test_save_draft_cannot_access_another_users_chat(
+        self, db_session, test_user
+    ):
+        from app.services.messaging_service import save_draft
+        from tests.factories import TelegramChatFactory, UserFactory
+
+        archived_user = UserFactory.create(is_active=False)
+        db_session.add(archived_user)
+        await db_session.flush()
+        foreign_chat = TelegramChatFactory.create(user_id=archived_user.id)
+        db_session.add(foreign_chat)
+        await db_session.flush()
+
+        with pytest.raises(ValueError, match="not found"):
+            await save_draft(
+                db_session,
+                test_user.id,
+                foreign_chat.id,
+                "Must stay isolated",
+            )
+
+    async def test_save_draft_auth_error_invalidates_client(
+        self, db_session, test_user
+    ):
+        from app.services.messaging_service import save_draft
+        from app.services.telegram_client import TelegramSessionUnauthorizedError
+        from telethon.errors import SessionRevokedError
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(user_id=test_user.id)
+        db_session.add(chat)
+        await db_session.flush()
+
+        mock_client = AsyncMock(side_effect=SessionRevokedError(request=None))
+        mock_client.disconnect = AsyncMock()
+        resolved_entity = object()
+
+        with (
+            patch(
+                "app.services.messaging_service.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.services.messaging_service._resolve_chat_entity",
+                new_callable=AsyncMock,
+                return_value=resolved_entity,
+            ),
+            patch(
+                "app.services.messaging_service.invalidate_client_authorization",
+                new_callable=AsyncMock,
+            ) as mock_invalidate,
+        ):
+            with pytest.raises(
+                TelegramSessionUnauthorizedError,
+                match="Reconnect Telegram",
+            ):
+                await save_draft(db_session, test_user.id, chat.id, "Draft")
+
+        mock_invalidate.assert_awaited_once()
+        mock_client.disconnect.assert_awaited_once()
+
+    async def test_save_draft_deleted_recipient_does_not_invalidate_owner_session(
+        self, db_session, test_user
+    ):
+        from app.services.messaging_service import save_draft
+        from telethon.errors import InputUserDeactivatedError
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(user_id=test_user.id)
+        db_session.add(chat)
+        await db_session.flush()
+
+        mock_client = AsyncMock(side_effect=InputUserDeactivatedError(request=None))
+        mock_client.disconnect = AsyncMock()
+
+        with (
+            patch(
+                "app.services.messaging_service.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.services.messaging_service._resolve_chat_entity",
+                new_callable=AsyncMock,
+                return_value=object(),
+            ),
+            patch(
+                "app.services.messaging_service.invalidate_client_authorization",
+                new_callable=AsyncMock,
+            ) as mock_invalidate,
+        ):
+            with pytest.raises(ValueError, match="Telegram error"):
+                await save_draft(db_session, test_user.id, chat.id, "Draft")
+
+        mock_invalidate.assert_not_awaited()
+        mock_client.disconnect.assert_awaited_once()
+
+    async def test_save_draft_false_confirmation_raises_and_disconnects(
+        self, db_session, test_user
+    ):
+        from app.services.messaging_service import save_draft
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(user_id=test_user.id)
+        db_session.add(chat)
+        await db_session.flush()
+
+        mock_client = AsyncMock(return_value=False)
+        mock_client.disconnect = AsyncMock()
+
+        with (
+            patch(
+                "app.services.messaging_service.get_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "app.services.messaging_service._resolve_chat_entity",
+                new_callable=AsyncMock,
+                return_value=object(),
+            ),
+            pytest.raises(ValueError, match="did not confirm"),
+        ):
+            await save_draft(db_session, test_user.id, chat.id, "Draft")
+
+        mock_client.disconnect.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # _resolve_chat_entity
 # ---------------------------------------------------------------------------
 

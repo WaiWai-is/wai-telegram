@@ -4,10 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import AuthContext, CurrentUser, get_auth_context
+from app.core.auth import AuthContext, get_auth_context
 from app.core.database import get_db
 from app.services.tool_registry import (
     TOOL_DEFINITIONS,
+    WRITE_TOOL_NAMES,
     ToolInputError,
     execute_data_tool,
 )
@@ -20,7 +21,9 @@ class ToolExecuteRequest(BaseModel):
 
 
 @router.get("")
-async def list_data_tools(user: CurrentUser) -> dict[str, Any]:
+async def list_data_tools(
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+) -> dict[str, Any]:
     return {
         "tools": [
             {
@@ -29,6 +32,7 @@ async def list_data_tools(user: CurrentUser) -> dict[str, Any]:
                 "parameters": definition.parameters,
             }
             for definition in TOOL_DEFINITIONS
+            if ctx.has_scope("write") or definition.name not in WRITE_TOOL_NAMES
         ]
     }
 
@@ -40,7 +44,7 @@ async def execute_tool(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
-    if name == "prepare_media" and not ctx.has_scope("write"):
+    if name in WRITE_TOOL_NAMES and not ctx.has_scope("write"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="API key lacks 'write' permission",

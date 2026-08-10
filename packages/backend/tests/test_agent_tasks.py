@@ -143,6 +143,29 @@ async def test_execute_tool_call():
 
 
 @pytest.mark.asyncio
+async def test_scheduled_agent_executes_save_draft_with_owner_context():
+    user_id = uuid4()
+    arguments = {
+        "chat_id": str(uuid4()),
+        "text": "  Запланированный черновик\nбез обрезки  ",
+    }
+    db, db_context = _db_context(_agent())
+
+    with (
+        patch("app.core.database.get_db_context", db_context),
+        patch(
+            "app.services.tool_registry.execute_data_tool",
+            new_callable=AsyncMock,
+            return_value={"saved": True, "sent": False},
+        ) as execute,
+    ):
+        result = await _execute_tool_call("save_draft", arguments, user_id)
+
+    assert json.loads(result) == {"saved": True, "sent": False}
+    execute.assert_awaited_once_with(db, user_id, "save_draft", arguments)
+
+
+@pytest.mark.asyncio
 async def test_agent_without_tools_sends_single_luna_response():
     agent = _agent()
     db, db_context = _db_context(agent)
