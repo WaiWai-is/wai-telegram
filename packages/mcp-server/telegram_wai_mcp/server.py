@@ -478,24 +478,9 @@ async def _find_chats(
     messages_per_chat: int,
 ) -> dict[str, Any]:
     """Find unique chats from title matches and representative message hits."""
-    inventory = await _list_all_chats(api)
+    inventory_task = asyncio.create_task(_list_all_chats(api))
     selected_types = set(chat_types or _CHAT_TYPES)
     chats_by_id: dict[str, dict[str, Any]] = {}
-
-    for chat in inventory.get("chats", []):
-        chat_id = str(chat.get("id") or "")
-        if not chat_id or chat.get("chat_type") not in selected_types:
-            continue
-        title_score = _chat_match_score(chat, query)
-        if title_score <= 0:
-            continue
-        chats_by_id[chat_id] = {
-            **chat,
-            "title_match_score": title_score,
-            "message_hit_count": 0,
-            "relevance": 0.0,
-            "representative_messages": [],
-        }
 
     cursor: str | None = None
     seen_cursors: set[str] = set()
@@ -505,63 +490,92 @@ async def _find_chats(
     complete = False
     max_pages = 10 if mode == "exact" else 1
 
-    while pages_scanned < max_pages:
-        search_arguments: dict[str, Any] = {
-            "query": query,
-            "limit": 100,
-            "mode": mode,
-        }
-        if chat_types:
-            search_arguments["chat_types"] = chat_types
-        if date_from:
-            search_arguments["date_from"] = date_from
-        if date_to:
-            search_arguments["date_to"] = date_to
-        if cursor:
-            search_arguments["cursor"] = cursor
+    try:
+        while pages_scanned < max_pages:
+            search_arguments: dict[str, Any] = {
+                "query": query,
+                "limit": 100,
+                "mode": mode,
+            }
+            if chat_types:
+                search_arguments["chat_types"] = chat_types
+            if date_from:
+                search_arguments["date_from"] = date_from
+            if date_to:
+                search_arguments["date_to"] = date_to
+            if cursor:
+                search_arguments["cursor"] = cursor
 
-        page = await api.execute_data_tool("search_messages", search_arguments)
-        pages_scanned += 1
-        page_results = page.get("results", [])
-        if not isinstance(page_results, list):
-            raise RuntimeError("Backend returned invalid search results")
-        message_hits_scanned += len(page_results)
+            page = await api.execute_data_tool("search_messages", search_arguments)
+            pages_scanned += 1
+            page_results = page.get("results", [])
+            if not isinstance(page_results, list):
+                raise RuntimeError("Backend returned invalid search results")
+            message_hits_scanned += len(page_results)
 
-        for hit in page_results:
-            if not isinstance(hit, dict):
-                continue
-            chat_id = str(hit.get("chat_id") or "")
-            if not chat_id or hit.get("chat_type") not in selected_types:
-                continue
-            chat = chats_by_id.setdefault(
-                chat_id,
-                {
-                    "id": chat_id,
-                    "title": hit.get("chat_title") or "Unknown",
-                    "chat_type": hit.get("chat_type") or "unknown",
-                    "username": hit.get("chat_username"),
-                    "telegram_chat_id": hit.get("chat_telegram_id"),
-                    "title_match_score": 0,
-                    "message_hit_count": 0,
-                    "relevance": 0.0,
-                    "representative_messages": [],
-                },
-            )
-            chat["message_hit_count"] += 1
-            chat["relevance"] = max(
-                float(chat.get("relevance") or 0),
-                float(hit.get("similarity") or 0),
-            )
-            chat["representative_messages"].append(hit)
+            for hit in page_results:
+                if not isinstance(hit, dict):
+                    continue
+                chat_id = str(hit.get("chat_id") or "")
+                if not chat_id or hit.get("chat_type") not in selected_types:
+                    continue
+                chat = chats_by_id.setdefault(
+                    chat_id,
+                    {
+                        "id": chat_id,
+                        "title": hit.get("chat_title") or "Unknown",
+                        "chat_type": hit.get("chat_type") or "unknown",
+                        "username": hit.get("chat_username"),
+                        "telegram_chat_id": hit.get("chat_telegram_id"),
+                        "title_match_score": 0,
+                        "message_hit_count": 0,
+                        "relevance": 0.0,
+                        "representative_messages": [],
+                    },
+                )
+                chat["message_hit_count"] += 1
+                chat["relevance"] = max(
+                    float(chat.get("relevance") or 0),
+                    float(hit.get("similarity") or 0),
+                )
+                chat["representative_messages"].append(hit)
 
-        next_cursor = page.get("next_cursor")
-        if not page.get("has_more") or not next_cursor:
-            complete = True
-            break
-        if not isinstance(next_cursor, str) or next_cursor in seen_cursors:
-            raise RuntimeError("Backend returned an invalid search cursor sequence")
-        seen_cursors.add(next_cursor)
-        cursor = next_cursor
+            next_cursor = page.get("next_cursor")
+            if not page.get("has_more") or not next_cursor:
+                complete = True
+                break
+            if not isinstance(next_cursor, str) or next_cursor in seen_cursors:
+                raise RuntimeError("Backend returned an invalid search cursor sequence")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+
+        inventory = await inventory_task
+    except BaseException:
+        if not inventory_task.done():
+            inventory_task.cancel()
+        try:
+            await inventory_task
+        except (Exception, asyncio.CancelledError):
+            pass
+        raise
+
+    for inventory_chat in inventory.get("chats", []):
+        chat_id = str(inventory_chat.get("id") or "")
+        if not chat_id or inventory_chat.get("chat_type") not in selected_types:
+            continue
+        title_score = _chat_match_score(inventory_chat, query)
+        if title_score <= 0:
+            continue
+        chat = chats_by_id.setdefault(
+            chat_id,
+            {
+                **inventory_chat,
+                "message_hit_count": 0,
+                "relevance": 0.0,
+                "representative_messages": [],
+            },
+        )
+        chat["title_match_score"] = title_score
 
     if not complete:
         capped = True

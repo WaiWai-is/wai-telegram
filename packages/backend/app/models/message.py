@@ -144,6 +144,23 @@ class TelegramMessage(Base):
         ),
         Index("ix_telegram_messages_chat_sent", "chat_id", "sent_at"),
         Index(
+            "ix_telegram_messages_search_vector_gin",
+            "search_vector",
+            postgresql_using="gin",
+        ),
+        Index(
+            "ix_telegram_messages_media_file_name_trgm",
+            "media_file_name",
+            postgresql_using="gin",
+            postgresql_ops={"media_file_name": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_telegram_messages_searchable_metadata_trgm",
+            "searchable_metadata",
+            postgresql_using="gin",
+            postgresql_ops={"searchable_metadata": "gin_trgm_ops"},
+        ),
+        Index(
             "ix_telegram_messages_embedding_hnsw",
             "embedding",
             postgresql_using="hnsw",
@@ -185,6 +202,11 @@ class MessageContentChunk(Base):
             "message_id",
             "chunk_index",
             name="uq_message_content_chunks_message_index",
+        ),
+        Index(
+            "ix_message_content_chunks_search_vector_gin",
+            "search_vector",
+            postgresql_using="gin",
         ),
         Index(
             "ix_message_content_chunks_embedding_hnsw",

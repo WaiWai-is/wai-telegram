@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
@@ -420,6 +421,39 @@ class TestCallTool:
                 "chat_types": ["group", "supergroup"],
             },
         )
+
+    @pytest.mark.asyncio
+    async def test_find_chats_fetches_inventory_and_first_search_page_concurrently(self):
+        mock_api = AsyncMock()
+        inventory_started = asyncio.Event()
+        search_started = asyncio.Event()
+
+        async def list_chats(**_kwargs):
+            inventory_started.set()
+            await asyncio.wait_for(search_started.wait(), timeout=0.2)
+            return {"chats": [], "total": 0, "next_cursor": None}
+
+        async def execute_data_tool(_name, _arguments):
+            search_started.set()
+            await asyncio.wait_for(inventory_started.wait(), timeout=0.2)
+            return {
+                "results": [],
+                "total": 0,
+                "has_more": False,
+                "next_cursor": None,
+            }
+
+        mock_api.list_chats.side_effect = list_chats
+        mock_api.execute_data_tool.side_effect = execute_data_tool
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            await asyncio.wait_for(
+                server.call_tool("find_chats", {"query": "AI training"}),
+                timeout=1,
+            )
+
+        assert inventory_started.is_set()
+        assert search_started.is_set()
 
     @pytest.mark.asyncio
     async def test_find_chats_exact_mode_paginates_until_complete(self):

@@ -192,8 +192,8 @@ def _hybrid_search_sql(dimensions: int, where_sql: str):
                 m.search_vector @@ q.tsq
                 OR m.media_file_name ILIKE :query_pattern
                 OR m.searchable_metadata ILIKE :query_pattern
-                OR similarity(m.media_file_name, :query) > 0.2
-                OR similarity(m.searchable_metadata, :query) > 0.2
+                OR m.media_file_name % :query
+                OR m.searchable_metadata % :query
               )
             UNION ALL
             SELECT
@@ -465,6 +465,7 @@ async def semantic_search(
     )
     try:
         await db.execute(text("SET LOCAL hnsw.iterative_scan = 'strict_order'"))
+        await db.execute(text("SET LOCAL pg_trgm.similarity_threshold = 0.2"))
         result = await db.execute(sql, params)
     except Exception as exc:
         logger.exception(

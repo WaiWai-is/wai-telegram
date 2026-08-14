@@ -274,9 +274,15 @@ class TestSemanticSearch:
         sql_text = str(mock_db.execute.call_args.args[0])
         assert "websearch_to_tsquery('simple'" in sql_text
         assert "similarity(m.media_file_name" in sql_text
+        assert "m.media_file_name % :query" in sql_text
+        assert "m.searchable_metadata % :query" in sql_text
+        assert "similarity(m.media_file_name, :query) > 0.2" not in sql_text
         assert "coalesce(m.media_file_name" not in sql_text
         assert str(mock_db.execute.await_args_list[0].args[0]) == (
             "SET LOCAL hnsw.iterative_scan = 'strict_order'"
+        )
+        assert str(mock_db.execute.await_args_list[1].args[0]) == (
+            "SET LOCAL pg_trgm.similarity_threshold = 0.2"
         )
         assert "message_content_chunks" in sql_text
         assert "FULL OUTER JOIN vector_ranked" in sql_text

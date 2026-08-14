@@ -37,6 +37,22 @@ async def test_hybrid_search_uses_fts_trigram_and_pgvector_after_migrations():
     embedding[0] = 1.0
 
     try:
+        async with engine.connect() as connection:
+            index_names = set(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT indexname FROM pg_indexes "
+                            "WHERE schemaname = current_schema()"
+                        )
+                    )
+                ).scalars()
+            )
+        assert "ix_telegram_messages_search_vector_gin" in index_names
+        assert "ix_message_content_chunks_search_vector_gin" in index_names
+        assert "ix_telegram_messages_media_file_name_trgm" in index_names
+        assert "ix_telegram_messages_searchable_metadata_trgm" in index_names
+
         async with session_factory() as db, db.begin():
             user = User(
                 id=user_id,
