@@ -90,6 +90,35 @@ async def test_hybrid_search_uses_fts_trigram_and_pgvector_after_migrations():
             with patch(
                 "app.services.search_service.generate_query_embedding",
                 new_callable=AsyncMock,
+            ) as exact_embedding:
+                exact_response = await semantic_search(
+                    db,
+                    user_id,
+                    SearchRequest(
+                        query="violet telescope",
+                        mode="exact",
+                        chat_types=["private"],
+                    ),
+                )
+                filtered_response = await semantic_search(
+                    db,
+                    user_id,
+                    SearchRequest(
+                        query="violet telescope",
+                        mode="exact",
+                        chat_types=["group", "supergroup"],
+                    ),
+                )
+
+            exact_embedding.assert_not_awaited()
+            assert [item.telegram_message_id for item in exact_response.results] == [
+                9_002
+            ]
+            assert filtered_response.results == []
+
+            with patch(
+                "app.services.search_service.generate_query_embedding",
+                new_callable=AsyncMock,
                 return_value=embedding,
             ):
                 for query in (

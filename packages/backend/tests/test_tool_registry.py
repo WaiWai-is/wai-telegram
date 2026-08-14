@@ -121,7 +121,8 @@ async def test_tools_api_lists_all_shared_data_tools(auth_client):
     response = await auth_client.get("/api/v1/tools")
 
     assert response.status_code == 200
-    names = {tool["name"] for tool in response.json()["tools"]}
+    tools = response.json()["tools"]
+    names = {tool["name"] for tool in tools}
     assert names == {
         "search_messages",
         "get_message",
@@ -132,6 +133,15 @@ async def test_tools_api_lists_all_shared_data_tools(auth_client):
         "get_transcript_segments",
         "get_data_status",
     }
+    search_tool = next(tool for tool in tools if tool["name"] == "search_messages")
+    properties = search_tool["parameters"]["properties"]
+    assert properties["mode"]["enum"] == ["hybrid", "exact"]
+    assert properties["chat_types"]["items"]["enum"] == [
+        "private",
+        "group",
+        "supergroup",
+        "channel",
+    ]
 
 
 async def test_save_draft_tool_preserves_text_and_uses_owner_chat_id(

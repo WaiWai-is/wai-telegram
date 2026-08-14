@@ -443,6 +443,166 @@ async def _search_chats(
     }
 
 
+_CHAT_TYPES = {"private", "group", "supergroup", "channel"}
+_SEARCH_MODES = {"hybrid", "exact"}
+
+
+def _validated_choice(value: Any, name: str, allowed: set[str], default: str) -> str:
+    if value is None:
+        return default
+    if not isinstance(value, str) or value not in allowed:
+        choices = ", ".join(sorted(allowed))
+        raise ValueError(f'"{name}" must be one of: {choices}')
+    return value
+
+
+def _validated_chat_types(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value:
+        raise ValueError('"chat_types" must be a non-empty array')
+    if not all(isinstance(chat_type, str) and chat_type in _CHAT_TYPES for chat_type in value):
+        raise ValueError('"chat_types" values must be private, group, supergroup, or channel')
+    return list(dict.fromkeys(value))
+
+
+async def _find_chats(
+    api: TelegramAIClient,
+    *,
+    query: str,
+    mode: str,
+    chat_types: list[str] | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+    messages_per_chat: int,
+) -> dict[str, Any]:
+    """Find unique chats from title matches and representative message hits."""
+    inventory = await _list_all_chats(api)
+    selected_types = set(chat_types or _CHAT_TYPES)
+    chats_by_id: dict[str, dict[str, Any]] = {}
+
+    for chat in inventory.get("chats", []):
+        chat_id = str(chat.get("id") or "")
+        if not chat_id or chat.get("chat_type") not in selected_types:
+            continue
+        title_score = _chat_match_score(chat, query)
+        if title_score <= 0:
+            continue
+        chats_by_id[chat_id] = {
+            **chat,
+            "title_match_score": title_score,
+            "message_hit_count": 0,
+            "relevance": 0.0,
+            "representative_messages": [],
+        }
+
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    pages_scanned = 0
+    message_hits_scanned = 0
+    capped = False
+    complete = False
+    max_pages = 10 if mode == "exact" else 1
+
+    while pages_scanned < max_pages:
+        search_arguments: dict[str, Any] = {
+            "query": query,
+            "limit": 100,
+            "mode": mode,
+        }
+        if chat_types:
+            search_arguments["chat_types"] = chat_types
+        if date_from:
+            search_arguments["date_from"] = date_from
+        if date_to:
+            search_arguments["date_to"] = date_to
+        if cursor:
+            search_arguments["cursor"] = cursor
+
+        page = await api.execute_data_tool("search_messages", search_arguments)
+        pages_scanned += 1
+        page_results = page.get("results", [])
+        if not isinstance(page_results, list):
+            raise RuntimeError("Backend returned invalid search results")
+        message_hits_scanned += len(page_results)
+
+        for hit in page_results:
+            if not isinstance(hit, dict):
+                continue
+            chat_id = str(hit.get("chat_id") or "")
+            if not chat_id or hit.get("chat_type") not in selected_types:
+                continue
+            chat = chats_by_id.setdefault(
+                chat_id,
+                {
+                    "id": chat_id,
+                    "title": hit.get("chat_title") or "Unknown",
+                    "chat_type": hit.get("chat_type") or "unknown",
+                    "username": hit.get("chat_username"),
+                    "telegram_chat_id": hit.get("chat_telegram_id"),
+                    "title_match_score": 0,
+                    "message_hit_count": 0,
+                    "relevance": 0.0,
+                    "representative_messages": [],
+                },
+            )
+            chat["message_hit_count"] += 1
+            chat["relevance"] = max(
+                float(chat.get("relevance") or 0),
+                float(hit.get("similarity") or 0),
+            )
+            chat["representative_messages"].append(hit)
+
+        next_cursor = page.get("next_cursor")
+        if not page.get("has_more") or not next_cursor:
+            complete = True
+            break
+        if not isinstance(next_cursor, str) or next_cursor in seen_cursors:
+            raise RuntimeError("Backend returned an invalid search cursor sequence")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+
+    if not complete:
+        capped = True
+
+    chats = list(chats_by_id.values())
+    for chat in chats:
+        messages = chat["representative_messages"]
+        messages.sort(
+            key=lambda hit: (
+                float(hit.get("similarity") or 0),
+                str(hit.get("sent_at") or ""),
+            ),
+            reverse=True,
+        )
+        chat["representative_messages"] = messages[:messages_per_chat]
+    chats.sort(
+        key=lambda chat: (
+            int(int(chat.get("message_hit_count") or 0) > 0),
+            float(chat.get("relevance") or 0),
+            int(chat.get("title_match_score") or 0),
+            int(chat.get("message_hit_count") or 0),
+            _chat_sort_key(chat),
+        ),
+        reverse=True,
+    )
+
+    return {
+        "query": query,
+        "mode": mode,
+        "total": len(chats),
+        "chats": chats[:limit],
+        "coverage": {
+            "inventory_chats_scanned": len(inventory.get("chats", [])),
+            "message_hits_scanned": message_hits_scanned,
+            "pages_scanned": pages_scanned,
+            "complete": complete,
+            "capped": capped,
+        },
+    }
+
+
 def _format_username_ref(username: Any) -> str:
     if not isinstance(username, str):
         return ""
@@ -626,6 +786,52 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Maximum chats to return (1-50, default: 10)",
                         "default": 10,
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
+            name="find_chats",
+            description=(
+                "Find unique Telegram chats by title and by what their messages discuss. "
+                "Use mode=hybrid for a natural-language description; use mode=exact for "
+                "a known literal phrase and exhaustive cursor scanning (up to 1,000 hits). "
+                "Returns representative messages and direct Telegram links. Use chat_types "
+                "to restrict the search to groups/supergroups or other chat kinds."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Chat title, person, literal phrase, or natural-language topic description",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["hybrid", "exact"],
+                        "default": "hybrid",
+                    },
+                    "chat_types": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["private", "group", "supergroup", "channel"],
+                        },
+                    },
+                    "date_from": {"type": "string", "format": "date-time"},
+                    "date_to": {"type": "string", "format": "date-time"},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 10,
+                    },
+                    "messages_per_chat": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5,
+                        "default": 3,
                     },
                 },
                 "required": ["query"],
@@ -964,6 +1170,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
         elif name == "search_messages":
             query = _require_str(args, "query")
             limit = _optional_int(args, "limit", default=20, minimum=1, maximum=100)
+            mode = _validated_choice(args.get("mode"), "mode", _SEARCH_MODES, "hybrid")
+            chat_types = _validated_chat_types(args.get("chat_types"))
             date_from = _optional_iso_datetime(args, "date_from")
             date_to = _optional_iso_datetime(args, "date_to", end_of_day=True)
             chat_ids = args.get("chat_ids")
@@ -975,6 +1183,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
             tool_arguments = {
                 "query": query,
                 "limit": limit,
+                "mode": mode if "mode" in args else None,
+                "chat_types": chat_types,
                 "date_from": date_from.isoformat() if date_from else None,
                 "date_to": date_to.isoformat() if date_to else None,
                 "chat_ids": chat_ids,
@@ -985,6 +1195,32 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
                 {key: value for key, value in tool_arguments.items() if value is not None},
             )
             return format_search_results(result, _client_base_url(api))
+
+        elif name == "find_chats":
+            query = _require_str(args, "query")
+            mode = _validated_choice(args.get("mode"), "mode", _SEARCH_MODES, "hybrid")
+            chat_types = _validated_chat_types(args.get("chat_types"))
+            date_from = _optional_iso_datetime(args, "date_from")
+            date_to = _optional_iso_datetime(args, "date_to", end_of_day=True)
+            limit = _optional_int(args, "limit", default=10, minimum=1, maximum=50)
+            messages_per_chat = _optional_int(
+                args,
+                "messages_per_chat",
+                default=3,
+                minimum=1,
+                maximum=5,
+            )
+            result = await _find_chats(
+                api,
+                query=query,
+                mode=mode,
+                chat_types=chat_types,
+                date_from=date_from.isoformat() if date_from else None,
+                date_to=date_to.isoformat() if date_to else None,
+                limit=limit,
+                messages_per_chat=messages_per_chat,
+            )
+            return format_find_chats_results(result)
 
         elif name == "search_chats":
             query = _require_str(args, "query")
@@ -1291,6 +1527,67 @@ def format_chat_search_results(result: dict) -> list[TextContent]:
         elif private_link:
             details.append(f"Open: {private_link}")
         lines.append(f"- {title} ({chat_type})\n  {' | '.join(details)}\n")
+
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+def format_find_chats_results(result: dict[str, Any]) -> list[TextContent]:
+    """Format topic-aware unique-chat search with explicit coverage."""
+    chats = result.get("chats", [])
+    query = result.get("query", "")
+    coverage = result.get("coverage", {})
+    hits = int(coverage.get("message_hits_scanned") or 0)
+    pages = int(coverage.get("pages_scanned") or 0)
+    coverage_label = "complete" if coverage.get("complete") else "capped/partial"
+    page_label = "page" if pages == 1 else "pages"
+    coverage_line = (
+        f"Coverage: {hits} message hits scanned across {pages} {page_label}; "
+        f"{coverage_label}. {int(coverage.get('inventory_chats_scanned') or 0)} "
+        "chat titles scanned."
+    )
+
+    if not chats:
+        return [
+            TextContent(
+                type="text",
+                text=f'No chats found for query: "{query}"\n{coverage_line}',
+            )
+        ]
+
+    lines = [
+        f'Found {result.get("total", len(chats))} unique chats for query: "{query}"',
+        coverage_line,
+        "",
+    ]
+    for chat in chats:
+        title = chat.get("title", "Unknown")
+        chat_type = chat.get("chat_type", "unknown")
+        details = [
+            f"ID: {chat.get('id', 'unknown')}",
+            f"Message hits: {chat.get('message_hit_count', 0)}",
+        ]
+        username_ref = _format_username_ref(chat.get("username"))
+        if username_ref:
+            details.append(f"Username: {username_ref}")
+        else:
+            private_link = _private_chat_link(
+                chat_type,
+                chat.get("telegram_chat_id"),
+                chat.get("last_message_id"),
+            )
+            if private_link:
+                details.append(f"Open: {private_link}")
+        lines.append(f"- {title} ({chat_type})\n  {' | '.join(details)}")
+        for message in chat.get("representative_messages", []):
+            text_preview = _format_media_label(message)
+            message_url = message.get("telegram_message_url") or _private_chat_link(
+                message.get("chat_type"),
+                message.get("chat_telegram_id"),
+                message.get("telegram_message_id"),
+            )
+            suffix = f" | Open: {message_url}" if message_url else ""
+            lines.append(f"  · {_format_date(message.get('sent_at'))}: {text_preview}{suffix}")
+        lines.append("")
 
     return [TextContent(type="text", text="\n".join(lines))]
 

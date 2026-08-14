@@ -59,14 +59,26 @@ _MESSAGE_LOCATOR = {
 TOOL_DEFINITIONS = (
     ToolDefinition(
         "search_messages",
-        "Hybrid lexical and semantic search over messages, links, filenames, transcripts and extracted documents. Results are cursor-paginated.",
+        "Search synced messages, links, filenames, transcripts and extracted documents. Use mode=hybrid for a natural-language description and mode=exact for a known literal phrase. Filter by chat_types to restrict private chats, groups, supergroups or channels. Results are cursor-paginated.",
         {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "minLength": 1},
+                "mode": {
+                    "type": "string",
+                    "enum": ["hybrid", "exact"],
+                    "default": "hybrid",
+                },
                 "chat_ids": {
                     "type": "array",
                     "items": {"type": "string", "format": "uuid"},
+                },
+                "chat_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["private", "group", "supergroup", "channel"],
+                    },
                 },
                 "date_from": {"type": "string", "format": "date-time"},
                 "date_to": {"type": "string", "format": "date-time"},
@@ -249,7 +261,9 @@ async def _search_messages(
         raise ToolInputError("query is required")
     request = SearchRequest(
         query=query,
+        mode=arguments.get("mode", "hybrid"),
         chat_ids=arguments.get("chat_ids"),
+        chat_types=arguments.get("chat_types"),
         date_from=arguments.get("date_from"),
         date_to=arguments.get("date_to"),
         limit=arguments.get("limit", 20),

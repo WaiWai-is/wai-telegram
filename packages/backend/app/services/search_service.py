@@ -9,7 +9,12 @@ from app.core.config import get_settings
 from app.core.cursor import CursorError, decode_cursor, encode_cursor
 from app.models.chat import ChatType, TelegramChat
 from app.models.message import TelegramMessage
-from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
+from app.schemas.search import (
+    SearchMode,
+    SearchRequest,
+    SearchResponse,
+    SearchResultItem,
+)
 from app.services.embedding_service import generate_query_embedding
 from app.services.telegram_links import (
     build_media_download_url,
@@ -21,7 +26,7 @@ settings = get_settings()
 
 
 class SearchServiceError(RuntimeError):
-    """Raised when full hybrid search cannot be completed."""
+    """Raised when the requested search mode cannot be completed."""
 
 
 def _empty_response(query: str) -> SearchResponse:
@@ -40,6 +45,11 @@ def _search_offset(cursor: str | None) -> int:
     return value
 
 
+def _literal_like_pattern(query: str) -> str:
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def _base_where_clauses(
     user_id: UUID,
     request: SearchRequest,
@@ -49,7 +59,7 @@ def _base_where_clauses(
     params: dict[str, object] = {
         "user_id": str(user_id),
         "query": request.query.strip(),
-        "query_pattern": f"%{request.query.strip()}%",
+        "query_pattern": _literal_like_pattern(request.query.strip()),
         "limit": request.limit + 1,
         "offset": offset,
         "candidate_limit": max(100, (offset + request.limit + 1) * 10),
@@ -58,6 +68,9 @@ def _base_where_clauses(
     if request.chat_ids:
         where_clauses.append("m.chat_id = ANY(CAST(:chat_ids AS uuid[]))")
         params["chat_ids"] = [str(chat_id) for chat_id in request.chat_ids]
+    if request.chat_types:
+        where_clauses.append("c.chat_type::text = ANY(CAST(:chat_types AS text[]))")
+        params["chat_types"] = [chat_type.name for chat_type in request.chat_types]
     if request.date_from:
         where_clauses.append("m.sent_at >= :date_from")
         params["date_from"] = request.date_from
@@ -304,12 +317,105 @@ def _hybrid_search_sql(dimensions: int, where_sql: str):
     """)
 
 
+def _exact_search_sql(where_sql: str):
+    """Build indexed candidate retrieval with literal phrase verification."""
+    return text(f"""
+        WITH search_query AS (
+            SELECT plainto_tsquery('simple', :query) AS tsq
+        ),
+        exact_raw AS (
+            SELECT
+                m.id AS message_id,
+                greatest(
+                    CASE WHEN coalesce(m.text, '') ILIKE :query_pattern ESCAPE '\\'
+                        THEN 1.0 ELSE 0 END,
+                    CASE WHEN coalesce(m.content_summary, '') ILIKE :query_pattern ESCAPE '\\'
+                        THEN 0.95 ELSE 0 END,
+                    CASE WHEN coalesce(m.content_text, '') ILIKE :query_pattern ESCAPE '\\'
+                        THEN 0.9 ELSE 0 END,
+                    CASE WHEN coalesce(m.sender_name, '') ILIKE :query_pattern ESCAPE '\\'
+                        THEN 0.85 ELSE 0 END,
+                    CASE WHEN coalesce(m.media_file_name, '') ILIKE :query_pattern ESCAPE '\\'
+                        THEN 0.8 ELSE 0 END,
+                    CASE WHEN coalesce(m.searchable_metadata, '') ILIKE :query_pattern ESCAPE '\\'
+                        THEN 0.75 ELSE 0 END
+                ) AS exact_score,
+                left(m.content_text, 1200) AS matched_content
+            FROM telegram_messages m
+            JOIN telegram_chats c ON c.id = m.chat_id
+            CROSS JOIN search_query q
+            WHERE {where_sql}
+              AND m.search_vector @@ q.tsq
+              AND (
+                coalesce(m.text, '') ILIKE :query_pattern ESCAPE '\\'
+                OR coalesce(m.content_summary, '') ILIKE :query_pattern ESCAPE '\\'
+                OR coalesce(m.content_text, '') ILIKE :query_pattern ESCAPE '\\'
+                OR coalesce(m.sender_name, '') ILIKE :query_pattern ESCAPE '\\'
+                OR coalesce(m.media_file_name, '') ILIKE :query_pattern ESCAPE '\\'
+                OR coalesce(m.searchable_metadata, '') ILIKE :query_pattern ESCAPE '\\'
+              )
+            UNION ALL
+            SELECT
+                m.id AS message_id,
+                0.9 AS exact_score,
+                left(mc.text, 1200) AS matched_content
+            FROM message_content_chunks mc
+            JOIN telegram_messages m ON m.id = mc.message_id
+            JOIN telegram_chats c ON c.id = m.chat_id
+            CROSS JOIN search_query q
+            WHERE {where_sql}
+              AND mc.search_vector @@ q.tsq
+              AND mc.text ILIKE :query_pattern ESCAPE '\\'
+        ),
+        exact_best AS (
+            SELECT DISTINCT ON (message_id)
+                message_id, exact_score, matched_content
+            FROM exact_raw
+            ORDER BY message_id, exact_score DESC
+        )
+        SELECT
+            m.id,
+            m.chat_id,
+            c.title AS chat_title,
+            c.chat_type AS chat_type,
+            c.telegram_chat_id AS chat_telegram_id,
+            c.username AS chat_username,
+            m.telegram_message_id,
+            m.text,
+            m.sender_name,
+            m.is_outgoing,
+            m.sent_at,
+            exact_best.exact_score AS similarity,
+            m.has_media,
+            m.media_type,
+            m.content_summary,
+            coalesce(exact_best.matched_content, left(m.content_text, 1200))
+                AS content_preview,
+            m.media_processing_status,
+            m.media_file_name,
+            m.media_mime_type,
+            m.media_file_size,
+            m.visible_urls,
+            m.hidden_urls,
+            m.deleted_at,
+            m.transcribed_at,
+            (mo.relative_path IS NOT NULL AND mo.sha256 IS NOT NULL) AS media_cached
+        FROM exact_best
+        JOIN telegram_messages m ON m.id = exact_best.message_id
+        JOIN telegram_chats c ON c.id = m.chat_id
+        LEFT JOIN media_objects mo ON mo.message_id = m.id
+        ORDER BY similarity DESC, m.sent_at DESC, m.telegram_message_id DESC
+        LIMIT :limit
+        OFFSET :offset
+    """)
+
+
 async def semantic_search(
     db: AsyncSession,
     user_id: UUID,
     request: SearchRequest,
 ) -> SearchResponse:
-    """Run mandatory lexical/vector retrieval and Reciprocal Rank Fusion."""
+    """Run the explicitly requested exact or hybrid retrieval mode."""
     normalized_query = request.query.strip()
     if not normalized_query:
         logger.info(
@@ -317,6 +423,26 @@ async def semantic_search(
             extra={"user_id": str(user_id), "query_length": 0},
         )
         return _empty_response(request.query)
+    where_clauses, params = _base_where_clauses(user_id, request)
+    where_sql = " AND ".join(where_clauses)
+
+    if request.mode == SearchMode.EXACT:
+        try:
+            result = await db.execute(_exact_search_sql(where_sql), params)
+        except Exception as exc:
+            logger.exception(
+                "Exact search query failed",
+                extra={"user_id": str(user_id), "query_length": len(normalized_query)},
+            )
+            raise SearchServiceError("Exact search is temporarily unavailable") from exc
+        return _rows_to_response(
+            result.fetchall(),
+            request.query,
+            user_id,
+            limit=request.limit,
+            offset=int(params["offset"]),
+        )
+
     try:
         query_embedding = await generate_query_embedding(normalized_query)
     except Exception as exc:
@@ -332,11 +458,10 @@ async def semantic_search(
             "Hybrid search is unavailable because query embedding was empty"
         )
 
-    where_clauses, params = _base_where_clauses(user_id, request)
     params["embedding"] = "[" + ",".join(str(value) for value in query_embedding) + "]"
     sql = _hybrid_search_sql(
         settings.embedding_dimensions,
-        " AND ".join(where_clauses),
+        where_sql,
     )
     try:
         await db.execute(text("SET LOCAL hnsw.iterative_scan = 'strict_order'"))

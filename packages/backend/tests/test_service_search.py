@@ -5,6 +5,72 @@ from uuid import uuid4
 
 
 class TestSemanticSearch:
+    async def test_exact_mode_skips_embeddings_and_filters_chat_types(self, test_user):
+        from app.schemas.search import SearchRequest
+        from app.services.search_service import semantic_search
+
+        row = SimpleNamespace(
+            id=uuid4(),
+            chat_id=uuid4(),
+            chat_title="Альфабанк/ обучение",
+            chat_type="GROUP",
+            chat_telegram_id=-123,
+            chat_username=None,
+            telegram_message_id=48,
+            text="Альфа-Банк вернется с датами академии",
+            sender_name="John",
+            is_outgoing=False,
+            sent_at="2026-07-02T12:00:00Z",
+            similarity=1.0,
+            has_media=False,
+            media_type=None,
+            transcribed_at=None,
+        )
+        mock_result = SimpleNamespace(fetchall=lambda: [row])
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with patch(
+            "app.services.search_service.generate_query_embedding",
+            new_callable=AsyncMock,
+        ) as mock_embedding:
+            result = await semantic_search(
+                mock_db,
+                test_user.id,
+                SearchRequest(
+                    query="Альфа-Банк",
+                    mode="exact",
+                    chat_types=["group", "supergroup"],
+                ),
+            )
+
+        mock_embedding.assert_not_awaited()
+        assert mock_db.execute.await_count == 1
+        sql_text = str(mock_db.execute.await_args.args[0])
+        params = mock_db.execute.await_args.args[1]
+        assert "plainto_tsquery('simple', :query)" in sql_text
+        assert "ILIKE :query_pattern" in sql_text
+        assert "c.chat_type::text = ANY(CAST(:chat_types AS text[]))" in sql_text
+        assert params["chat_types"] == ["GROUP", "SUPERGROUP"]
+        assert result.results[0].chat_title == "Альфабанк/ обучение"
+
+    async def test_exact_mode_escapes_like_wildcards(self, test_user):
+        from app.schemas.search import SearchRequest
+        from app.services.search_service import semantic_search
+
+        mock_result = SimpleNamespace(fetchall=list)
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        await semantic_search(
+            mock_db,
+            test_user.id,
+            SearchRequest(query=r"100%_ready\now", mode="exact"),
+        )
+
+        params = mock_db.execute.await_args.args[1]
+        assert params["query_pattern"] == r"%100\%\_ready\\now%"
+
     async def test_blank_query_returns_empty_without_embeddings(
         self, db_session, test_user
     ):

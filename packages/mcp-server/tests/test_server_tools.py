@@ -59,6 +59,7 @@ class TestToolList:
             "prepare_media",
             "download_media",
             "search_chats",
+            "find_chats",
             "list_chats",
             "get_chat_messages",
             "get_message_content",
@@ -315,6 +316,163 @@ class TestCallTool:
             },
         )
         mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_search_messages_forwards_mode_and_chat_types(self):
+        mock_api = AsyncMock()
+        mock_api.execute_data_tool.return_value = {
+            "results": [],
+            "total": 0,
+            "query": "Альфа-Банк",
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            await server.call_tool(
+                "search_messages",
+                {
+                    "query": "Альфа-Банк",
+                    "mode": "exact",
+                    "chat_types": ["group", "supergroup"],
+                },
+            )
+
+        mock_api.execute_data_tool.assert_awaited_once_with(
+            "search_messages",
+            {
+                "query": "Альфа-Банк",
+                "limit": 20,
+                "mode": "exact",
+                "chat_types": ["group", "supergroup"],
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_find_chats_groups_message_hits_and_merges_title_matches(self):
+        mock_api = AsyncMock()
+        mock_api.list_chats.return_value = {
+            "chats": [
+                {
+                    "id": "chat-title",
+                    "title": "Альфабанк/ обучение",
+                    "chat_type": "group",
+                    "total_messages_synced": 48,
+                },
+                {
+                    "id": "chat-content",
+                    "title": "Wai School",
+                    "chat_type": "group",
+                    "total_messages_synced": 100,
+                },
+            ],
+            "total": 2,
+            "next_cursor": None,
+        }
+        mock_api.execute_data_tool.return_value = {
+            "results": [
+                {
+                    "chat_id": "chat-content",
+                    "chat_title": "Wai School",
+                    "chat_type": "group",
+                    "telegram_message_id": 12,
+                    "text": "Диана из Альфа Банка заинтересовалась",
+                    "sent_at": "2026-06-01T10:00:00Z",
+                    "similarity": 0.9,
+                    "telegram_message_url": "https://t.me/c/1/12",
+                },
+                {
+                    "chat_id": "chat-content",
+                    "chat_title": "Wai School",
+                    "chat_type": "group",
+                    "telegram_message_id": 11,
+                    "text": "Обсудили обучение риэлторов",
+                    "sent_at": "2026-05-31T10:00:00Z",
+                    "similarity": 0.8,
+                },
+            ],
+            "total": 2,
+            "has_more": False,
+            "next_cursor": None,
+            "query": "Альфа-Банк обучение риэлторов",
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "find_chats",
+                {
+                    "query": "Альфа-Банк обучение риэлторов",
+                    "chat_types": ["group", "supergroup"],
+                    "limit": 10,
+                    "messages_per_chat": 1,
+                },
+            )
+
+        text = result[0].text
+        assert "Wai School" in text
+        assert "Альфабанк/ обучение" in text
+        assert text.count("Диана из Альфа Банка") == 1
+        assert "Coverage: 2 message hits scanned" in text
+        mock_api.execute_data_tool.assert_awaited_once_with(
+            "search_messages",
+            {
+                "query": "Альфа-Банк обучение риэлторов",
+                "limit": 100,
+                "mode": "hybrid",
+                "chat_types": ["group", "supergroup"],
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_find_chats_exact_mode_paginates_until_complete(self):
+        mock_api = AsyncMock()
+        mock_api.list_chats.return_value = {
+            "chats": [],
+            "total": 0,
+            "next_cursor": None,
+        }
+        mock_api.execute_data_tool.side_effect = [
+            {
+                "results": [
+                    {
+                        "chat_id": "chat-1",
+                        "chat_title": "First",
+                        "chat_type": "group",
+                        "telegram_message_id": 1,
+                        "text": "Альфа-Банк",
+                        "sent_at": "2026-01-01T00:00:00Z",
+                        "similarity": 1.0,
+                    }
+                ],
+                "has_more": True,
+                "next_cursor": "page-2",
+            },
+            {
+                "results": [
+                    {
+                        "chat_id": "chat-2",
+                        "chat_title": "Second",
+                        "chat_type": "supergroup",
+                        "telegram_message_id": 2,
+                        "text": "Альфа-Банк",
+                        "sent_at": "2026-02-01T00:00:00Z",
+                        "similarity": 1.0,
+                    }
+                ],
+                "has_more": False,
+                "next_cursor": None,
+            },
+        ]
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool(
+                "find_chats",
+                {"query": "Альфа-Банк", "mode": "exact"},
+            )
+
+        assert "First" in result[0].text
+        assert "Second" in result[0].text
+        assert "complete" in result[0].text
+        assert mock_api.execute_data_tool.await_count == 2
+        assert mock_api.execute_data_tool.await_args_list[1].args[1]["cursor"] == "page-2"
 
     @pytest.mark.asyncio
     async def test_search_chats_matches_title_and_username(self):

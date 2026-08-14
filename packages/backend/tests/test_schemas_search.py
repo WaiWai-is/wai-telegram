@@ -1,7 +1,8 @@
 from uuid import uuid4
 
 import pytest
-from app.schemas.search import SearchRequest
+from app.models.chat import ChatType
+from app.schemas.search import SearchMode, SearchRequest
 from pydantic import ValidationError
 
 
@@ -50,6 +51,22 @@ class TestSearchRequest:
     def test_defaults(self):
         req = SearchRequest(query="test")
         assert req.chat_ids is None
+        assert req.chat_types is None
         assert req.date_from is None
         assert req.date_to is None
         assert req.limit == 20
+        assert req.mode == SearchMode.HYBRID
+
+    def test_exact_mode_and_chat_type_filters(self):
+        req = SearchRequest(
+            query="Альфа-Банк",
+            mode="exact",
+            chat_types=["group", "supergroup"],
+        )
+
+        assert req.mode == SearchMode.EXACT
+        assert req.chat_types == [ChatType.GROUP, ChatType.SUPERGROUP]
+
+    def test_invalid_mode_is_rejected(self):
+        with pytest.raises(ValidationError):
+            SearchRequest(query="hello", mode="fuzzy")

@@ -1,3 +1,4 @@
+import enum
 from datetime import datetime
 from uuid import UUID
 
@@ -6,9 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.chat import ChatType
 
 
+class SearchMode(str, enum.Enum):
+    HYBRID = "hybrid"
+    EXACT = "exact"
+
+
 class SearchRequest(BaseModel):
     query: str
+    mode: SearchMode = SearchMode.HYBRID
     chat_ids: list[UUID] | None = None
+    chat_types: list[ChatType] | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
     limit: int = Field(default=20, ge=1, le=100)
