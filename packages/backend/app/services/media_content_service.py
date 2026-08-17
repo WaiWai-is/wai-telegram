@@ -45,6 +45,19 @@ def _configured_transcription_types() -> frozenset[str]:
 
 
 MEDIA_TRANSCRIPTION_TYPES = _configured_transcription_types()
+
+
+def scope_accumulates_media() -> bool:
+    """Whether this deployment can build up a large media footprint.
+
+    Voice notes and video notes are a few megabytes and are deleted the moment
+    their text is stored, so the media root never grows. Audio and video are why
+    the dedicated volume exists, and the mount requirement follows them rather
+    than being unconditional.
+    """
+    return bool(MEDIA_TRANSCRIPTION_TYPES & {"audio", "video"})
+
+
 IMAGE_MEDIA_TYPES = frozenset({"photo"})
 
 

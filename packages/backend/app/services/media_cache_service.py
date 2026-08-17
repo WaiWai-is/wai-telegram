@@ -140,9 +140,16 @@ def _absolute_cache_path(relative_path: str) -> Path:
 
 
 def _ensure_media_root() -> Path:
+    from app.services.media_content_service import scope_accumulates_media
+
     root = settings.media_root
     if settings.environment == "production":
-        if not root.is_dir() or not root.is_mount():
+        if not root.is_dir():
+            raise MediaCacheError(f"Production media root is missing: {root}")
+        # A dedicated volume keeps retained media off the system disk. Nothing is
+        # retained when only voice notes and video notes are transcribed, so the
+        # writability check below is the whole requirement.
+        if scope_accumulates_media() and not root.is_mount():
             raise MediaCacheError(f"Production media volume is not mounted: {root}")
     else:
         root.mkdir(parents=True, exist_ok=True)

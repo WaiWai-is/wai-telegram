@@ -108,11 +108,23 @@ async def test_stream_download_uses_stall_timeout_per_chunk_not_total(tmp_path):
 
 
 def test_production_cache_refuses_to_write_when_volume_is_not_mounted(tmp_path):
+    root = tmp_path / "not-a-mount"
+    root.mkdir()
     with patch("app.services.media_cache_service.settings") as service_settings:
         service_settings.environment = "production"
-        service_settings.media_root = tmp_path / "not-a-mount"
+        service_settings.media_root = root
 
         with pytest.raises(MediaCacheError, match="not mounted"):
+            _ensure_media_root()
+
+
+def test_production_cache_reports_a_missing_root_distinctly(tmp_path):
+    """A missing directory and an unmounted volume need different remedies."""
+    with patch("app.services.media_cache_service.settings") as service_settings:
+        service_settings.environment = "production"
+        service_settings.media_root = tmp_path / "absent"
+
+        with pytest.raises(MediaCacheError, match="missing"):
             _ensure_media_root()
 
 
