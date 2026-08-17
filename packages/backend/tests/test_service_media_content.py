@@ -439,3 +439,45 @@ class TestVideoTimeline:
             mock_settings.video_scene_threshold = 0.3
             with pytest.raises(MediaProcessingError, match="scene-change"):
                 await extract_video_frames(source)
+
+    async def test_clip_shorter_than_the_interval_falls_back_to_one_frame(
+        self, tmp_path
+    ):
+        """fps=1/30 yields nothing for a 10 second video note, and ffmpeg still exits 0."""
+        from app.services.media_content_service import extract_video_frames
+
+        source = tmp_path / "round.mp4"
+        source.write_bytes(b"video")
+        timeline = tmp_path / "visual-timeline"
+        calls: list[tuple[str, ...]] = []
+
+        async def run_process(*args, **_kwargs):
+            calls.append(args)
+            output = str(args[-1])
+            if "interval-%06d" in output:
+                return 0, ""
+            if "interval-000001" in output:
+                timeline.mkdir(exist_ok=True)
+                (timeline / "interval-000001.jpg").write_bytes(b"jpg")
+                return 0, ""
+            return 0, ""
+
+        with (
+            patch(
+                "app.services.media_content_service.shutil.which", return_value="ffmpeg"
+            ),
+            patch(
+                "app.services.media_content_service._run_process",
+                new_callable=AsyncMock,
+                side_effect=run_process,
+            ),
+            patch("app.services.media_content_service.settings") as mock_settings,
+        ):
+            mock_settings.video_frame_interval_seconds = 30
+            mock_settings.video_scene_threshold = 0.3
+            frames = await extract_video_frames(source)
+
+        assert frames, "a short clip must still yield a frame"
+        assert any("-frames:v" in call for call in calls), (
+            "expected the single-frame fallback"
+        )

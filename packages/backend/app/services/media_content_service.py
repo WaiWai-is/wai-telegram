@@ -638,6 +638,26 @@ async def extract_video_frames(path: Path) -> list[VideoFrame]:
         str(interval_pattern),
     )
     interval_paths = sorted(output_dir.glob("interval-*.jpg"))
+    if interval_code == 0 and not interval_paths:
+        # fps=1/N samples at N, 2N, 3N... so a clip shorter than the interval
+        # yields nothing at all and ffmpeg still exits 0. Video notes are usually
+        # well under a minute, so this was rejecting valid video outright. Take a
+        # single frame instead of failing.
+        interval_code, interval_error = await _run_process(
+            ffmpeg,
+            "-nostdin",
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-frames:v",
+            "1",
+            "-q:v",
+            "3",
+            "-y",
+            str(output_dir / "interval-000001.jpg"),
+        )
+        interval_paths = sorted(output_dir.glob("interval-*.jpg"))
     if interval_code != 0 or not interval_paths:
         detail = interval_error.strip()[:300]
         raise MediaProcessingError(
