@@ -353,8 +353,17 @@ jobs:
               || [ "$(cat /usr/local/share/wai-telegram/telegram-bot-api.commit 2>/dev/null || true)" != "$BOT_API_COMMIT" ]; then
               "$release_dir/scripts/install-telegram-bot-api.sh"
             fi
-            "$release_dir/scripts/install-restic.sh"
-            "$release_dir/scripts/restic-init.sh"
+            # restic protects media retained on the media path. A speech-only
+            # deployment deletes each file once its text is extracted, so there is
+            # nothing there to protect and no reason to hold repository credentials.
+            transcription_types=$(sed -n 's/^MEDIA_TRANSCRIPTION_TYPES=//p' \
+              /opt/wai-telegram/.env.production | tail -n 1)
+            case ",${transcription_types:-voice,video_note,audio,video}," in
+              *,audio,*|*,video,*)
+                "$release_dir/scripts/install-restic.sh"
+                "$release_dir/scripts/restic-init.sh"
+                ;;
+            esac
           else
             [ "$MEDIA_PIPELINE_ENABLED" = "false" ] || exit 1
           fi
@@ -468,9 +477,18 @@ jobs:
           nginx -t
           if [ "$MEDIA_MODE" = "full" ]; then
             systemctl enable telegram-bot-api $media_services
-            systemctl enable --now wai-media-volume-monitor.timer \
-              wai-restic-backup.timer wai-restic-check.timer \
-              wai-restic-restore-drill.timer
+            # The volume monitor and the restic timers both watch retained media.
+            # Speech-only deployments retain none, so leave them off rather than
+            # scheduling jobs that would run against an empty directory.
+            transcription_types=$(sed -n 's/^MEDIA_TRANSCRIPTION_TYPES=//p' \
+              /opt/wai-telegram/.env.production | tail -n 1)
+            case ",${transcription_types:-voice,video_note,audio,video}," in
+              *,audio,*|*,video,*)
+                systemctl enable --now wai-media-volume-monitor.timer \
+                  wai-restic-backup.timer wai-restic-check.timer \
+                  wai-restic-restore-drill.timer
+                ;;
+            esac
             systemctl restart telegram-bot-api
             for attempt in $(seq 1 30); do
               curl -sS --max-time 2 http://127.0.0.1:8081/ >/dev/null 2>&1 && break
