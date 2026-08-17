@@ -245,20 +245,39 @@ jobs:
           memory_kib=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
           install -d -o root -g wai-media -m 0770 /srv/wai-telegram-media
           if [ "$MEDIA_MODE" = "full" ]; then
-            [ "$cpu_count" -ge 4 ] && [ "$memory_kib" -ge 7500000 ] || {
-              echo "Server must be upgraded to at least 4 CPU / 8 GB RAM" >&2
-              exit 1
-            }
-            mountpoint -q /srv/wai-telegram-media
-            media_bytes=$(df --output=size -B1 /srv/wai-telegram-media | tail -n 1)
-            [ "$media_bytes" -ge 450000000000 ] || {
-              echo "Media volume is smaller than the required 500 GB class" >&2
-              exit 1
-            }
+            # Mirrors scripts/single-user-preflight.sh: the volume, the larger box
+            # and the off-host backups exist because video, audio and documents are
+            # fetched and retained. A speech-only deployment keeps nothing, so it is
+            # held to the deferred-release floor instead.
+            transcription_types=$(sed -n 's/^MEDIA_TRANSCRIPTION_TYPES=//p' \
+              /opt/wai-telegram/.env.production | tail -n 1)
+            case ",${transcription_types:-voice,video_note,audio,video}," in
+              *,audio,*|*,video,*) speech_only=false ;;
+              *) speech_only=true ;;
+            esac
+            if [ "$speech_only" = true ]; then
+              media_free=$(df --output=avail -B1 /srv/wai-telegram-media | tail -n 1)
+              [ "$cpu_count" -ge 2 ] && [ "$memory_kib" -ge 3500000 ] \
+                && [ "$media_free" -ge 5000000000 ] || {
+                echo "Speech-only media mode needs 2 CPU, 3.5 GB RAM, and 5 GB free" >&2
+                exit 1
+              }
+            else
+              [ "$cpu_count" -ge 4 ] && [ "$memory_kib" -ge 7500000 ] || {
+                echo "Server must be upgraded to at least 4 CPU / 8 GB RAM" >&2
+                exit 1
+              }
+              mountpoint -q /srv/wai-telegram-media
+              media_bytes=$(df --output=size -B1 /srv/wai-telegram-media | tail -n 1)
+              [ "$media_bytes" -ge 450000000000 ] || {
+                echo "Media volume is smaller than the required 500 GB class" >&2
+                exit 1
+              }
+              test -r /etc/wai-telegram/restic.env
+              test -r /etc/wai-telegram/restic-password
+            fi
             install -d -o wai-bot-api -g wai-media -m 0770 \
               /srv/wai-telegram-media/bot-api /srv/wai-telegram-media/bot-api-temp
-            test -r /etc/wai-telegram/restic.env
-            test -r /etc/wai-telegram/restic-password
           else
             free_bytes=$(df --output=avail -B1 / | tail -n 1)
             [ "$cpu_count" -ge 2 ] && [ "$memory_kib" -ge 3500000 ] \
@@ -362,8 +381,16 @@ jobs:
           trap 'rm -f /tmp/auth-cutover-backup.sh /tmp/restic-backup.sh' EXIT
           chmod 0700 /tmp/auth-cutover-backup.sh /tmp/restic-backup.sh
           /tmp/auth-cutover-backup.sh
-          if [ "$MEDIA_MODE" = "full" ]; then
+          transcription_types=$(sed -n 's/^MEDIA_TRANSCRIPTION_TYPES=//p' \
+            /opt/wai-telegram/.env.production | tail -n 1)
+          case ",${transcription_types:-voice,video_note,audio,video}," in
+            *,audio,*|*,video,*) retains_media=true ;;
+            *) retains_media=false ;;
+          esac
+          if [ "$MEDIA_MODE" = "full" ] && [ "$retains_media" = true ]; then
             /tmp/restic-backup.sh
+          elif [ "$MEDIA_MODE" = "full" ]; then
+            echo "Speech-only media mode: nothing is retained on the media path to back up"
           else
             echo "Deferred media mode: off-host media backup is intentionally pending"
           fi
