@@ -2,7 +2,6 @@
 Description=WAI Telegram Background Media Worker
 After=network.target docker.service wai-backend.service
 Requires=docker.service
-RequiresMountsFor=/srv/wai-telegram-media
 StartLimitIntervalSec=300
 StartLimitBurst=10
 
@@ -15,8 +14,11 @@ WorkingDirectory=/opt/wai-telegram/packages/backend
 Environment="PATH=/home/wai/.local/bin:/usr/local/bin:/usr/bin"
 EnvironmentFile=/opt/wai-telegram/.env.production
 
+# Media is staged here only between download and text extraction, then deleted,
+# so it no longer warrants a dedicated volume. Verify the directory is usable
+# instead of demanding a separate mount.
+ExecStartPre=/usr/bin/test -w /srv/wai-telegram-media
 ExecStartPre=+/bin/sh -c 'n=0; until docker exec wai-telegram-redis redis-cli ping >/dev/null 2>&1; do n=$((n+1)); [ $n -ge 30 ] && exit 1; sleep 2; done'
-ExecStartPre=/usr/bin/mountpoint -q /srv/wai-telegram-media
 ExecStart=/opt/wai-telegram/.venv/bin/celery -A app.tasks.celery_app:celery_app worker --hostname=media-fetch@%H --loglevel=info --queues=media-fetch --concurrency=1 --prefetch-multiplier=1
 
 Restart=always

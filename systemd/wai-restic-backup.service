@@ -3,7 +3,6 @@ Description=WAI Telegram encrypted media and database backup
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service
-RequiresMountsFor=/srv/wai-telegram-media
 
 [Service]
 Type=oneshot

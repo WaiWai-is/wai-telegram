@@ -2,16 +2,17 @@
 Description=Telegram Bot API local server for WAI Telegram
 After=network-online.target
 Wants=network-online.target
-RequiresMountsFor=/srv/wai-telegram-media
 
 [Service]
 Type=simple
 User=wai-bot-api
 Group=wai-media
 EnvironmentFile=/etc/wai-telegram/bot-api.env
+# Files live here only while a download is in flight; a dedicated volume is no
+# longer required now that only voice notes and video notes are fetched.
+ExecStartPre=/usr/bin/test -w /srv/wai-telegram-media
 ExecStartPre=/usr/bin/test -x /usr/local/bin/telegram-bot-api
 ExecStartPre=/usr/bin/test -r /usr/local/share/wai-telegram/telegram-bot-api.commit
-ExecStartPre=/usr/bin/mountpoint -q /srv/wai-telegram-media
 ExecStartPre=/usr/bin/test -w /srv/wai-telegram-media/bot-api
 ExecStartPre=/usr/bin/test -w /srv/wai-telegram-media/bot-api-temp
 ExecStart=/usr/local/bin/telegram-bot-api --http-ip-address=127.0.0.1 --http-port=8081 --local --dir=/srv/wai-telegram-media/bot-api --temp-dir=/srv/wai-telegram-media/bot-api-temp
