@@ -49,24 +49,45 @@ if [ "$media_mode" = "full" ]; then
         http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;;
         *) echo "Full media mode requires the local Bot API URL" >&2; exit 1 ;;
     esac
-    [ "$cpu_count" -ge 4 ] && [ "$memory_kib" -ge 7500000 ] || {
-        echo "Server must be upgraded to at least 4 CPU / 8 GB RAM" >&2
-        exit 1
-    }
-    mountpoint -q /srv/wai-telegram-media || {
-        echo "A mounted media volume is required" >&2
-        exit 1
-    }
-    media_bytes=$(df --output=size -B1 /srv/wai-telegram-media | tail -n 1)
-    [ "$media_bytes" -ge 450000000000 ] || {
-        echo "A mounted 500 GB-class media volume is required" >&2
-        exit 1
-    }
-    required_files=(
-        /etc/wai-telegram/restic.env
-        /etc/wai-telegram/restic-password
-        /etc/wai-telegram/auth-backup-passphrase
-    )
+    # Storage and CPU requirements follow what is actually transcribed. Voice notes
+    # and video notes are a few megabytes each and are deleted once their text is
+    # extracted, so nothing accumulates and nothing durable needs backing up. Video,
+    # audio and documents are the opposite: they are why the 500 GB volume, the
+    # larger box and the off-host restic backups exist.
+    speech_only=false
+    case ",${MEDIA_TRANSCRIPTION_TYPES:-voice,video_note,audio,video}," in
+        *,audio,*|*,video,*) ;;
+        *) speech_only=true ;;
+    esac
+
+    if [ "$speech_only" = true ]; then
+        media_free=$(df --output=avail -B1 "${MEDIA_ROOT:-/srv/wai-telegram-media}" | tail -n 1)
+        [ "$cpu_count" -ge 2 ] && [ "$memory_kib" -ge 3500000 ] \
+            && [ "$media_free" -ge 5000000000 ] || {
+            echo "Speech-only media mode needs 2 CPU, 3.5 GB RAM, and 5 GB free on $MEDIA_ROOT" >&2
+            exit 1
+        }
+        required_files=(/etc/wai-telegram/auth-backup-passphrase)
+    else
+        [ "$cpu_count" -ge 4 ] && [ "$memory_kib" -ge 7500000 ] || {
+            echo "Server must be upgraded to at least 4 CPU / 8 GB RAM" >&2
+            exit 1
+        }
+        mountpoint -q /srv/wai-telegram-media || {
+            echo "A mounted media volume is required" >&2
+            exit 1
+        }
+        media_bytes=$(df --output=size -B1 /srv/wai-telegram-media | tail -n 1)
+        [ "$media_bytes" -ge 450000000000 ] || {
+            echo "A mounted 500 GB-class media volume is required" >&2
+            exit 1
+        }
+        required_files=(
+            /etc/wai-telegram/restic.env
+            /etc/wai-telegram/restic-password
+            /etc/wai-telegram/auth-backup-passphrase
+        )
+    fi
 else
     [ "$MEDIA_PIPELINE_ENABLED" = "false" ] || {
         echo "Deferred media mode requires MEDIA_PIPELINE_ENABLED=false" >&2
