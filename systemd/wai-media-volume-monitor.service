@@ -1,7 +1,6 @@
 [Unit]
 Description=WAI Telegram media volume capacity alerts
 After=docker.service
-RequiresMountsFor=/srv/wai-telegram-media
 
 [Service]
 Type=oneshot
