@@ -92,4 +92,10 @@ async def transcribe_bot_voice(file_id: str) -> str:
 
 async def _download_telegram_file(file_id: str, destination: Path) -> Path:
     """Stream a Bot API file to disk without an application size limit."""
+    if not getattr(settings, "bot_media_downloads_enabled", True):
+        raise RuntimeError(
+            "BOT_MEDIA_DOWNLOADS_ENABLED is off: this deployment does not run the "
+            "local Bot API server, so files attached in chat cannot be fetched. "
+            "Archive search is unaffected - it downloads over MTProto."
+        )
     return await get_bot_api_client().download_file_to(file_id, destination)
