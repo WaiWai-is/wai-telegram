@@ -10,6 +10,10 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # Parallel maintenance workers exchange tuples through /dev/shm. Docker's 64MB
+    # default is too small for ANALYZE on telegram_messages, which fails with
+    # "could not resize shared memory segment" and leaves autovacuum unable to run.
+    shm_size: 512mb
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U telegram -d telegram_ai"]
       interval: 10s
@@ -19,9 +23,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          # 512M could not hold the working set: autovacuum never completed once and
+          # the OOM killer reaped postgres (dmesg, 2026-08-16). The HNSW index alone
+          # is 3.9GB, so this is a floor, not a target - raise it with the host.
+          memory: 1536M
         reservations:
-          memory: 128M
+          memory: 512M
 
   redis:
     image: redis:7-alpine

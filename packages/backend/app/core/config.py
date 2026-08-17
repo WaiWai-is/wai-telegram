@@ -92,6 +92,15 @@ class Settings(BaseSettings):
     video_scene_threshold: float = Field(default=0.3, gt=0.0, lt=1.0)
     video_frame_analysis_batch: int = Field(default=4, ge=1, le=16)
     media_pipeline_enabled: bool = True
+    # Comma-separated subset of voice,video_note,audio,video. Unset means all four.
+    media_transcription_types: str | None = None
+    # Whether the bot fetches media a user attaches in a live chat. That path, and
+    # only that path, goes through the Bot API (app/services/agent/media_processor.py)
+    # and needs the local server to exceed the cloud API's 20MB file limit. The
+    # historical archive pipeline downloads over MTProto via Telethon and never
+    # touches it, so it must not be gated on the same requirement. Leave enabled
+    # unless the deployment deliberately serves archive search only.
+    bot_media_downloads_enabled: bool = True
     media_root: Path = Path("/srv/wai-telegram-media")
     media_internal_uri_prefix: str = "/_protected_media"
     media_download_stall_timeout_seconds: float = Field(default=120.0, gt=0.0)
@@ -133,7 +142,11 @@ class Settings(BaseSettings):
                 raise ValueError("TELEGRAM_API_ID and TELEGRAM_API_HASH must be set")
             if self.environment == "production" and self.owner_user_id is None:
                 raise ValueError("OWNER_USER_ID must be set in production")
-            if self.environment == "production" and self.media_pipeline_enabled:
+            if (
+                self.environment == "production"
+                and self.media_pipeline_enabled
+                and self.bot_media_downloads_enabled
+            ):
                 bot_api_host = urlparse(self.telegram_bot_api_base_url).hostname
                 if bot_api_host not in {"127.0.0.1", "localhost", "::1"}:
                     raise ValueError(

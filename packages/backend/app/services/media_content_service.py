@@ -20,7 +20,31 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 DEEPGRAM_TRANSCRIPTION_URL = "https://api.deepgram.com/v1/listen"
-MEDIA_TRANSCRIPTION_TYPES = frozenset({"voice", "video_note", "audio", "video"})
+_ALL_TRANSCRIPTION_TYPES = frozenset({"voice", "video_note", "audio", "video"})
+
+
+def _configured_transcription_types() -> frozenset[str]:
+    """Media types eligible for transcription, narrowed by MEDIA_TRANSCRIPTION_TYPES.
+
+    Deployments that only care about conversation set this to "voice,video_note".
+    Video and standalone audio are the expensive half: in the historical backlog
+    328 forwarded videos alone were 20GB of the 26GB download, for the content
+    least likely to be searched. Unset means every type, which keeps the previous
+    behaviour for tests and for anyone who has not opted in.
+    """
+    raw = getattr(settings, "media_transcription_types", None)
+    if not raw:
+        return _ALL_TRANSCRIPTION_TYPES
+    chosen = frozenset(part.strip() for part in raw.split(",") if part.strip())
+    unknown = chosen - _ALL_TRANSCRIPTION_TYPES
+    if unknown:
+        raise ValueError(
+            f"MEDIA_TRANSCRIPTION_TYPES contains unknown media types: {sorted(unknown)}"
+        )
+    return chosen
+
+
+MEDIA_TRANSCRIPTION_TYPES = _configured_transcription_types()
 IMAGE_MEDIA_TYPES = frozenset({"photo"})
 
 
