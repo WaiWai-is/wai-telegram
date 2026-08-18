@@ -31,6 +31,10 @@ class MediaProcessingStatus(StrEnum):
     PROCESSING = "processing"
     READY = "ready"
     FAILED = "failed"
+    # Settled, but nothing was extractable: the sender deleted the file, or the
+    # recording carries no speech. Distinct from FAILED so these are never retried
+    # and never counted as errors needing attention.
+    SKIPPED = "skipped"
 
 
 class TelegramMessage(Base):

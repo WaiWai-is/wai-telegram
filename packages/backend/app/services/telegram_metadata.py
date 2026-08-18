@@ -29,6 +29,18 @@ def _json_scalar(value: object) -> str | int | float | bool | None:
     return None
 
 
+def _plain_text(value: object) -> str | None:
+    """Unwrap Telegram's TextWithEntities, which replaced plain strings for poll text.
+
+    Passing the object straight into a JSON column raises "Object of type
+    TextWithEntities is not JSON serializable" and aborts the whole batch.
+    """
+    if value is None or isinstance(value, str):
+        return value
+    inner = getattr(value, "text", None)
+    return inner if isinstance(inner, str) else None
+
+
 def _entities(
     message: object, text: str
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
@@ -158,14 +170,14 @@ def _poll(message: object) -> dict[str, Any] | None:
         return None
     result = {
         "id": getattr(poll, "id", None),
-        "question": getattr(poll, "question", None),
+        "question": _plain_text(getattr(poll, "question", None)),
         "closed": bool(getattr(poll, "closed", False)),
         "public_voters": bool(getattr(poll, "public_voters", False)),
         "multiple_choice": bool(getattr(poll, "multiple_choice", False)),
         "quiz": bool(getattr(poll, "quiz", False)),
         "answers": [
             {
-                "text": getattr(answer, "text", None),
+                "text": _plain_text(getattr(answer, "text", None)),
             }
             for answer in getattr(poll, "answers", None) or ()
         ],

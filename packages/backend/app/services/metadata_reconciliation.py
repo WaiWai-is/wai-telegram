@@ -1,7 +1,11 @@
 """Checkpointed Telegram metadata reconciliation without media-byte downloads."""
 
+import logging
+
 from datetime import UTC, datetime
 from uuid import UUID
+
+from telethon.errors import rpcerrorlist
 
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -16,6 +20,8 @@ from app.services.single_user import is_user_active
 from app.services.sync_service import _get_sender_name
 from app.services.telegram_client import get_client
 from app.services.telegram_metadata import extract_message_metadata
+
+logger = logging.getLogger(__name__)
 
 
 def _metadata_message_values(chat: TelegramChat, message) -> dict:
@@ -99,6 +105,7 @@ async def reconcile_owner_metadata(
 
     processed_total = 0
     completed_chats = 0
+    unreachable_chats = 0
     try:
         for chat in chats:
             if max_messages is not None and processed_total >= max_messages:
@@ -173,12 +180,43 @@ async def reconcile_owner_metadata(
                     completed_chats += 1
                 else:
                     break
+            except UNREACHABLE_CHAT_ERRORS as error:
+                # A channel the owner left or was removed from can never be read
+                # again. Aborting the whole pass for one of them left the other
+                # 1400 chats unreconciled, so record it and move on.
+                await _mark_checkpoint_failed(checkpoint_id, error)
+                unreachable_chats += 1
+                logger.warning(
+                    "Skipping unreachable chat %s: %s", chat.id, type(error).__name__
+                )
+                continue
             except Exception as error:
                 await _mark_checkpoint_failed(checkpoint_id, error)
                 raise
     finally:
         await client.disconnect()
-    return {"processed_messages": processed_total, "completed_chats": completed_chats}
+    return {
+        "processed_messages": processed_total,
+        "completed_chats": completed_chats,
+        "unreachable_chats": unreachable_chats,
+    }
+
+
+UNREACHABLE_CHAT_ERRORS: tuple[type[BaseException], ...] = tuple(
+    error
+    for error in (
+        getattr(rpcerrorlist, name, None)
+        for name in (
+            "ChannelPrivateError",
+            "ChannelInvalidError",
+            "ChatForbiddenError",
+            "PeerIdInvalidError",
+            "UserBannedInChannelError",
+            "ChatIdInvalidError",
+        )
+    )
+    if isinstance(error, type)
+)
 
 
 async def _save_metadata_batch(
