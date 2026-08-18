@@ -232,26 +232,26 @@ def _hybrid_search_sql(dimensions: int, where_sql: str):
         vector_raw AS (
             SELECT
                 m.id AS message_id,
-                1 - (m.embedding <=> cast(:embedding AS vector({dimensions})))
+                1 - (m.embedding <=> cast(:embedding AS halfvec({dimensions})))
                     AS vector_score,
                 NULL::text AS matched_content
             FROM telegram_messages m
             JOIN telegram_chats c ON c.id = m.chat_id
             WHERE {where_sql} AND m.embedding IS NOT NULL
-            ORDER BY m.embedding <=> cast(:embedding AS vector({dimensions}))
+            ORDER BY m.embedding <=> cast(:embedding AS halfvec({dimensions}))
             LIMIT :candidate_limit
         ),
         vector_chunks AS (
             SELECT
                 m.id AS message_id,
-                1 - (mc.embedding <=> cast(:embedding AS vector({dimensions})))
+                1 - (mc.embedding <=> cast(:embedding AS halfvec({dimensions})))
                     AS vector_score,
                 left(mc.text, 1200) AS matched_content
             FROM message_content_chunks mc
             JOIN telegram_messages m ON m.id = mc.message_id
             JOIN telegram_chats c ON c.id = m.chat_id
             WHERE {where_sql} AND mc.embedding IS NOT NULL
-            ORDER BY mc.embedding <=> cast(:embedding AS vector({dimensions}))
+            ORDER BY mc.embedding <=> cast(:embedding AS halfvec({dimensions}))
             LIMIT :candidate_limit
         ),
         vector_best AS (
