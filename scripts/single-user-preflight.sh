@@ -45,10 +45,15 @@ if [ "$media_mode" = "full" ]; then
         echo "Full media mode requires MEDIA_PIPELINE_ENABLED=true" >&2
         exit 1
     }
-    case "$TELEGRAM_BOT_API_BASE_URL" in
-        http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;;
-        *) echo "Full media mode requires the local Bot API URL" >&2; exit 1 ;;
-    esac
+    # The local Bot API is what lifts the cloud API's 20MB limit, and only the
+    # live-chat path uses it. A deployment that has turned that path off - the
+    # archive downloads over MTProto - has no reason to run the server.
+    if [ "${BOT_MEDIA_DOWNLOADS_ENABLED:-true}" != "false" ]; then
+        case "$TELEGRAM_BOT_API_BASE_URL" in
+            http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;;
+            *) echo "Full media mode requires the local Bot API URL" >&2; exit 1 ;;
+        esac
+    fi
     # Storage and CPU requirements follow what is actually transcribed. Voice notes
     # and video notes are a few megabytes each and are deleted once their text is
     # extracted, so nothing accumulates and nothing durable needs backing up. Video,
