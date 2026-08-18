@@ -226,7 +226,6 @@ jobs:
           set -euo pipefail
           RELEASE_SHA=$1
           MEDIA_MODE=$2
-          readonly BOT_API_COMMIT="adfd7f6a8e990272851777eeb3ae0def4216f161"
           command -v apt-get >/dev/null
           if ! command -v ffmpeg >/dev/null || ! command -v pdfinfo >/dev/null \
             || ! command -v pg_restore >/dev/null || ! command -v gpg >/dev/null \
@@ -322,7 +321,6 @@ jobs:
           set -euo pipefail
           RELEASE_SHA=$1
           MEDIA_MODE=$2
-          readonly BOT_API_COMMIT="adfd7f6a8e990272851777eeb3ae0def4216f161"
           release_dir="/opt/wai-telegram-releases/release-$RELEASE_SHA"
           chown -R root:root "$release_dir"
           install -d -o wai -g wai -m 0755 "$release_dir/.venv"
@@ -342,22 +340,6 @@ jobs:
           if [ "$MEDIA_MODE" = "full" ]; then
             [ "$MEDIA_PIPELINE_ENABLED" = "true" ] || exit 1
             install -d -o root -g wai-media -m 0750 /etc/wai-telegram
-            bot_env=$(mktemp /etc/wai-telegram/.bot-api.env.XXXXXX)
-            printf 'TELEGRAM_API_ID=%s\nTELEGRAM_API_HASH=%s\n' \
-              "$TELEGRAM_API_ID" "$TELEGRAM_API_HASH" > "$bot_env"
-            chown root:wai-media "$bot_env"
-            chmod 0640 "$bot_env"
-            mv -f "$bot_env" /etc/wai-telegram/bot-api.env
-              # The local Bot API only lifts the cloud API 20MB limit for files a
-              # user attaches in a live chat. The archive downloads over MTProto, so
-              # a deployment with BOT_MEDIA_DOWNLOADS_ENABLED=false has no use for it.
-              bot_api_enabled=true
-              [ "$(sed -n 's/^BOT_MEDIA_DOWNLOADS_ENABLED=//p' /opt/wai-telegram/.env.production | tail -n 1)" = "false" ] && bot_api_enabled=false
-              if [ "$bot_api_enabled" = true ] && [ ! -x /usr/local/bin/telegram-bot-api ]
-              || [ ! -r /usr/local/share/wai-telegram/telegram-bot-api.commit ] \
-              || [ "$(cat /usr/local/share/wai-telegram/telegram-bot-api.commit 2>/dev/null || true)" != "$BOT_API_COMMIT" ]; then
-              "$release_dir/scripts/install-telegram-bot-api.sh"
-            fi
             # restic protects media retained on the media path. A speech-only
             # deployment deletes each file once its text is extracted, so there is
             # nothing there to protect and no reason to hold repository credentials.
@@ -434,7 +416,7 @@ jobs:
           rollback_or_fail_closed() {
             status=$?
             [ "$status" -eq 0 ] && return
-            systemctl stop $all_services telegram-bot-api >/dev/null 2>&1 || true
+            systemctl stop $all_services >/dev/null 2>&1 || true
             if [ "$migration_started" -eq 0 ]; then
               rm -f -- /opt/wai-telegram
               ln -s "$previous_target" /opt/wai-telegram
@@ -481,10 +463,7 @@ jobs:
           systemctl daemon-reload
           nginx -t
           if [ "$MEDIA_MODE" = "full" ]; then
-              bot_api_enabled=true
-              [ "$(sed -n 's/^BOT_MEDIA_DOWNLOADS_ENABLED=//p' /opt/wai-telegram/.env.production | tail -n 1)" = "false" ] && bot_api_enabled=false
               systemctl enable $media_services
-              if [ "$bot_api_enabled" = true ]; then systemctl enable telegram-bot-api; fi
             # The volume monitor and the restic timers both watch retained media.
             # Speech-only deployments retain none, so leave them off rather than
             # scheduling jobs that would run against an empty directory.
@@ -497,26 +476,9 @@ jobs:
                   wai-restic-restore-drill.timer
                 ;;
             esac
-              if [ "$bot_api_enabled" = true ]; then
-            systemctl restart telegram-bot-api
-            for attempt in $(seq 1 30); do
-              curl -sS --max-time 2 http://127.0.0.1:8081/ >/dev/null 2>&1 && break
-              [ "$attempt" -eq 30 ] && exit 1
-              sleep 2
-            done
-              fi
-            if [ -f /etc/wai-telegram/bot-api-cutover-complete ]; then
-              bot_mode="--verify-local"
-            else
-              bot_mode="--initial-cloud-cutover"
-            fi
-            runuser -u wai -- bash -c \
-              "cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/python -m app.cli.bot_api_cutover $bot_mode"
-            install -o root -g root -m 0600 /dev/null \
-              /etc/wai-telegram/bot-api-cutover-complete
             systemctl restart $core_services $media_services
           else
-            systemctl disable --now telegram-bot-api $media_services \
+            systemctl disable --now $media_services \
               wai-media-volume-monitor.timer wai-restic-backup.timer \
               wai-restic-check.timer wai-restic-restore-drill.timer \
               >/dev/null 2>&1 || true
@@ -527,7 +489,7 @@ jobs:
             if systemctl is-active --quiet $core_services \
               && curl -sf --max-time 10 http://127.0.0.1:8000/health/ready >/dev/null; then
               if [ "$MEDIA_MODE" = "deferred" ] \
-                || systemctl is-active --quiet $media_services ${bot_api_enabled:+telegram-bot-api}; then
+                || systemctl is-active --quiet $media_services; then
                 break
               fi
             fi
