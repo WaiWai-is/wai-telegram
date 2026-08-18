@@ -652,6 +652,8 @@ def _error_details(error: Exception) -> tuple[str, str]:
         return "provider_request_error", str(error)
     if isinstance(error, MediaNoSpeechError):
         return "no_speech", str(error)
+    if isinstance(error, MediaSourceDeleted):
+        return "source_deleted", "The sender deleted this file in Telegram"
     if isinstance(error, MediaProviderResponseError):
         return "provider_response_error", str(error)
     if isinstance(error, MediaIndexingError):
@@ -661,8 +663,23 @@ def _error_details(error: Exception) -> tuple[str, str]:
     return "unexpected_error", f"Unexpected {type(error).__name__}"
 
 
+def _is_nothing_to_extract(error: Exception) -> bool:
+    """Outcomes that are final and blameless: retrying can never produce text."""
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, (MediaSourceDeleted, MediaNoSpeechError)):
+            return True
+        current = current.__cause__
+    return False
+
+
 async def _mark_failed(message_id: UUID, error: Exception) -> None:
     code, detail = _error_details(error)
+    status = (
+        MediaProcessingStatus.SKIPPED
+        if _is_nothing_to_extract(error)
+        else MediaProcessingStatus.FAILED
+    )
     async with get_db_context() as db:
         await db.execute(
             update(TelegramMessage)
@@ -671,7 +688,7 @@ async def _mark_failed(message_id: UUID, error: Exception) -> None:
                 TelegramMessage.id.in_(_active_media_message_ids()),
             )
             .values(
-                media_processing_status=MediaProcessingStatus.FAILED,
+                media_processing_status=status,
                 media_processing_error_code=code,
                 media_processing_error=detail,
                 media_processed_at=datetime.now(UTC),

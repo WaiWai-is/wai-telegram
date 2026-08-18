@@ -23,6 +23,12 @@ from app.services.media_cache_service import (
     media_preparation_needs_enqueue,
 )
 from app.services.messaging_service import save_draft as save_telegram_draft
+from app.services.file_search_service import (
+    DEFAULT_CONTEXT_WINDOW,
+    FILE_MEDIA_TYPES,
+    MAX_CONTEXT_WINDOW,
+    find_files,
+)
 from app.services.search_service import semantic_search
 from app.services.telegram_links import (
     build_media_download_url,
@@ -57,6 +63,47 @@ _MESSAGE_LOCATOR = {
 }
 
 TOOL_DEFINITIONS = (
+    ToolDefinition(
+        "find_files",
+        'Find shared files - documents, presentations, photos, videos - through the conversation around them, and return links to open or download each one. Use this when the file itself is the goal and it is remembered by context rather than by name ("the estimate Andrey sent in spring"), since photos have no filename and many documents arrive with no caption. Returns the surrounding message that matched, so the caller can judge relevance. download_url is present only for files already staged on disk, and private chats have no public telegram_url at all - in both cases pass chat_id and telegram_message_id to prepare_media, then download_media. Widen context_window to reach files sent a few messages away from the discussion.',
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 1},
+                "media_types": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(FILE_MEDIA_TYPES)},
+                },
+                "chat_ids": {
+                    "type": "array",
+                    "items": {"type": "string", "format": "uuid"},
+                },
+                "chat_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["private", "group", "supergroup", "channel"],
+                    },
+                },
+                "date_from": {"type": "string", "format": "date-time"},
+                "date_to": {"type": "string", "format": "date-time"},
+                "context_window": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": MAX_CONTEXT_WINDOW,
+                    "default": DEFAULT_CONTEXT_WINDOW,
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 20,
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    ),
     ToolDefinition(
         "search_messages",
         "Search synced messages, links, filenames, transcripts and extracted documents. Use mode=hybrid for a natural-language description and mode=exact for a known literal phrase. Filter by chat_types to restrict private chats, groups, supergroups or channels. Results are cursor-paginated.",
@@ -271,6 +318,26 @@ async def _search_messages(
     )
     response = await semantic_search(db, user_id, request)
     return response.model_dump(mode="json")
+
+
+async def _find_files(
+    db: AsyncSession, user_id: UUID, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    query = str(arguments.get("query") or "").strip()
+    if not query:
+        raise ToolInputError("query is required")
+    return await find_files(
+        db,
+        user_id,
+        query=query,
+        media_types=arguments.get("media_types"),
+        chat_ids=arguments.get("chat_ids"),
+        chat_types=arguments.get("chat_types"),
+        date_from=arguments.get("date_from"),
+        date_to=arguments.get("date_to"),
+        context_window=arguments.get("context_window", DEFAULT_CONTEXT_WINDOW),
+        limit=arguments.get("limit", 20),
+    )
 
 
 async def _get_message(
@@ -632,6 +699,7 @@ async def _get_data_status(
 ToolHandler = Callable[[AsyncSession, UUID, dict[str, Any]], Awaitable[dict[str, Any]]]
 _HANDLERS: dict[str, ToolHandler] = {
     "search_messages": _search_messages,
+    "find_files": _find_files,
     "get_message": _get_message,
     "save_draft": _save_draft,
     "prepare_media": _prepare_media,
