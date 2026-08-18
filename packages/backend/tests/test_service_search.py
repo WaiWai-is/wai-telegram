@@ -275,7 +275,10 @@ class TestSemanticSearch:
         assert "websearch_to_tsquery('simple'" in sql_text
         assert "similarity(m.media_file_name" in sql_text
         assert "m.media_file_name % :query" in sql_text
-        assert "m.searchable_metadata % :query" in sql_text
+        # Trigram matching is deliberately confined to filenames: against
+        # searchable_metadata it cost 1.5s per search and matched nothing.
+        assert "m.searchable_metadata % :query" not in sql_text
+        assert "m.searchable_metadata ILIKE :query_pattern" in sql_text
         assert "similarity(m.media_file_name, :query) > 0.2" not in sql_text
         assert "coalesce(m.media_file_name" not in sql_text
         assert str(mock_db.execute.await_args_list[0].args[0]) == (

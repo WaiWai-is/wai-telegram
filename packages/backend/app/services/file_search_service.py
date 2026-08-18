@@ -111,6 +111,39 @@ async def find_files(
         )
     ).all()
 
+    # A file that matched directly often has no caption of its own, and a photo
+    # never has a filename either, so the result would carry nothing a person can
+    # judge. Collect the talking around each window and quote the nearest line.
+    context_rows = (
+        await db.execute(
+            select(
+                TelegramMessage.chat_id,
+                TelegramMessage.telegram_message_id,
+                TelegramMessage.text,
+            )
+            .join(TelegramChat, TelegramChat.id == TelegramMessage.chat_id)
+            .where(
+                TelegramChat.user_id == user_id,
+                TelegramMessage.text.isnot(None),
+                TelegramMessage.text != "",
+                TelegramMessage.deleted_at.is_(None),
+                or_(*conditions),
+            )
+        )
+    ).all()
+    context_by_chat: dict[UUID, list[tuple[int, str]]] = {}
+    for chat_id, telegram_message_id, text in context_rows:
+        context_by_chat.setdefault(chat_id, []).append((telegram_message_id, text))
+
+    def nearest_context(chat_id: UUID, telegram_message_id: int) -> str | None:
+        candidates = context_by_chat.get(chat_id) or []
+        if not candidates:
+            return None
+        tid, text = min(candidates, key=lambda row: abs(row[0] - telegram_message_id))
+        if abs(tid - telegram_message_id) > window:
+            return None
+        return _context_snippet(text)
+
     best: dict[UUID, dict[str, Any]] = {}
     for message, chat, media_object in rows:
         nearest = min(
@@ -144,7 +177,11 @@ async def find_files(
             "caption": _context_snippet(message.text),
             "sender_name": message.sender_name,
             "sent_at": message.sent_at.isoformat(),
-            "matched_because": _context_snippet(nearest.text),
+            "matched_because": (
+                _context_snippet(nearest.text)
+                or _context_snippet(message.text)
+                or nearest_context(message.chat_id, message.telegram_message_id)
+            ),
             "matched_distance": distance,
             "is_direct_match": distance == 0,
             "telegram_url": build_telegram_message_url(

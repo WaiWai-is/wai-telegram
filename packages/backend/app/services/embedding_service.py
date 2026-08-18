@@ -3,6 +3,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+import asyncio
+from collections import OrderedDict
+
 from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,9 +30,32 @@ class PreparedMediaContentIndex:
     chunks: list[PreparedContentChunk]
 
 
+_client: AsyncOpenAI | None = None
+_client_lock = asyncio.Lock()
+
+
 async def get_openai_client() -> AsyncOpenAI:
-    """Get OpenAI client."""
-    return AsyncOpenAI(api_key=settings.openai_api_key)
+    """Return the shared OpenAI client, building it once.
+
+    A fresh AsyncOpenAI per call meant a fresh TCP connection and TLS handshake
+    for every embedding, and the discarded clients were never closed. Query
+    embedding dominated search latency because of it - about two seconds against
+    the quarter second the same request takes over a warm connection.
+    """
+    global _client
+    if _client is None:
+        async with _client_lock:
+            if _client is None:
+                _client = AsyncOpenAI(api_key=settings.openai_api_key)
+    return _client
+
+
+async def close_openai_client() -> None:
+    """Release the shared client, for shutdown and for tests."""
+    global _client
+    if _client is not None:
+        await _client.close()
+        _client = None
 
 
 async def generate_embeddings(texts: list[str]) -> list[list[float]]:
@@ -163,7 +189,34 @@ async def embed_unembedded_messages(
     return await embed_messages(db, message_ids)
 
 
+_QUERY_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
+_QUERY_CACHE_MAX = 512
+
+
+def clear_query_embedding_cache() -> None:
+    """Drop cached query vectors. Used by tests and after a model change."""
+    _QUERY_CACHE.clear()
+
+
 async def generate_query_embedding(query: str) -> list[float]:
-    """Generate embedding for a search query."""
-    embeddings = await generate_embeddings([query])
-    return embeddings[0] if embeddings else []
+    """Embed a search query, reusing the vector for a query already seen.
+
+    Every hybrid search pays a round trip to the embeddings API - about 145ms on
+    a warm connection - and the same phrasing recurs constantly: an agent
+    refining a search, a person retrying, a saved query. The text fully
+    determines the vector, so caching it is exact rather than approximate.
+    """
+    key = query.strip()
+    if not key:
+        return []
+    cached = _QUERY_CACHE.get(key)
+    if cached is not None:
+        _QUERY_CACHE.move_to_end(key)
+        return cached
+    embeddings = await generate_embeddings([key])
+    vector = embeddings[0] if embeddings else []
+    if vector:
+        _QUERY_CACHE[key] = vector
+        if len(_QUERY_CACHE) > _QUERY_CACHE_MAX:
+            _QUERY_CACHE.popitem(last=False)
+    return vector
