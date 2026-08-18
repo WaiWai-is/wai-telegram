@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from pgvector.sqlalchemy import Vector
+from pgvector.sqlalchemy import HALFVEC
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -83,7 +83,7 @@ class TelegramMessage(Base):
     is_outgoing: Mapped[bool] = mapped_column(Boolean, default=False)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     embedding: Mapped[list[float] | None] = mapped_column(
-        Vector(settings.embedding_dimensions), nullable=True
+        HALFVEC(settings.embedding_dimensions), nullable=True
     )
     embedded_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -188,7 +188,7 @@ class MessageContentChunk(Base):
         TSVECTOR().with_variant(Text(), "sqlite"), nullable=True
     )
     embedding: Mapped[list[float] | None] = mapped_column(
-        Vector(settings.embedding_dimensions), nullable=True
+        HALFVEC(settings.embedding_dimensions), nullable=True
     )
     embedded_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
