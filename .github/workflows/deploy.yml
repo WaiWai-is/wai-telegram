@@ -348,7 +348,12 @@ jobs:
             chown root:wai-media "$bot_env"
             chmod 0640 "$bot_env"
             mv -f "$bot_env" /etc/wai-telegram/bot-api.env
-            if [ ! -x /usr/local/bin/telegram-bot-api ] \
+              # The local Bot API only lifts the cloud API 20MB limit for files a
+              # user attaches in a live chat. The archive downloads over MTProto, so
+              # a deployment with BOT_MEDIA_DOWNLOADS_ENABLED=false has no use for it.
+              bot_api_enabled=true
+              [ "$(sed -n 's/^BOT_MEDIA_DOWNLOADS_ENABLED=//p' /opt/wai-telegram/.env.production | tail -n 1)" = "false" ] && bot_api_enabled=false
+              if [ "$bot_api_enabled" = true ] && [ ! -x /usr/local/bin/telegram-bot-api ]
               || [ ! -r /usr/local/share/wai-telegram/telegram-bot-api.commit ] \
               || [ "$(cat /usr/local/share/wai-telegram/telegram-bot-api.commit 2>/dev/null || true)" != "$BOT_API_COMMIT" ]; then
               "$release_dir/scripts/install-telegram-bot-api.sh"
@@ -476,7 +481,10 @@ jobs:
           systemctl daemon-reload
           nginx -t
           if [ "$MEDIA_MODE" = "full" ]; then
-            systemctl enable telegram-bot-api $media_services
+              bot_api_enabled=true
+              [ "$(sed -n 's/^BOT_MEDIA_DOWNLOADS_ENABLED=//p' /opt/wai-telegram/.env.production | tail -n 1)" = "false" ] && bot_api_enabled=false
+              systemctl enable $media_services
+              if [ "$bot_api_enabled" = true ]; then systemctl enable telegram-bot-api; fi
             # The volume monitor and the restic timers both watch retained media.
             # Speech-only deployments retain none, so leave them off rather than
             # scheduling jobs that would run against an empty directory.
@@ -489,12 +497,14 @@ jobs:
                   wai-restic-restore-drill.timer
                 ;;
             esac
+              if [ "$bot_api_enabled" = true ]; then
             systemctl restart telegram-bot-api
             for attempt in $(seq 1 30); do
               curl -sS --max-time 2 http://127.0.0.1:8081/ >/dev/null 2>&1 && break
               [ "$attempt" -eq 30 ] && exit 1
               sleep 2
             done
+              fi
             if [ -f /etc/wai-telegram/bot-api-cutover-complete ]; then
               bot_mode="--verify-local"
             else
@@ -517,7 +527,7 @@ jobs:
             if systemctl is-active --quiet $core_services \
               && curl -sf --max-time 10 http://127.0.0.1:8000/health/ready >/dev/null; then
               if [ "$MEDIA_MODE" = "deferred" ] \
-                || systemctl is-active --quiet $media_services telegram-bot-api; then
+                || systemctl is-active --quiet $media_services ${bot_api_enabled:+telegram-bot-api}; then
                 break
               fi
             fi
