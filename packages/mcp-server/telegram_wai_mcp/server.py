@@ -1181,6 +1181,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
             result = await api.execute_data_tool("get_data_status")
             return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
 
+        elif name == "find_files":
+            # Arguments are validated by the backend against the schema this server
+            # already advertises from the shared registry, so pass them through.
+            result = await api.execute_data_tool("find_files", dict(args))
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+
         elif name == "search_messages":
             query = _require_str(args, "query")
             limit = _optional_int(args, "limit", default=20, minimum=1, maximum=100)

@@ -889,3 +889,20 @@ class TestFormatChatMessages:
         }
         content = server.format_chat_messages(result)
         assert long_text in content[0].text
+
+
+async def test_find_files_is_routed_to_the_shared_registry():
+    """list_tools advertises it from the backend, so call_tool must dispatch it too."""
+    from unittest.mock import AsyncMock, patch
+
+    from telegram_wai_mcp import server
+
+    api = AsyncMock()
+    api.execute_data_tool = AsyncMock(return_value={"files": [], "total": 0})
+    api.close = AsyncMock()
+
+    with patch.object(server, "get_client", return_value=api):
+        result = await server.call_tool("find_files", {"query": "смета", "limit": 5})
+
+    api.execute_data_tool.assert_awaited_once_with("find_files", {"query": "смета", "limit": 5})
+    assert "files" in result[0].text
