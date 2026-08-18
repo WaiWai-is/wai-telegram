@@ -15,7 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.observability import log_event, set_user_context
-from app.core.security import compute_api_key_prefix, decode_token, verify_api_key
+from app.core.security import (
+    compute_api_key_prefix,
+    decode_token,
+    hash_api_key,
+    verify_api_key,
+)
 from app.models.api_key import ApiKey
 from app.models.user import User
 
@@ -92,6 +97,11 @@ async def get_auth_context(
         # Iterate candidates to handle (unlikely) prefix collisions
         for api_key_record, user in result.all():
             if verify_api_key(api_key.credentials, api_key_record.key_hash):
+                # Upgrade the stored hash the first time an older key is used, so
+                # the slow KDF is paid once rather than on every request forever.
+                if not api_key_record.key_hash.startswith("sha256$"):
+                    api_key_record.key_hash = hash_api_key(api_key.credentials)
+                    await db.flush()
                 # Check expiration
                 if (
                     api_key_record.expires_at

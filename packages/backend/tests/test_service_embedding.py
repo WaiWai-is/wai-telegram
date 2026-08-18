@@ -1,3 +1,5 @@
+import pytest
+
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -77,6 +79,16 @@ class TestGenerateEmbeddings:
         ):
             result = await generate_embeddings(["hello"])
             assert result == [[0.5, 0.6]]
+
+
+@pytest.fixture(autouse=True)
+def _clear_query_cache():
+    """Query vectors are cached by text, so tests must not inherit each other's."""
+    from app.services.embedding_service import clear_query_embedding_cache
+
+    clear_query_embedding_cache()
+    yield
+    clear_query_embedding_cache()
 
 
 class TestGenerateQueryEmbedding:

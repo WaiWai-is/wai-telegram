@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 
@@ -41,10 +42,22 @@ def hash_password(password: str) -> str:
 
 
 def hash_api_key(api_key: str) -> str:
-    return password_hash.hash(api_key)
+    """Hash an API key with SHA-256.
+
+    Argon2 exists to make guessing a human-chosen password expensive. API keys
+    are generated random tokens with far more entropy than any attacker can
+    search, so the memory-hard KDF buys nothing - and it cost 387ms on every
+    single authenticated request, which was the largest component of search
+    latency. GitHub and Stripe hash their tokens the same way.
+    """
+    return "sha256$" + hashlib.sha256(api_key.encode()).hexdigest()
 
 
 def verify_api_key(api_key: str, hashed_key: str) -> bool:
+    """Verify against SHA-256, falling back to the old KDF for existing keys."""
+    if hashed_key.startswith("sha256$"):
+        return hmac.compare_digest(hashed_key, hash_api_key(api_key))
+    # Keys issued before the change still carry an Argon2 or bcrypt hash.
     return password_hash.verify(api_key, hashed_key)
 
 

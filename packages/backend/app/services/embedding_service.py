@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import asyncio
+from collections import OrderedDict
 
 from openai import AsyncOpenAI
 from sqlalchemy import select
@@ -188,7 +189,34 @@ async def embed_unembedded_messages(
     return await embed_messages(db, message_ids)
 
 
+_QUERY_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
+_QUERY_CACHE_MAX = 512
+
+
+def clear_query_embedding_cache() -> None:
+    """Drop cached query vectors. Used by tests and after a model change."""
+    _QUERY_CACHE.clear()
+
+
 async def generate_query_embedding(query: str) -> list[float]:
-    """Generate embedding for a search query."""
-    embeddings = await generate_embeddings([query])
-    return embeddings[0] if embeddings else []
+    """Embed a search query, reusing the vector for a query already seen.
+
+    Every hybrid search pays a round trip to the embeddings API - about 145ms on
+    a warm connection - and the same phrasing recurs constantly: an agent
+    refining a search, a person retrying, a saved query. The text fully
+    determines the vector, so caching it is exact rather than approximate.
+    """
+    key = query.strip()
+    if not key:
+        return []
+    cached = _QUERY_CACHE.get(key)
+    if cached is not None:
+        _QUERY_CACHE.move_to_end(key)
+        return cached
+    embeddings = await generate_embeddings([key])
+    vector = embeddings[0] if embeddings else []
+    if vector:
+        _QUERY_CACHE[key] = vector
+        if len(_QUERY_CACHE) > _QUERY_CACHE_MAX:
+            _QUERY_CACHE.popitem(last=False)
+    return vector
