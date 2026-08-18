@@ -166,7 +166,15 @@ def _rows_to_response(
 
 
 def _hybrid_search_sql(dimensions: int, where_sql: str):
-    """Build simple-FTS + trigram + pgvector retrieval fused with RRF."""
+    """Build simple-FTS + trigram + pgvector retrieval fused with RRF.
+
+    The trigram operator is applied to media_file_name only. Running it against
+    searchable_metadata as well cost 1.5s of every hybrid search at the 0.2
+    threshold this query sets, and returned nothing: metadata is long text, so a
+    natural-language query never reaches the similarity cut-off. Filenames are
+    short and fuzzy-matching them is both cheap (~40ms) and the point. Metadata
+    is still matched by full-text search and by ILIKE, which cost ~35ms each.
+    """
     return text(f"""
         WITH search_query AS (
             SELECT websearch_to_tsquery('simple', :query) AS tsq
@@ -177,7 +185,6 @@ def _hybrid_search_sql(dimensions: int, where_sql: str):
                 greatest(
                     ts_rank_cd(m.search_vector, q.tsq, 32),
                     similarity(m.media_file_name, :query),
-                    similarity(m.searchable_metadata, :query),
                     CASE WHEN m.media_file_name ILIKE :query_pattern
                         THEN 1.5 ELSE 0 END,
                     CASE WHEN m.searchable_metadata ILIKE :query_pattern
@@ -193,7 +200,6 @@ def _hybrid_search_sql(dimensions: int, where_sql: str):
                 OR m.media_file_name ILIKE :query_pattern
                 OR m.searchable_metadata ILIKE :query_pattern
                 OR m.media_file_name % :query
-                OR m.searchable_metadata % :query
               )
             UNION ALL
             SELECT

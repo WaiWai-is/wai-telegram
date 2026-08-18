@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+import asyncio
+
 from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,9 +29,32 @@ class PreparedMediaContentIndex:
     chunks: list[PreparedContentChunk]
 
 
+_client: AsyncOpenAI | None = None
+_client_lock = asyncio.Lock()
+
+
 async def get_openai_client() -> AsyncOpenAI:
-    """Get OpenAI client."""
-    return AsyncOpenAI(api_key=settings.openai_api_key)
+    """Return the shared OpenAI client, building it once.
+
+    A fresh AsyncOpenAI per call meant a fresh TCP connection and TLS handshake
+    for every embedding, and the discarded clients were never closed. Query
+    embedding dominated search latency because of it - about two seconds against
+    the quarter second the same request takes over a warm connection.
+    """
+    global _client
+    if _client is None:
+        async with _client_lock:
+            if _client is None:
+                _client = AsyncOpenAI(api_key=settings.openai_api_key)
+    return _client
+
+
+async def close_openai_client() -> None:
+    """Release the shared client, for shutdown and for tests."""
+    global _client
+    if _client is not None:
+        await _client.close()
+        _client = None
 
 
 async def generate_embeddings(texts: list[str]) -> list[list[float]]:

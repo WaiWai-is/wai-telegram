@@ -163,3 +163,32 @@ async def test_context_window_is_clamped(db_session, test_user, window):
     result = await _run(db_session, test_user, chat, context_window=window)
 
     assert isinstance(result["files"], list)
+
+
+async def test_a_photo_with_no_caption_still_explains_itself(db_session, test_user):
+    """Without this the result is "(no name)" and nothing a person can judge."""
+    chat = await _chat_with_messages(db_session, test_user)
+    result = await _run(db_session, test_user, chat, context_window=40)
+
+    photo = next(f for f in result["files"] if f["media_type"] == "photo")
+    assert photo["matched_because"], "a photo must carry the conversation around it"
+
+
+async def test_a_file_that_matched_directly_quotes_its_neighbour(db_session, test_user):
+    from app.services import file_search_service
+
+    chat = await _chat_with_messages(db_session, test_user)
+    # The document itself is the hit, and it has no caption of its own.
+    with patch.object(
+        file_search_service,
+        "semantic_search",
+        new_callable=AsyncMock,
+        return_value=_search_returning(chat, 101, None),
+    ):
+        result = await file_search_service.find_files(
+            db_session, test_user.id, query="смета"
+        )
+
+    match = next(f for f in result["files"] if f["file_name"] == "smeta-2026.pdf")
+    assert match["is_direct_match"] is True
+    assert "смету" in match["matched_because"]
