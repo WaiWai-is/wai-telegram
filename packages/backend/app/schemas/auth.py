@@ -30,7 +30,7 @@ class UserResponse(BaseModel):
 # --- API Key schemas ---
 
 
-VALID_SCOPES = {"read", "write"}
+VALID_SCOPES = {"read", "write", "draft"}
 
 
 class ApiKeyCreateRequest(BaseModel):
@@ -43,7 +43,7 @@ class ApiKeyCreateRequest(BaseModel):
     )
     scopes: list[str] = Field(
         default_factory=lambda: ["read", "write"],
-        description="Permission scopes: 'read' and/or 'write'.",
+        description="Permission scopes: 'read', 'draft' and/or 'write'.",
     )
 
     @field_validator("scopes")

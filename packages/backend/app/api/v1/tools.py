@@ -8,9 +8,9 @@ from app.core.auth import AuthContext, get_auth_context
 from app.core.database import get_db
 from app.services.tool_registry import (
     TOOL_DEFINITIONS,
-    WRITE_TOOL_NAMES,
     ToolInputError,
     execute_data_tool,
+    required_scope,
 )
 
 router = APIRouter()
@@ -32,7 +32,8 @@ async def list_data_tools(
                 "parameters": definition.parameters,
             }
             for definition in TOOL_DEFINITIONS
-            if ctx.has_scope("write") or definition.name not in WRITE_TOOL_NAMES
+            if (scope := required_scope(definition.name)) is None
+            or ctx.has_scope(scope)
         ]
     }
 
@@ -44,10 +45,11 @@ async def execute_tool(
     ctx: Annotated[AuthContext, Depends(get_auth_context)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
-    if name in WRITE_TOOL_NAMES and not ctx.has_scope("write"):
+    scope = required_scope(name)
+    if scope is not None and not ctx.has_scope(scope):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="API key lacks 'write' permission",
+            detail=f"API key lacks '{scope}' permission",
         )
     try:
         return await execute_data_tool(db, ctx.user.id, name, payload.arguments)

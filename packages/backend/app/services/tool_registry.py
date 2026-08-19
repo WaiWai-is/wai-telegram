@@ -214,7 +214,14 @@ TOOL_DEFINITIONS = (
 )
 
 _DEFINITION_BY_NAME = {definition.name: definition for definition in TOOL_DEFINITIONS}
-WRITE_TOOL_NAMES = frozenset({"prepare_media", "save_draft"})
+# Reading is free. A draft appears in Telegram on the other side, so it needs its
+# own permission — narrower than 'write', which also buys sending. Fetching and
+# processing media only fills our own cache, like sync, and stays read-level.
+TOOL_SCOPES = {"save_draft": "draft"}
+
+
+def required_scope(name: str) -> str | None:
+    return TOOL_SCOPES.get(name)
 
 
 def responses_tool_definitions(names: set[str] | None = None) -> list[dict[str, Any]]:
