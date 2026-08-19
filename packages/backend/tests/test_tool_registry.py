@@ -473,6 +473,46 @@ async def test_write_scope_still_covers_drafting(client, db_session, test_user):
     assert drafted.status_code != 403
 
 
+async def test_prepare_media_wakes_video_stuck_in_extraction_retries(
+    db_session,
+    test_user,
+):
+    chat, message = await _seed(db_session, test_user)
+    media_object = (
+        await db_session.execute(
+            select(MediaObject).where(MediaObject.message_id == message.id)
+        )
+    ).scalar_one()
+    message.media_type = "video"
+    message.media_mime_type = "video/mp4"
+    message.media_processing_status = MediaProcessingStatus.FAILED
+    media_object.status = MediaObjectStatus.RETRY_WAIT
+    media_object.retry_after = datetime.now(UTC)
+    media_object.error_code = "document_extraction_error"
+    media_object.error_detail = "Document extraction failed: empty_document"
+    await db_session.flush()
+    locator = {"chat_id": str(chat.id), "telegram_message_id": 42}
+
+    with (
+        patch(
+            "app.services.media_cache_service.MEDIA_TRANSCRIPTION_TYPES",
+            frozenset({"voice", "video_note"}),
+        ),
+        patch("app.tasks.media_tasks.enqueue_media_processing") as enqueue,
+    ):
+        result = await execute_data_tool(
+            db_session,
+            test_user.id,
+            "prepare_media",
+            locator,
+        )
+
+    assert result["enqueued"] is True
+    assert media_object.transcription_requested_at is not None
+    assert media_object.retry_after is None
+    enqueue.assert_called_once_with([message.id])
+
+
 async def test_prepare_media_requests_transcription_for_skipped_video(
     db_session,
     test_user,

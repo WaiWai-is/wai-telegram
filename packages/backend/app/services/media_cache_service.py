@@ -278,10 +278,17 @@ def request_transcription(
     if media_object.transcription_requested_at is None:
         media_object.transcription_requested_at = datetime.now(UTC)
     if (
-        media_object.status == MediaObjectStatus.READY_DOWNLOAD_ONLY
+        media_object.status
+        in {MediaObjectStatus.READY_DOWNLOAD_ONLY, MediaObjectStatus.RETRY_WAIT}
         and message.transcribed_at is None
     ):
+        # A file parked as download-only or looping on extraction retries is
+        # exactly what the requester wants reprocessed; waiting out the retry
+        # clock would ignore the request for hours.
         media_object.status = MediaObjectStatus.PENDING
+        media_object.retry_after = None
+        media_object.error_code = None
+        media_object.error_detail = None
 
 
 def media_preparation_needs_enqueue(
