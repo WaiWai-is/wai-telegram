@@ -32,6 +32,7 @@ from app.services.embedding_service import (
     prepare_media_content_index,
 )
 from app.services.media_content_service import (
+    ALL_TRANSCRIPTION_TYPES,
     IMAGE_MEDIA_TYPES,
     MEDIA_TRANSCRIPTION_TYPES,
     MediaDocumentExtractionError,
@@ -131,6 +132,7 @@ class ClaimedMediaMessage:
     existing_content_text: str | None
     transcribed_at: datetime | None
     legacy_transcript_in_text: bool = False
+    transcription_requested: bool = False
 
 
 @dataclass(frozen=True)
@@ -305,8 +307,10 @@ async def claim_media_message(
                 TelegramMessage.media_duration_seconds,
                 TelegramMessage.content_text,
                 TelegramMessage.transcribed_at,
+                MediaObject.transcription_requested_at,
             )
             .join(TelegramChat, TelegramChat.id == TelegramMessage.chat_id)
+            .outerjoin(MediaObject, MediaObject.message_id == TelegramMessage.id)
             .where(TelegramMessage.id == claimed_id)
         )
     ).one()
@@ -320,6 +324,7 @@ async def claim_media_message(
         id=row.id,
         user_id=row.user_id,
         chat_id=row.chat_id,
+        transcription_requested=row.transcription_requested_at is not None,
         telegram_message_id=row.telegram_message_id,
         caption=None if legacy_transcript_in_text else row.text,
         media_type=row.media_type or "other",
@@ -430,6 +435,7 @@ async def process_local_media(
     mime_type: str | None,
     duration_seconds: int | None = None,
     on_extracted: Callable[[], Awaitable[None]] | None = None,
+    transcription_requested: bool = False,
 ) -> ProcessedMediaContent:
     """Produce full searchable content plus one concise summary."""
     if _is_download_only_media(path, media_type, mime_type):
@@ -455,7 +461,10 @@ async def process_local_media(
             transcribed=False,
         )
 
-    if media_type in MEDIA_TRANSCRIPTION_TYPES:
+    wants_transcription = media_type in MEDIA_TRANSCRIPTION_TYPES or (
+        transcription_requested and media_type in ALL_TRANSCRIPTION_TYPES
+    )
+    if wants_transcription:
         visual_timeline = (
             await analyze_video_timeline(path)
             if media_type in {"video", "video_note"}
@@ -537,6 +546,19 @@ async def process_local_media(
             summary_model=settings.media_summary_model,
             transcribed=bool(transcript),
             segments=transcript_segments,
+        )
+
+    if media_type in ALL_TRANSCRIPTION_TYPES:
+        # Transcription was not bought for this type and nobody asked for this
+        # file; the document extractor cannot read audio or video.
+        media_label = mime_type or path.suffix.lower().lstrip(".") or "binary file"
+        return ProcessedMediaContent(
+            content_text=None,
+            content_summary=f"Download-only Telegram attachment ({media_label}).",
+            content_model="download-only",
+            summary_model="none",
+            transcribed=False,
+            download_only=True,
         )
 
     try:
@@ -891,9 +913,11 @@ async def _load_active_job(
                 TelegramMessage.media_duration_seconds,
                 TelegramMessage.content_text,
                 TelegramMessage.transcribed_at,
+                MediaObject.transcription_requested_at,
             )
             .join(TelegramChat, TelegramChat.id == TelegramMessage.chat_id)
             .join(User, User.id == TelegramChat.user_id)
+            .outerjoin(MediaObject, MediaObject.message_id == TelegramMessage.id)
             .where(
                 TelegramMessage.id == message_id,
                 TelegramMessage.has_media.is_(True),
@@ -913,6 +937,7 @@ async def _load_active_job(
         id=row.id,
         user_id=row.user_id,
         chat_id=row.chat_id,
+        transcription_requested=row.transcription_requested_at is not None,
         telegram_message_id=row.telegram_message_id,
         caption=None if legacy_transcript_in_text else row.text,
         media_type=row.media_type or "other",
@@ -979,6 +1004,7 @@ async def extract_media_stage(message_id: UUID) -> str:
             info.mime_type,
             info.duration_seconds,
             on_extracted=lambda: _mark_summary_stage(job.id),
+            transcription_requested=job.transcription_requested,
         )
     await _save_content_checkpoint(job, info, content)
     return "checkpointed"
@@ -1137,6 +1163,7 @@ async def process_media_message(message_id: UUID) -> str:
                 info.media_type,
                 info.mime_type,
                 info.duration_seconds,
+                transcription_requested=job.transcription_requested,
             )
         await _save_content_checkpoint(job, info, content)
         try:

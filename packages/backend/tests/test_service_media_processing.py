@@ -549,3 +549,61 @@ async def test_index_stage_does_not_mutate_deactivated_archive(db_session, test_
     assert result == "skipped"
     assert media_object.status == MediaObjectStatus.CACHED
     assert message.media_processing_status == MediaProcessingStatus.QUEUED
+
+
+async def test_video_outside_configured_types_stays_download_only(tmp_path):
+    source = tmp_path / "submission.mov"
+    source.write_bytes(b"video")
+
+    with patch(
+        "app.services.media_processing_service.MEDIA_TRANSCRIPTION_TYPES",
+        frozenset({"voice", "video_note"}),
+    ):
+        result = await process_local_media(source, "video", "video/mp4")
+
+    assert result.download_only is True
+    assert result.transcribed is False
+    assert result.content_model == "download-only"
+
+
+async def test_video_outside_configured_types_transcribes_when_requested(tmp_path):
+    source = tmp_path / "submission.mov"
+    source.write_bytes(b"video")
+    extracted = tmp_path / "submission.ogg"
+
+    with (
+        patch(
+            "app.services.media_processing_service.MEDIA_TRANSCRIPTION_TYPES",
+            frozenset({"voice", "video_note"}),
+        ),
+        patch(
+            "app.services.media_processing_service.extract_video_audio",
+            new_callable=AsyncMock,
+            return_value=extracted,
+        ) as extract,
+        patch(
+            "app.services.media_processing_service.analyze_video_timeline",
+            new_callable=AsyncMock,
+            return_value="[0.000s] Talking head.",
+        ),
+        patch(
+            "app.services.media_processing_service.transcribe_media_file_detailed",
+            new_callable=AsyncMock,
+            return_value=TranscriptionResult(text="Transcript", segments=()),
+        ) as transcribe,
+        patch(
+            "app.services.media_processing_service.summarize_text",
+            new_callable=AsyncMock,
+            return_value="Summary",
+        ),
+    ):
+        result = await process_local_media(
+            source,
+            "video",
+            "video/mp4",
+            transcription_requested=True,
+        )
+
+    assert result.transcribed is True
+    extract.assert_awaited_once_with(source)
+    transcribe.assert_awaited_once_with(extracted, "audio/ogg")

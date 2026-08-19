@@ -471,3 +471,41 @@ async def test_write_scope_still_covers_drafting(client, db_session, test_user):
         "/api/v1/tools/save_draft", headers=headers, json={"arguments": {}}
     )
     assert drafted.status_code != 403
+
+
+async def test_prepare_media_requests_transcription_for_skipped_video(
+    db_session,
+    test_user,
+):
+    chat, message = await _seed(db_session, test_user)
+    media_object = (
+        await db_session.execute(
+            select(MediaObject).where(MediaObject.message_id == message.id)
+        )
+    ).scalar_one()
+    message.media_type = "video"
+    message.media_mime_type = "video/mp4"
+    message.content_model = "download-only"
+    message.media_processing_status = MediaProcessingStatus.READY
+    media_object.status = MediaObjectStatus.READY_DOWNLOAD_ONLY
+    await db_session.flush()
+    locator = {"chat_id": str(chat.id), "telegram_message_id": 42}
+
+    with (
+        patch(
+            "app.services.media_cache_service.MEDIA_TRANSCRIPTION_TYPES",
+            frozenset({"voice", "video_note"}),
+        ),
+        patch("app.tasks.media_tasks.enqueue_media_processing") as enqueue,
+    ):
+        result = await execute_data_tool(
+            db_session,
+            test_user.id,
+            "prepare_media",
+            locator,
+        )
+
+    assert result["enqueued"] is True
+    assert media_object.transcription_requested_at is not None
+    assert message.media_processing_status == MediaProcessingStatus.PENDING
+    enqueue.assert_called_once_with([message.id])

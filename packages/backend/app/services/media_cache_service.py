@@ -27,7 +27,12 @@ from app.models.chat import TelegramChat
 from app.models.media import MediaObject, MediaObjectStatus, MediaStage
 from app.models.message import MediaProcessingStatus, TelegramMessage
 from app.models.user import User
-from app.services.media_content_service import MediaInfo, get_media_info
+from app.services.media_content_service import (
+    ALL_TRANSCRIPTION_TYPES,
+    MEDIA_TRANSCRIPTION_TYPES,
+    MediaInfo,
+    get_media_info,
+)
 from app.services.messaging_service import _resolve_chat_entity
 from app.services.telegram_links import media_download_filename
 
@@ -252,6 +257,31 @@ async def get_or_create_media_object(
             )
         ).scalar_one()
     return obj
+
+
+def request_transcription(
+    message: TelegramMessage,
+    media_object: MediaObject,
+) -> None:
+    """Mark explicitly requested media so the pipeline transcribes it anyway.
+
+    MEDIA_TRANSCRIPTION_TYPES keeps the background pipeline from buying
+    speech-to-text for every archived video; an explicit prepare_media call is
+    the one signal that a specific file is worth it. A file that already
+    settled as download-only goes back to PENDING so the worker picks it up
+    again — the cached bytes are reused, only the extraction reruns.
+    """
+    if message.media_type not in ALL_TRANSCRIPTION_TYPES:
+        return
+    if message.media_type in MEDIA_TRANSCRIPTION_TYPES:
+        return
+    if media_object.transcription_requested_at is None:
+        media_object.transcription_requested_at = datetime.now(UTC)
+    if (
+        media_object.status == MediaObjectStatus.READY_DOWNLOAD_ONLY
+        and message.transcribed_at is None
+    ):
+        media_object.status = MediaObjectStatus.PENDING
 
 
 def media_preparation_needs_enqueue(
