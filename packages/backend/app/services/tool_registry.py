@@ -214,7 +214,9 @@ TOOL_DEFINITIONS = (
 )
 
 _DEFINITION_BY_NAME = {definition.name: definition for definition in TOOL_DEFINITIONS}
-WRITE_TOOL_NAMES = frozenset({"prepare_media", "save_draft"})
+# Only outbound effects are write-level. Fetching and processing media fills our
+# own cache and is invisible to the other side, like sync; a draft is not.
+WRITE_TOOL_NAMES = frozenset({"save_draft"})
 
 
 def responses_tool_definitions(names: set[str] | None = None) -> list[dict[str, Any]]:

@@ -253,9 +253,12 @@ async def test_prepare_media_tool_reports_deferred_pipeline(
     enqueue.assert_not_called()
 
 
-async def test_read_only_api_key_cannot_start_media_processing(
+async def test_read_only_api_key_can_start_media_processing(
     client, db_session, test_user
 ):
+    """Media processing pulls from Telegram into our own cache and enqueues our
+    own workers — the same shape as sync, which is read-level. Nothing reaches
+    the other side. Drafts do, so they stay gated."""
     raw_key = "wai_read_only_media_key_abcdefghijklmnopqrstuvwxyz"
     db_session.add(
         ApiKey(
@@ -280,9 +283,9 @@ async def test_read_only_api_key_cannot_start_media_processing(
 
     assert discovery.status_code == 200
     names = {tool["name"] for tool in discovery.json()["tools"]}
-    assert "prepare_media" not in names
+    assert "prepare_media" in names
     assert "save_draft" not in names
-    assert mutation.status_code == 403
+    assert mutation.status_code != 403
 
 
 async def test_read_only_api_key_cannot_save_draft(client, db_session, test_user):
