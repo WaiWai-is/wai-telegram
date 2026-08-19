@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 api_key_scheme = HTTPBearer(auto_error=False)
 
-ALL_SCOPES = frozenset({"read", "write"})
+ALL_SCOPES = frozenset({"read", "write", "draft"})
+# A key that may send may also draft; keys issued before "draft" existed keep working.
+_IMPLIED_SCOPES = {"write": frozenset({"draft"})}
 
 
 @dataclass
@@ -41,7 +43,9 @@ class AuthContext:
     auth_type: str = "jwt"
 
     def has_scope(self, scope: str) -> bool:
-        return scope in self.scopes
+        if scope in self.scopes:
+            return True
+        return any(scope in _IMPLIED_SCOPES.get(held, ()) for held in self.scopes)
 
 
 async def get_auth_context(

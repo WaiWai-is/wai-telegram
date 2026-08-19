@@ -214,9 +214,14 @@ TOOL_DEFINITIONS = (
 )
 
 _DEFINITION_BY_NAME = {definition.name: definition for definition in TOOL_DEFINITIONS}
-# Only outbound effects are write-level. Fetching and processing media fills our
-# own cache and is invisible to the other side, like sync; a draft is not.
-WRITE_TOOL_NAMES = frozenset({"save_draft"})
+# Reading is free. A draft appears in Telegram on the other side, so it needs its
+# own permission — narrower than 'write', which also buys sending. Fetching and
+# processing media only fills our own cache, like sync, and stays read-level.
+TOOL_SCOPES = {"save_draft": "draft"}
+
+
+def required_scope(name: str) -> str | None:
+    return TOOL_SCOPES.get(name)
 
 
 def responses_tool_definitions(names: set[str] | None = None) -> list[dict[str, Any]]:

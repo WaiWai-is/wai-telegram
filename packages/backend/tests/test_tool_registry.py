@@ -407,3 +407,67 @@ async def test_save_draft_api_rejects_blank_text(auth_client):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "text must be a non-empty string"
+
+
+async def test_draft_scope_allows_drafting_but_not_sending(
+    client, db_session, test_user
+):
+    """The hiring agent must prepare a reply for a person to look at, and must not
+    be able to send it. 'draft' buys exactly that and nothing more."""
+    raw_key = "wai_draft_only_key_abcdefghijklmnopqrstuvwxyz"
+    db_session.add(
+        ApiKey(
+            user_id=test_user.id,
+            name="Draft only",
+            key_hash=hash_api_key(raw_key),
+            key_prefix=compute_api_key_prefix(raw_key),
+            key_hint=get_key_hint(raw_key),
+            scopes="read,draft",
+            is_active=True,
+        )
+    )
+    await db_session.flush()
+    headers = {"Authorization": f"Bearer {raw_key}"}
+
+    discovery = await client.get("/api/v1/tools", headers=headers)
+    assert discovery.status_code == 200
+    assert "save_draft" in {tool["name"] for tool in discovery.json()["tools"]}
+
+    drafted = await client.post(
+        "/api/v1/tools/save_draft", headers=headers, json={"arguments": {}}
+    )
+    assert drafted.status_code != 403
+
+    sent = await client.post(
+        f"/api/v1/messages/{uuid4()}/send",
+        headers=headers,
+        json={"text": "hello"},
+    )
+    assert sent.status_code == 403
+    assert sent.json()["detail"] == "API key lacks 'write' permission"
+
+
+async def test_write_scope_still_covers_drafting(client, db_session, test_user):
+    """Existing keys were issued before 'draft' existed; write keeps covering it."""
+    raw_key = "wai_write_covers_draft_abcdefghijklmnopqrstuvw"
+    db_session.add(
+        ApiKey(
+            user_id=test_user.id,
+            name="Write",
+            key_hash=hash_api_key(raw_key),
+            key_prefix=compute_api_key_prefix(raw_key),
+            key_hint=get_key_hint(raw_key),
+            scopes="read,write",
+            is_active=True,
+        )
+    )
+    await db_session.flush()
+    headers = {"Authorization": f"Bearer {raw_key}"}
+
+    discovery = await client.get("/api/v1/tools", headers=headers)
+    assert "save_draft" in {tool["name"] for tool in discovery.json()["tools"]}
+
+    drafted = await client.post(
+        "/api/v1/tools/save_draft", headers=headers, json={"arguments": {}}
+    )
+    assert drafted.status_code != 403
