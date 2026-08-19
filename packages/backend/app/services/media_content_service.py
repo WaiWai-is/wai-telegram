@@ -45,6 +45,7 @@ def _configured_transcription_types() -> frozenset[str]:
 
 
 MEDIA_TRANSCRIPTION_TYPES = _configured_transcription_types()
+ALL_TRANSCRIPTION_TYPES = _ALL_TRANSCRIPTION_TYPES
 
 
 def scope_accumulates_media() -> bool:

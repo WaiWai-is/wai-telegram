@@ -80,6 +80,7 @@ async def process_bot_media(
             media_type,
             mime_type,
             duration_seconds,
+            transcription_requested=True,
         )
 
 

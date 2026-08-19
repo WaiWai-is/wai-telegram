@@ -21,6 +21,7 @@ from app.schemas.search import SearchRequest
 from app.services.media_cache_service import (
     get_or_create_media_object,
     media_preparation_needs_enqueue,
+    request_transcription,
 )
 from app.services.messaging_service import save_draft as save_telegram_draft
 from app.services.file_search_service import (
@@ -428,6 +429,7 @@ async def _prepare_media(
         }
     if media_object is None:
         media_object = await get_or_create_media_object(db, user_id, message.id)
+    request_transcription(message, media_object)
 
     enqueued = False
     if media_preparation_needs_enqueue(message, media_object):

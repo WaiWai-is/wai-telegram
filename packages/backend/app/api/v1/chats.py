@@ -35,6 +35,7 @@ from app.services.media_cache_service import (
     get_cached_media_for_download,
     get_or_create_media_object,
     media_preparation_needs_enqueue,
+    request_transcription,
 )
 from app.services.media_access import decode_media_download_token
 from app.services.sync_service import sync_chats
@@ -582,6 +583,7 @@ async def prepare_message_media(
         )
 
     media_object = await get_or_create_media_object(db, user.id, message.id)
+    request_transcription(message, media_object)
     cache_ready = bool(media_object.relative_path and media_object.sha256)
     processing_ready = media_object.status in {
         MediaObjectStatus.READY,
