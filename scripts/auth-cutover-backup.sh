@@ -66,4 +66,10 @@ set -o pipefail
 chmod 0600 "$encrypted_dump" "$checksum_file" "$restore_list"
 mv "$incomplete_destination" "$destination"
 trap - EXIT
+
+# Every deploy writes a ~3.5GB snapshot; without rotation two days of deploys
+# fill the disk and the next preflight refuses to run. The newest two verified
+# snapshots stay, and only after the fresh one above passed its checks.
+ls -dt "$BACKUP_ROOT"/auth-cutover-* | tail -n +3 | xargs -r rm -rf
+
 echo "$destination"
