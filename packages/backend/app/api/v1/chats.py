@@ -124,6 +124,7 @@ async def list_chats(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
     chat_type: ChatType | None = None,
+    unread_only: bool = Query(default=False),
     limit: int = Query(default=100, ge=1, le=1000),
     cursor: str | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
@@ -133,6 +134,8 @@ async def list_chats(
 
     if chat_type:
         query = query.where(TelegramChat.chat_type == chat_type)
+    if unread_only:
+        query = query.where(func.coalesce(TelegramChat.unread_count, 0) > 0)
 
     query = query.order_by(
         TelegramChat.last_activity_at.desc().nulls_last(),
@@ -175,6 +178,8 @@ async def list_chats(
     )
     if chat_type:
         count_query = count_query.where(TelegramChat.chat_type == chat_type)
+    if unread_only:
+        count_query = count_query.where(func.coalesce(TelegramChat.unread_count, 0) > 0)
     total = (await db.execute(count_query)).scalar()
 
     return ChatListResponse(

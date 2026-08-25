@@ -136,6 +136,20 @@ class TestListChats:
             assert params["cursor"] == "abc123"
             assert params["limit"] == 25
 
+    @pytest.mark.asyncio
+    async def test_list_chats_unread_only(self, client):
+        mock_response = httpx.Response(
+            200,
+            json={"chats": [], "has_more": False, "total": 0},
+            request=httpx.Request("GET", "http://test:8000/api/v1/chats"),
+        )
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_req:
+            await client.list_chats(unread_only=True)
+            params = mock_req.call_args.kwargs.get("params", {})
+            assert params["unread_only"] is True
+
 
 class TestGetMessages:
     @pytest.mark.asyncio

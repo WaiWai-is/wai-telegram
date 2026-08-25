@@ -74,6 +74,8 @@ class TestToolList:
         search_tool = next(tool for tool in tools if tool.name == "search_messages")
         assert search_tool.inputSchema["properties"]["chat_ids"]["type"] == "array"
         assert "chat_id" not in search_tool.inputSchema["properties"]
+        list_chats_tool = next(tool for tool in tools if tool.name == "list_chats")
+        assert list_chats_tool.inputSchema["properties"]["unread_only"]["type"] == "boolean"
         client.list_data_tools.assert_awaited_once()
         client.close.assert_awaited_once()
 
@@ -750,6 +752,21 @@ class TestFormatChatList:
         assert "Showing 1 of 50" in content[0].text
         assert "@chat_a" in content[0].text
         assert "https://t.me/chat_a" in content[0].text
+
+    def test_shows_unread_count(self):
+        result = {
+            "chats": [
+                {
+                    "title": "Needs Reply",
+                    "id": "1",
+                    "chat_type": "private",
+                    "unread_count": 4,
+                }
+            ],
+            "total": 1,
+        }
+        content = server.format_chat_list(result)
+        assert "Unread: 4" in content[0].text
 
 
 class TestFormatChatSearch:
