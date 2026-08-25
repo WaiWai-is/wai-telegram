@@ -57,6 +57,32 @@ class TestListChats:
         assert len(data["chats"]) == 1
         assert data["chats"][0]["title"] == "Private"
 
+    async def test_unread_only_filter(self, auth_client, db_session, test_user):
+        unread_chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=333,
+            chat_type=ChatType.PRIVATE,
+            title="Unread",
+            unread_count=3,
+        )
+        read_chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=444,
+            chat_type=ChatType.PRIVATE,
+            title="Read",
+            unread_count=0,
+        )
+        db_session.add_all([unread_chat, read_chat])
+        await db_session.flush()
+
+        response = await auth_client.get("/api/v1/chats?unread_only=true")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert [chat["title"] for chat in data["chats"]] == ["Unread"]
+        assert data["chats"][0]["unread_count"] == 3
+        assert data["total"] == 1
+
     async def test_unauthenticated(self, client):
         response = await client.get("/api/v1/chats")
         assert response.status_code == 401

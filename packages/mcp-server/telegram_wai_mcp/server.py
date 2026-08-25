@@ -854,8 +854,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="list_chats",
             description=(
-                "List synced Telegram chats with message counts, sync status, and freshness. "
+                "List synced Telegram chats with unread and message counts, sync status, and freshness. "
                 "Returns paginated results — use the cursor from the response to load more pages. "
+                "Set unread_only=true to return only chats with unread messages. "
                 "Use to discover chat IDs. If you're looking for a specific chat or person, prefer "
                 "search_chats first."
             ),
@@ -875,6 +876,11 @@ async def list_tools() -> list[Tool]:
                     "cursor": {
                         "type": "string",
                         "description": "Pagination cursor from previous response — pass to load the next page",
+                    },
+                    "unread_only": {
+                        "type": "boolean",
+                        "description": "Return only chats with unread_count greater than zero",
+                        "default": False,
                     },
                 },
             },
@@ -1256,7 +1262,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
             cursor = args.get("cursor")
             if cursor is not None and not isinstance(cursor, str):
                 raise ValueError('"cursor" must be a string')
-            result = await api.list_chats(chat_type=chat_type, limit=limit, cursor=cursor)
+            unread_only = args.get("unread_only", False)
+            if not isinstance(unread_only, bool):
+                raise ValueError('"unread_only" must be a boolean')
+            result = await api.list_chats(
+                chat_type=chat_type,
+                limit=limit,
+                cursor=cursor,
+                unread_only=unread_only,
+            )
             return format_chat_list(result)
 
         elif name == "get_chat_messages":
@@ -1500,7 +1514,13 @@ def format_chat_list(result: dict, listener_active: bool = False) -> list[TextCo
         last_sync = chat.get("last_sync_at")
         freshness = _freshness_label(last_sync, listener_active)
         sync_info = f"Last synced: {_format_date(last_sync)}" if last_sync else "Never synced"
-        details = [f"ID: {chat_id}", f"Messages synced: {synced}", sync_info]
+        unread_count = int(chat.get("unread_count") or 0)
+        details = [
+            f"ID: {chat_id}",
+            f"Unread: {unread_count}",
+            f"Messages synced: {synced}",
+            sync_info,
+        ]
         if username_ref:
             details.append(f"Username: {username_ref}")
         elif private_link:
