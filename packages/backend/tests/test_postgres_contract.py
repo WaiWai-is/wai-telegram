@@ -1,8 +1,10 @@
 """PostgreSQL-only contract checks for migrations and hybrid retrieval."""
 
+import importlib.util
 import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -15,10 +17,199 @@ from app.models.chat import ChatType, TelegramChat
 from app.models.media import MediaObject
 from app.models.message import MessageContentChunk, MessageRevision, TelegramMessage
 from app.models.metadata import MetadataReconciliationCheckpoint
+from app.models.sync_job import SyncJob, SyncStatus
 from app.models.user import User
 from app.schemas.search import SearchRequest
 from app.services.search_service import semantic_search
 from app.services.metadata_reconciliation import _save_metadata_batch
+
+
+def _load_channel_identity_migration():
+    path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "026_canonical_channel_peer_ids.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "canonical_channel_peer_ids_migration",
+        path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.skipif(
+    not os.environ.get("POSTGRES_CONTRACT_DATABASE_URL"),
+    reason="POSTGRES_CONTRACT_DATABASE_URL is not configured",
+)
+@pytest.mark.parametrize("chat_type", [ChatType.SUPERGROUP, ChatType.CHANNEL])
+async def test_channel_identity_migration_merges_legacy_and_canonical_rows(
+    chat_type: ChatType,
+):
+    engine = create_async_engine(os.environ["POSTGRES_CONTRACT_DATABASE_URL"])
+    session_factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    user_id = uuid4()
+    raw_channel_id = 7_654_321
+    canonical_channel_id = -(1_000_000_000_000 + raw_channel_id)
+    unpaired_raw_id = raw_channel_id + 1
+    unpaired_canonical_id = -(1_000_000_000_000 + unpaired_raw_id)
+    now = datetime.now(UTC)
+
+    try:
+        async with session_factory() as db:
+            transaction = await db.begin()
+            try:
+                user = User(
+                    id=user_id,
+                    email=f"channel-identity-{user_id}@example.com",
+                    password_hash="not-used",
+                    is_active=False,
+                )
+                legacy = TelegramChat(
+                    user_id=user_id,
+                    telegram_chat_id=raw_channel_id,
+                    chat_type=chat_type,
+                    title="Legacy title",
+                    last_activity_at=now - timedelta(days=1),
+                    last_message_text="legacy preview",
+                    unread_count=99,
+                )
+                canonical = TelegramChat(
+                    user_id=user_id,
+                    telegram_chat_id=canonical_channel_id,
+                    chat_type=chat_type,
+                    title="Current title",
+                    last_activity_at=now,
+                    last_message_text="current preview",
+                    unread_count=3,
+                )
+                unpaired = TelegramChat(
+                    user_id=user_id,
+                    telegram_chat_id=unpaired_raw_id,
+                    chat_type=chat_type,
+                    title="Unpaired title",
+                    unread_count=7,
+                )
+                db.add_all([user, legacy, canonical, unpaired])
+                await db.flush()
+
+                db.add_all(
+                    [
+                        TelegramMessage(
+                            chat_id=legacy.id,
+                            telegram_message_id=1,
+                            text="duplicate legacy message",
+                            sent_at=now - timedelta(minutes=2),
+                        ),
+                        TelegramMessage(
+                            chat_id=legacy.id,
+                            telegram_message_id=2,
+                            text="legacy-only message",
+                            sent_at=now - timedelta(minutes=1),
+                        ),
+                        TelegramMessage(
+                            chat_id=canonical.id,
+                            telegram_message_id=1,
+                            text="canonical message",
+                            sent_at=now - timedelta(minutes=2),
+                        ),
+                        SyncJob(
+                            user_id=user_id,
+                            chat_id=legacy.id,
+                            status=SyncStatus.COMPLETED,
+                        ),
+                        MetadataReconciliationCheckpoint(
+                            user_id=user_id,
+                            chat_id=legacy.id,
+                            last_telegram_message_id=8,
+                            processed_count=8,
+                            status="completed",
+                            started_at=now - timedelta(hours=2),
+                            completed_at=now - timedelta(hours=1),
+                        ),
+                        MetadataReconciliationCheckpoint(
+                            user_id=user_id,
+                            chat_id=canonical.id,
+                            last_telegram_message_id=4,
+                            processed_count=4,
+                            status="pending",
+                            started_at=now - timedelta(hours=1),
+                        ),
+                    ]
+                )
+                await db.flush()
+
+                migration = _load_channel_identity_migration()
+                await db.run_sync(
+                    lambda sync_session: migration.merge_legacy_channel_peer_ids(
+                        sync_session.connection()
+                    )
+                )
+                db.expire_all()
+
+                chats = (
+                    (
+                        await db.execute(
+                            select(TelegramChat).where(TelegramChat.user_id == user_id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert len(chats) == 2
+                chats_by_telegram_id = {chat.telegram_chat_id: chat for chat in chats}
+                merged = chats_by_telegram_id[canonical_channel_id]
+                assert merged.id == canonical.id
+                assert merged.telegram_chat_id == canonical_channel_id
+                assert merged.title == "Current title"
+                assert merged.last_message_text == "current preview"
+                assert merged.unread_count == 3
+                assert merged.total_messages_synced == 2
+                assert merged.last_message_id == 2
+                assert chats_by_telegram_id[unpaired_canonical_id].id == unpaired.id
+                assert chats_by_telegram_id[unpaired_canonical_id].unread_count == 7
+
+                messages = (
+                    (
+                        await db.execute(
+                            select(TelegramMessage)
+                            .where(TelegramMessage.chat_id == canonical.id)
+                            .order_by(TelegramMessage.telegram_message_id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert [message.telegram_message_id for message in messages] == [1, 2]
+                assert messages[0].text == "canonical message"
+
+                job = (
+                    await db.execute(select(SyncJob).where(SyncJob.user_id == user_id))
+                ).scalar_one()
+                assert job.chat_id == canonical.id
+
+                checkpoint = (
+                    await db.execute(
+                        select(MetadataReconciliationCheckpoint).where(
+                            MetadataReconciliationCheckpoint.user_id == user_id
+                        )
+                    )
+                ).scalar_one()
+                assert checkpoint.chat_id == canonical.id
+                assert checkpoint.last_telegram_message_id == 8
+                assert checkpoint.processed_count == 8
+                assert checkpoint.status == "completed"
+            finally:
+                await transaction.rollback()
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.skipif(
