@@ -62,6 +62,7 @@ class TestToolList:
             "search_chats",
             "find_chats",
             "list_chats",
+            "refresh_chats",
             "get_chat_messages",
             "get_message_content",
             "get_transcript_segments",
@@ -190,6 +191,23 @@ class TestCallTool:
             "save_draft",
             {"chat_id": "chat-123", "text": text},
         )
+        mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_chats_reports_fresh_unread_counts_without_reading(self):
+        mock_api = AsyncMock()
+        mock_api.refresh_chats.return_value = {
+            "chats": [{"id": "chat-1", "unread_count": 3}],
+            "has_more": False,
+            "total": 1,
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool("refresh_chats", {})
+
+        assert "Refreshed 1 chat" in result[0].text
+        assert "No messages were marked read" in result[0].text
+        mock_api.refresh_chats.assert_awaited_once_with()
         mock_api.close.assert_awaited_once()
 
     @pytest.mark.asyncio

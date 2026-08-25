@@ -886,6 +886,15 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="refresh_chats",
+            description=(
+                "Refresh chat metadata and unread counts from Telegram without marking any "
+                "messages as read. Call this before list_chats with unread_only=true when "
+                "current unread state matters."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="get_chat_messages",
             description=(
                 "Read messages from a chat, newest-first, with cursor pagination (up to 500 per page). "
@@ -1272,6 +1281,20 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
                 unread_only=unread_only,
             )
             return format_chat_list(result)
+
+        elif name == "refresh_chats":
+            result = await api.refresh_chats()
+            total = int(result.get("total") or len(result.get("chats", [])))
+            noun = "chat" if total == 1 else "chats"
+            return [
+                TextContent(
+                    type="text",
+                    text=(
+                        f"Refreshed {total} {noun} from Telegram. Unread counts are current.\n"
+                        "No messages were marked read."
+                    ),
+                )
+            ]
 
         elif name == "get_chat_messages":
             chat_id = _require_str(args, "chat_id")
