@@ -135,6 +135,10 @@ class TelegramAIClient:
             params["unread_only"] = True
         return await self._request("GET", "/api/v1/chats", params=params)
 
+    async def refresh_chats(self) -> dict[str, Any]:
+        """Refresh chat metadata, including unread counts, from Telegram."""
+        return await self._request("POST", "/api/v1/chats/refresh")
+
     async def get_chat(self, chat_id: str) -> dict[str, Any]:
         """Get details for a specific chat."""
         return await self._request("GET", f"/api/v1/chats/{chat_id}")

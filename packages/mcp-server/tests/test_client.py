@@ -150,6 +150,21 @@ class TestListChats:
             params = mock_req.call_args.kwargs.get("params", {})
             assert params["unread_only"] is True
 
+    @pytest.mark.asyncio
+    async def test_refresh_chats(self, client):
+        mock_response = httpx.Response(
+            200,
+            json={"chats": [], "has_more": False, "total": 12},
+            request=httpx.Request("POST", "http://test:8000/api/v1/chats/refresh"),
+        )
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_req:
+            result = await client.refresh_chats()
+
+        assert result["total"] == 12
+        assert mock_req.call_args.args == ("POST", "/api/v1/chats/refresh")
+
 
 class TestGetMessages:
     @pytest.mark.asyncio
