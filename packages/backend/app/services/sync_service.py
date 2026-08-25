@@ -132,7 +132,8 @@ async def sync_chats(db: AsyncSession, user_id: UUID) -> list[TelegramChat]:
     try:
         record_request()  # Track iter_dialogs API call
 
-        async for dialog in client.iter_dialogs(limit=settings.sync_dialog_limit):
+        dialog_limit = settings.sync_dialog_limit or None
+        async for dialog in client.iter_dialogs(limit=dialog_limit):
             # Extract last message preview
             last_msg_text = None
             last_msg_sender = None

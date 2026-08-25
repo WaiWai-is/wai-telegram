@@ -123,6 +123,26 @@ class TestSyncChats:
         with patch("app.services.sync_service.record_request"):
             yield
 
+    async def test_zero_dialog_limit_refreshes_all_dialogs(self, db_session, test_user):
+        async def iter_dialogs(*_args, **_kwargs):
+            if False:
+                yield
+
+        mock_client = AsyncMock()
+        mock_client.iter_dialogs = MagicMock(return_value=iter_dialogs())
+
+        with (
+            patch(
+                "app.services.sync_service.get_client",
+                new_callable=AsyncMock,
+                return_value=mock_client,
+            ),
+            patch("app.services.sync_service.settings.sync_dialog_limit", 0),
+        ):
+            await sync_chats(db_session, test_user.id)
+
+        mock_client.iter_dialogs.assert_called_once_with(limit=None)
+
     async def test_uses_canonical_peer_id_for_group_dialogs(
         self, db_session, test_user
     ):
