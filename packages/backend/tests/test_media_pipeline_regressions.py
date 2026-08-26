@@ -246,6 +246,17 @@ def test_cutover_backup_secret_is_not_exposed_to_application_services():
     assert '"0:600"' in preflight
 
 
+def test_cutover_backup_keeps_one_verified_snapshot_after_rotation():
+    root = Path(__file__).parents[3]
+    backup_script = root.joinpath("scripts/auth-cutover-backup.sh").read_text()
+
+    publish = 'mv "$incomplete_destination" "$destination"'
+    rotate = 'ls -dt "$BACKUP_ROOT"/auth-cutover-* | tail -n +2 | xargs -r rm -rf'
+    assert publish in backup_script
+    assert rotate in backup_script
+    assert backup_script.index(publish) < backup_script.index(rotate)
+
+
 def test_media_writers_have_explicit_media_volume_group():
     root = Path(__file__).parents[3]
     for unit_name in (
