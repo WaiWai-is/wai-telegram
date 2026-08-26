@@ -1565,9 +1565,7 @@ def format_chat_list(result: dict, listener_active: bool = False) -> list[TextCo
                 f"\n  Last message #{last_message_id}{activity} from "
                 f"{last_message_sender}: {preview}"
             )
-        lines.append(
-            f"- {title} ({chat_type}) [{freshness}]\n  {' | '.join(details)}{latest}\n"
-        )
+        lines.append(f"- {title} ({chat_type}) [{freshness}]\n  {' | '.join(details)}{latest}\n")
 
     has_more = result.get("has_more", False)
     next_cursor = result.get("next_cursor")
