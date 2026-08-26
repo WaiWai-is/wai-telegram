@@ -44,6 +44,10 @@ _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _MAX_DOWNLOAD_REDIRECTS = 5
 
 
+class TelegramEntityNotFoundError(ValueError):
+    """A stored dialog can no longer be resolved by the owner session."""
+
+
 def _validate_url(url: str) -> None:
     """Validate URL to prevent SSRF attacks."""
     parsed = urlparse(url)
@@ -206,7 +210,7 @@ async def _resolve_chat_entity(
             pass
 
     hint = chat.title or normalized_username or str(chat.telegram_chat_id)
-    raise ValueError(
+    raise TelegramEntityNotFoundError(
         "Could not resolve Telegram entity for chat "
         f"'{hint}'. Re-sync chats or open the dialog in Telegram, then try again."
     )

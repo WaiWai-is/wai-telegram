@@ -15,7 +15,10 @@ from app.models.chat import TelegramChat
 from app.models.metadata import MetadataReconciliationCheckpoint
 from app.models.message import MessageRevision, TelegramMessage
 from app.services.media_content_service import get_media_info
-from app.services.messaging_service import _resolve_chat_entity
+from app.services.messaging_service import (
+    TelegramEntityNotFoundError,
+    _resolve_chat_entity,
+)
 from app.services.single_user import is_user_active
 from app.services.sync_service import _get_sender_name
 from app.services.telegram_client import get_client
@@ -202,20 +205,23 @@ async def reconcile_owner_metadata(
     }
 
 
-UNREACHABLE_CHAT_ERRORS: tuple[type[BaseException], ...] = tuple(
-    error
-    for error in (
-        getattr(rpcerrorlist, name, None)
-        for name in (
-            "ChannelPrivateError",
-            "ChannelInvalidError",
-            "ChatForbiddenError",
-            "PeerIdInvalidError",
-            "UserBannedInChannelError",
-            "ChatIdInvalidError",
+UNREACHABLE_CHAT_ERRORS: tuple[type[BaseException], ...] = (
+    TelegramEntityNotFoundError,
+    *tuple(
+        error
+        for error in (
+            getattr(rpcerrorlist, name, None)
+            for name in (
+                "ChannelPrivateError",
+                "ChannelInvalidError",
+                "ChatForbiddenError",
+                "PeerIdInvalidError",
+                "UserBannedInChannelError",
+                "ChatIdInvalidError",
+            )
         )
-    )
-    if isinstance(error, type)
+        if isinstance(error, type)
+    ),
 )
 
 

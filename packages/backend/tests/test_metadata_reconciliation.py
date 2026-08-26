@@ -3,7 +3,15 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.models.chat import TelegramChat
-from app.services.metadata_reconciliation import _metadata_message_values
+from app.services.metadata_reconciliation import (
+    UNREACHABLE_CHAT_ERRORS,
+    _metadata_message_values,
+)
+from app.services.messaging_service import TelegramEntityNotFoundError
+
+
+def test_unresolvable_stale_dialog_is_an_unreachable_chat() -> None:
+    assert TelegramEntityNotFoundError in UNREACHABLE_CHAT_ERRORS
 
 
 def test_metadata_reconciliation_never_schedules_historical_media():
