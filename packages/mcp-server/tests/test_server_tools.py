@@ -786,6 +786,31 @@ class TestFormatChatList:
         content = server.format_chat_list(result)
         assert "Unread: 4" in content[0].text
 
+    def test_shows_last_message_preview_without_opening_each_chat(self):
+        result = {
+            "chats": [
+                {
+                    "title": "Needs Reply",
+                    "id": "1",
+                    "chat_type": "private",
+                    "username": "candidate",
+                    "last_message_id": 1661287,
+                    "last_message_sender_name": "Georgiy Shashkov",
+                    "last_message_text": "Хотел бы продолжить обсуждение вакансии",
+                    "last_activity_at": "2026-08-26T13:20:00Z",
+                    "unread_count": 1,
+                }
+            ],
+            "total": 1,
+        }
+
+        content = server.format_chat_list(result)
+        text = content[0].text
+        assert "Last message #1661287" in text
+        assert "Georgiy Shashkov" in text
+        assert "Хотел бы продолжить обсуждение вакансии" in text
+        assert "2026-08-26" in text
+
 
 class TestFormatChatSearch:
     def test_format_chat_search_results_with_results(self):

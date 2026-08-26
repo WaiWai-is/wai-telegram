@@ -854,7 +854,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="list_chats",
             description=(
-                "List synced Telegram chats with unread and message counts, sync status, and freshness. "
+                "List synced Telegram chats with unread and message counts, the latest message "
+                "ID/sender/text preview, sync status, and freshness. "
                 "Returns paginated results — use the cursor from the response to load more pages. "
                 "Set unread_only=true to return only chats with unread messages. "
                 "Use to discover chat IDs. If you're looking for a specific chat or person, prefer "
@@ -1538,6 +1539,14 @@ def format_chat_list(result: dict, listener_active: bool = False) -> list[TextCo
         freshness = _freshness_label(last_sync, listener_active)
         sync_info = f"Last synced: {_format_date(last_sync)}" if last_sync else "Never synced"
         unread_count = int(chat.get("unread_count") or 0)
+        last_message_id = chat.get("last_message_id")
+        last_message_sender = " ".join(
+            str(chat.get("last_message_sender_name") or "Unknown sender").split()
+        )
+        last_message_text = " ".join(str(chat.get("last_message_text") or "").split())
+        if len(last_message_text) > 240:
+            last_message_text = f"{last_message_text[:237]}..."
+        last_activity = chat.get("last_activity_at")
         details = [
             f"ID: {chat_id}",
             f"Unread: {unread_count}",
@@ -1548,7 +1557,15 @@ def format_chat_list(result: dict, listener_active: bool = False) -> list[TextCo
             details.append(f"Username: {username_ref}")
         elif private_link:
             details.append(f"Open: {private_link}")
-        lines.append(f"- {title} ({chat_type}) [{freshness}]\n  {' | '.join(details)}\n")
+        latest = ""
+        if last_message_id is not None:
+            activity = f" at {_format_date(last_activity)}" if last_activity else ""
+            preview = last_message_text or "[no text preview]"
+            latest = (
+                f"\n  Last message #{last_message_id}{activity} from "
+                f"{last_message_sender}: {preview}"
+            )
+        lines.append(f"- {title} ({chat_type}) [{freshness}]\n  {' | '.join(details)}{latest}\n")
 
     has_more = result.get("has_more", False)
     next_cursor = result.get("next_cursor")
