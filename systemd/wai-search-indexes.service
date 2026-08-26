@@ -14,6 +14,5 @@ ExecStart=/opt/wai-telegram/.venv/bin/python -m app.cli.search_indexes --batch-s
 TimeoutStartSec=infinity
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=false
 PrivateTmp=true
-
