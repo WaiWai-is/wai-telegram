@@ -533,4 +533,5 @@ jobs:
           else
             echo "Deferred media mode: reconciliation waits for expanded resources"
           fi
+          /opt/wai-telegram/scripts/prune-releases.sh
           EOF

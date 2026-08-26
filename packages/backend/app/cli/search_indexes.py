@@ -30,8 +30,8 @@ ONLINE_INDEXES = (
         "ON message_content_chunks USING GIN (search_vector)",
     ),
     OnlineIndex(
-        "ix_telegram_messages_file_name_trgm",
-        "CREATE INDEX CONCURRENTLY ix_telegram_messages_file_name_trgm "
+        "ix_telegram_messages_media_file_name_trgm",
+        "CREATE INDEX CONCURRENTLY ix_telegram_messages_media_file_name_trgm "
         "ON telegram_messages USING GIN (media_file_name gin_trgm_ops) "
         "WHERE media_file_name IS NOT NULL",
     ),
