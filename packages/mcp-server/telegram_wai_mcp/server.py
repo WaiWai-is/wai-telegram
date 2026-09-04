@@ -1468,6 +1468,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
                 return format_message_content(result, _client_base_url(api))
             return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
 
+        elif name == "list_drafts":
+            result = await api.execute_data_tool("list_drafts", {})
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(result, ensure_ascii=False),
+                )
+            ]
+
         elif name == "save_draft":
             chat_id = _require_str(args, "chat_id")
             text = args.get("text")
@@ -1478,6 +1487,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
                 {"chat_id": chat_id, "text": text},
             )
             return format_draft_result(result)
+
+        elif name == "clear_draft":
+            chat_id = _require_str(args, "chat_id")
+            result = await api.execute_data_tool(
+                "clear_draft",
+                {"chat_id": chat_id},
+            )
+            return format_clear_draft_result(result)
 
         elif name == "download_media":
             chat_id = _require_str(args, "chat_id")
@@ -1980,6 +1997,23 @@ def format_draft_result(result: dict) -> list[TextContent]:
     if text:
         lines.append(f"Draft: {text}")
     return [TextContent(type="text", text="\n".join(lines))]
+
+
+def format_clear_draft_result(result: dict) -> list[TextContent]:
+    """Format a verified draft deletion with the same no-send guarantee."""
+    if result.get("cleared") is not True or result.get("saved") is not True:
+        raise ValueError("Backend did not confirm that the draft was cleared")
+    if result.get("sent") is not False:
+        raise ValueError("Backend did not confirm the draft-only no-send invariant")
+    chat_id = result.get("chat_id", "unknown")
+    return [
+        TextContent(
+            type="text",
+            text=(
+                f"Draft cleared successfully.\nNo Telegram message was sent.\nChat ID: {chat_id}"
+            ),
+        )
+    ]
 
 
 def format_sync_started(result: dict) -> list[TextContent]:

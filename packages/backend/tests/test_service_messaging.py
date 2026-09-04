@@ -1,6 +1,7 @@
 """Tests for app.services.messaging_service — pure unit tests (no Telegram calls)."""
 
 import socket
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -458,6 +459,98 @@ class TestSaveDraft:
         ):
             await save_draft(db_session, test_user.id, chat.id, "Draft")
 
+        mock_client.disconnect.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# draft reconciliation (mock Telethon)
+# ---------------------------------------------------------------------------
+
+
+class TestDraftReconciliation:
+    async def test_list_drafts_returns_live_text_for_owned_chats(
+        self, db_session, test_user
+    ):
+        from app.services.messaging_service import list_drafts
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(
+            user_id=test_user.id,
+            telegram_chat_id=123456,
+            title="Candidate",
+            username="candidate",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+
+        draft = SimpleNamespace(
+            is_empty=False,
+            entity=object(),
+            text="Current draft",
+            date=datetime.now(UTC),
+            reply_to_msg_id=42,
+            link_preview=False,
+        )
+        mock_client = AsyncMock()
+        mock_client.get_drafts.return_value = [draft]
+        mock_client.disconnect = AsyncMock()
+
+        with (
+            patch(
+                "app.services.messaging_service.get_client", return_value=mock_client
+            ),
+            patch("app.services.messaging_service.get_peer_id", return_value=123456),
+        ):
+            result = await list_drafts(db_session, test_user.id)
+
+        assert result["count"] == 1
+        assert result["unmatched_count"] == 0
+        assert result["drafts"][0]["chat_id"] == str(chat.id)
+        assert result["drafts"][0]["text"] == "Current draft"
+        assert result["drafts"][0]["reply_to_message_id"] == 42
+        mock_client.disconnect.assert_awaited_once()
+
+    async def test_clear_draft_verifies_empty_without_sending(
+        self, db_session, test_user
+    ):
+        from app.services.messaging_service import clear_draft
+        from telethon.tl.functions.messages import SaveDraftRequest
+        from tests.factories import TelegramChatFactory
+
+        chat = TelegramChatFactory.create(user_id=test_user.id)
+        db_session.add(chat)
+        await db_session.flush()
+
+        mock_client = AsyncMock(return_value=True)
+        mock_client.get_drafts.return_value = SimpleNamespace(is_empty=True)
+        mock_client.disconnect = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        resolved_entity = object()
+
+        with (
+            patch(
+                "app.services.messaging_service.get_client", return_value=mock_client
+            ),
+            patch(
+                "app.services.messaging_service._resolve_chat_entity",
+                new_callable=AsyncMock,
+                return_value=resolved_entity,
+            ),
+        ):
+            result = await clear_draft(db_session, test_user.id, chat.id)
+
+        request = mock_client.await_args.args[0]
+        assert isinstance(request, SaveDraftRequest)
+        assert request.peer is resolved_entity
+        assert request.message == ""
+        assert result == {
+            "chat_id": str(chat.id),
+            "cleared": True,
+            "saved": True,
+            "sent": False,
+        }
+        mock_client.get_drafts.assert_awaited_once_with(resolved_entity)
+        mock_client.send_message.assert_not_awaited()
         mock_client.disconnect.assert_awaited_once()
 
 

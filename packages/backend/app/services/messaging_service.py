@@ -300,6 +300,90 @@ async def save_draft(
         await client.disconnect()
 
 
+async def list_drafts(db: AsyncSession, user_id: UUID) -> dict:
+    """Return every current server-synced Telegram draft for the owner."""
+    chats = (
+        (await db.execute(select(TelegramChat).where(TelegramChat.user_id == user_id)))
+        .scalars()
+        .all()
+    )
+    chats_by_peer_id = {chat.telegram_chat_id: chat for chat in chats}
+
+    client = await get_client(user_id, db)
+    try:
+        live_drafts = await client.get_drafts()
+        drafts = []
+        for draft in live_drafts:
+            if draft.is_empty:
+                continue
+            peer_id = get_peer_id(draft.entity)
+            chat = chats_by_peer_id.get(peer_id)
+            drafts.append(
+                {
+                    "chat_id": str(chat.id) if chat else None,
+                    "telegram_chat_id": peer_id,
+                    "chat_type": chat.chat_type.value if chat else None,
+                    "title": chat.title if chat else None,
+                    "username": chat.username if chat else None,
+                    "text": draft.text,
+                    "date": draft.date.isoformat() if draft.date else None,
+                    "reply_to_message_id": draft.reply_to_msg_id,
+                    "link_preview": draft.link_preview,
+                }
+            )
+        drafts.sort(key=lambda item: item["date"] or "", reverse=True)
+        return {
+            "drafts": drafts,
+            "count": len(drafts),
+            "unmatched_count": sum(item["chat_id"] is None for item in drafts),
+        }
+    except (RPCError, ConnectionError, OSError) as e:
+        if is_session_authorization_error(e):
+            await invalidate_client_authorization(client, user_id, e)
+            raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE) from e
+        _handle_telethon_error(e)
+    finally:
+        await client.disconnect()
+
+
+async def clear_draft(
+    db: AsyncSession,
+    user_id: UUID,
+    chat_id: UUID,
+) -> dict:
+    """Clear one server-synced Telegram draft and verify it stayed unsent."""
+    chat = await _get_chat(db, user_id, chat_id)
+    client = await get_client(user_id, db)
+    try:
+        entity = await _resolve_chat_entity(client, db, chat)
+        cleared = await client(SaveDraftRequest(peer=entity, message=""))
+        if not cleared:
+            raise ValueError("Telegram did not confirm that the draft was cleared")
+        current = await client.get_drafts(entity)
+        if not current.is_empty:
+            raise ValueError("Telegram still reports a draft after clearing it")
+        return {
+            "chat_id": str(chat_id),
+            "cleared": True,
+            "saved": True,
+            "sent": False,
+        }
+    except (
+        FloodWaitError,
+        ChatWriteForbiddenError,
+        UserBannedInChannelError,
+        RPCError,
+        ConnectionError,
+        OSError,
+    ) as e:
+        if is_session_authorization_error(e):
+            await invalidate_client_authorization(client, user_id, e)
+            raise TelegramSessionUnauthorizedError(SESSION_EXPIRED_MESSAGE) from e
+        _handle_telethon_error(e)
+    finally:
+        await client.disconnect()
+
+
 async def send_file(
     db: AsyncSession,
     user_id: UUID,
