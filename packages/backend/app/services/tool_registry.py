@@ -11,8 +11,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.cursor import CursorError
 from app.models.api_key import ApiKey
-from app.models.chat import TelegramChat
+from app.models.chat import ChatType, TelegramChat
 from app.models.media import MediaObject, MediaObjectStatus, TranscriptSegment
 from app.models.message import MediaProcessingStatus, TelegramMessage
 from app.models.session import TelegramSession
@@ -23,13 +24,27 @@ from app.services.media_cache_service import (
     media_preparation_needs_enqueue,
     request_transcription,
 )
+from app.services.media_access import MEDIA_DOWNLOAD_TOKEN_TTL
 from app.services.messaging_service import save_draft as save_telegram_draft
-from app.services.file_search_service import (
+from app.services.file_browse_service import (
     DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_MEDIA_TYPES,
     FILE_MEDIA_TYPES,
+    LARGE_FILE_BYTES,
     MAX_CONTEXT_WINDOW,
-    find_files,
+    MAX_IN_FLIGHT_MESSAGES,
+    MAX_LOCATORS,
+    MAX_PREPARE_PER_CALL,
+    MIN_FREE_BYTES,
+    build_file_entry,
+    decode_file_cursor,
+    encode_file_cursor,
+    list_files,
+    list_files_by_locators,
+    normalize_extensions,
+    normalize_media_types,
 )
+from app.services.file_search_service import find_files
 from app.services.search_service import semantic_search
 from app.services.telegram_links import (
     build_media_download_url,
@@ -65,15 +80,43 @@ _MESSAGE_LOCATOR = {
 
 TOOL_DEFINITIONS = (
     ToolDefinition(
-        "find_files",
-        'Find shared files - documents, presentations, photos, videos - through the conversation around them, and return links to open or download each one. Use this when the file itself is the goal and it is remembered by context rather than by name ("the estimate Andrey sent in spring"), since photos have no filename and many documents arrive with no caption. Returns the surrounding message that matched, so the caller can judge relevance. download_url is present only for files already staged on disk, and private chats have no public telegram_url at all - in both cases pass chat_id and telegram_message_id to prepare_media, then download_media. Widen context_window to reach files sent a few messages away from the discussion.',
+        "get_files",
+        "List and download the files shared in Telegram chats - documents, "
+        "photos, videos, voice notes - with their metadata. Filter by chat_ids, "
+        "sender, date_from/date_to, media_types, extensions, file_name, from_me "
+        "and only_downloadable; results are newest first and cursor-paginated. No "
+        'query is needed, so this is how you answer "what was shared in this chat '
+        'last week" or "every PDF from that group in March". Add query only when '
+        'the file is remembered through the talk around it ("the estimate Andrey '
+        'sent in spring"): that reaches captionless photos through neighbouring '
+        "messages, ranks by relevance instead of date, and returns no cursor. "
+        "Historical media sits in Telegram, not on disk, so a file with no "
+        "download link is not a missing file. download_state says ready "
+        "(media_download_url works now and dies at download_url_expires_at; any "
+        "later call mints a fresh one), fetching or queued (bytes are on the way), "
+        "not_prepared (nothing started yet) or unavailable (no bytes are coming - "
+        "that file's own next_action says whether the original is gone for good or "
+        "the volume is full). Pass prepare=true to start fetching the not_prepared "
+        "files on "
+        f"this page, up to {MAX_PREPARE_PER_CALL}, then call again with the same "
+        "arguments to poll. Pass files=[{chat_id, telegram_message_id}] to act on "
+        "an exact set another tool handed you; that ignores every filter, query, "
+        "cursor and order. Use search_messages for conversation text and "
+        "get_message_content for what is inside one file.",
         {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "minLength": 1},
-                "media_types": {
+                "query": {"type": "string", "minLength": 2},
+                "files": {
                     "type": "array",
-                    "items": {"type": "string", "enum": list(FILE_MEDIA_TYPES)},
+                    "minItems": 1,
+                    "maxItems": MAX_LOCATORS,
+                    "items": {
+                        "type": "object",
+                        "properties": _MESSAGE_LOCATOR,
+                        "required": ["chat_id", "telegram_message_id"],
+                        "additionalProperties": False,
+                    },
                 },
                 "chat_ids": {
                     "type": "array",
@@ -86,14 +129,35 @@ TOOL_DEFINITIONS = (
                         "enum": ["private", "group", "supergroup", "channel"],
                     },
                 },
+                "media_types": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(FILE_MEDIA_TYPES)},
+                    "default": list(DEFAULT_MEDIA_TYPES),
+                },
+                "extensions": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 16},
+                },
+                "file_name": {"type": "string", "minLength": 3},
+                "sender": {"type": "string", "minLength": 3},
+                "from_me": {"type": "boolean"},
                 "date_from": {"type": "string", "format": "date-time"},
                 "date_to": {"type": "string", "format": "date-time"},
+                "max_size_bytes": {"type": "integer", "minimum": 1},
+                "only_downloadable": {"type": "boolean", "default": False},
                 "context_window": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": MAX_CONTEXT_WINDOW,
                     "default": DEFAULT_CONTEXT_WINDOW,
                 },
+                "order": {
+                    "type": "string",
+                    "enum": ["newest", "oldest"],
+                    "default": "newest",
+                },
+                "prepare": {"type": "boolean", "default": False},
+                "cursor": {"type": "string"},
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
@@ -101,7 +165,6 @@ TOOL_DEFINITIONS = (
                     "default": 20,
                 },
             },
-            "required": ["query"],
             "additionalProperties": False,
         },
     ),
@@ -159,7 +222,12 @@ TOOL_DEFINITIONS = (
     ),
     ToolDefinition(
         "prepare_media",
-        "Idempotently fetch and process original Telegram media. Returns progress and retry_after; historical media is fetched only through this call.",
+        "Idempotently fetch and process the original Telegram media for one "
+        "message, and report progress. Returns status, byte_offset and "
+        "retry_after; historical media reaches disk only through this call or "
+        "through get_files with prepare=true. For several files at once, call "
+        "get_files with prepare=true, or with files=[{chat_id, "
+        "telegram_message_id}].",
         {
             "type": "object",
             "properties": _MESSAGE_LOCATOR,
@@ -168,7 +236,10 @@ TOOL_DEFINITIONS = (
     ),
     ToolDefinition(
         "download_media",
-        "Return filename, MIME, size, SHA-256, signed URL and Telegram link for a cached original. Call prepare_media first on cache miss.",
+        "Return filename, MIME, size, SHA-256, a freshly signed download URL and "
+        "the Telegram link for one cached original. Call it again whenever a "
+        "signed URL has expired. On a cache miss call prepare_media first, or "
+        "get_files with prepare=true for a whole page of files.",
         {
             "type": "object",
             "properties": _MESSAGE_LOCATOR,
@@ -308,6 +379,88 @@ def _download_url(
     )
 
 
+def _free_media_bytes() -> int | None:
+    """Free space on the media volume, measured through the nearest real parent.
+
+    The media root does not exist before the first fetch, and "the directory is
+    missing" is not a reason to stop checking whether the disk has room.
+    """
+    for candidate in (settings.media_root, *settings.media_root.parents):
+        if candidate.exists():
+            return shutil.disk_usage(candidate).free
+    return None
+
+
+def _optional_datetime(
+    arguments: dict[str, Any], name: str, *, end_of_day: bool = False
+) -> datetime | None:
+    """Parse a date bound into a real timestamp the database can compare.
+
+    A bare date in date_to means the whole of that day. Reading it as midnight
+    drops everything sent on the day the caller explicitly asked for, which is
+    the kind of empty result an agent reports as "there are no files".
+    """
+    value = arguments.get(name)
+    if value is None or isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        raise ToolInputError(f"{name} must be an ISO 8601 date or date-time")
+    text = value.strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ToolInputError(
+            f"{name} must be an ISO 8601 date or date-time, got {value!r}"
+        ) from exc
+    if end_of_day and len(text) == 10:
+        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _optional_bounded_int(
+    arguments: dict[str, Any],
+    name: str,
+    *,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int | None:
+    value = arguments.get(name)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ToolInputError(f"{name} must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ToolInputError(f"{name} must be an integer") from exc
+    if parsed < minimum:
+        raise ToolInputError(f"{name} must be at least {minimum}")
+    if maximum is not None and parsed > maximum:
+        raise ToolInputError(f"{name} must be at most {maximum}")
+    return parsed
+
+
+def _optional_bool(arguments: dict[str, Any], name: str) -> bool | None:
+    value = arguments.get(name)
+    if value is None or isinstance(value, bool):
+        return value
+    raise ToolInputError(f"{name} must be true or false")
+
+
+def _optional_text(arguments: dict[str, Any], name: str) -> str | None:
+    value = arguments.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ToolInputError(f"{name} must be a non-empty string")
+    return value.strip()
+
+
+def _download_url_expiry() -> str:
+    """When the URL just minted stops working, so a caller can plan around it."""
+    return (datetime.now(UTC) + MEDIA_DOWNLOAD_TOKEN_TTL).isoformat()
+
+
 async def _search_messages(
     db: AsyncSession, user_id: UUID, arguments: dict[str, Any]
 ) -> dict[str, Any]:
@@ -328,24 +481,450 @@ async def _search_messages(
     return response.model_dump(mode="json")
 
 
-async def _find_files(
+_FILTER_KEYS = (
+    "chat_ids",
+    "chat_types",
+    "media_types",
+    "extensions",
+    "file_name",
+    "sender",
+    "from_me",
+    "date_from",
+    "date_to",
+    "max_size_bytes",
+    "only_downloadable",
+    "order",
+    "context_window",
+)
+
+
+def _locator_pairs(values: Any) -> list[tuple[UUID, int]]:
+    if not isinstance(values, list) or not values:
+        raise ToolInputError("files must be a non-empty array of message locators")
+    if len(values) > MAX_LOCATORS:
+        raise ToolInputError(f"files accepts at most {MAX_LOCATORS} message locators")
+    pairs: list[tuple[UUID, int]] = []
+    for value in values:
+        if not isinstance(value, dict):
+            raise ToolInputError(
+                "each files entry must be {chat_id, telegram_message_id}"
+            )
+        pair = (
+            _required_uuid(value, "chat_id"),
+            _required_int(value, "telegram_message_id"),
+        )
+        if pair not in pairs:
+            pairs.append(pair)
+    return pairs
+
+
+async def _stage_files(
+    db: AsyncSession,
+    user_id: UUID,
+    entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Start fetching everything on this page that nothing has fetched yet.
+
+    Only not_prepared files are candidates. media_preparation_needs_enqueue says
+    yes to permanently failed and deleted media, so a polling caller would push
+    the same doomed file on every single call without this gate.
+    """
+    counts = {
+        "ready": 0,
+        "fetching": 0,
+        "queued": 0,
+        "not_prepared": 0,
+        "unavailable": 0,
+    }
+    for entry in entries:
+        counts[entry["download_state"]] += 1
+    pending = [
+        entry["media_file_size"] or 0
+        for entry in entries
+        if entry["download_state"] != "ready"
+    ]
+    pending_bytes = sum(pending)
+    largest_pending = max(pending, default=0)
+    report: dict[str, Any] = {
+        "requested": True,
+        "enqueued": 0,
+        "ready_now": counts["ready"],
+        "already_in_progress": counts["fetching"] + counts["queued"],
+        "skipped_over_cap": 0,
+        "unavailable": counts["unavailable"],
+        "pending_bytes": pending_bytes,
+        "largest_pending_bytes": largest_pending,
+        "error_code": None,
+        "error_detail": None,
+    }
+    candidates = [
+        entry
+        for entry in entries
+        if entry["download_state"] == "not_prepared" and entry["media_type"] != "other"
+    ]
+    report["skipped_over_cap"] = max(0, len(candidates) - MAX_PREPARE_PER_CALL)
+    batch = candidates[:MAX_PREPARE_PER_CALL]
+    if not batch:
+        return report
+
+    if not settings.media_pipeline_enabled:
+        report["error_code"] = "media_pipeline_deferred"
+        report["error_detail"] = (
+            "Durable media processing is deferred until storage is attached"
+        )
+        return report
+
+    # One fetch worker serves the whole install, with no rate limit and no depth
+    # guard of its own. An agent walking cursors with prepare=true would hand it
+    # the corpus, so new work waits instead of queueing behind itself.
+    in_flight = (
+        await db.execute(
+            select(func.count())
+            .select_from(TelegramMessage)
+            .join(TelegramChat, TelegramChat.id == TelegramMessage.chat_id)
+            .where(
+                TelegramChat.user_id == user_id,
+                TelegramMessage.media_processing_status.in_(
+                    [
+                        MediaProcessingStatus.PENDING,
+                        MediaProcessingStatus.QUEUED,
+                        MediaProcessingStatus.PROCESSING,
+                    ]
+                ),
+            )
+        )
+    ).scalar_one()
+    if in_flight >= MAX_IN_FLIGHT_MESSAGES:
+        report["error_code"] = "too_many_in_flight"
+        report["error_detail"] = f"{in_flight} files are already being fetched"
+        return report
+
+    # The worker turns a full volume into a terminal DISK_FULL per file, so a
+    # batch that would fill it is refused whole rather than half-applied.
+    needed = sum(entry["media_file_size"] or 0 for entry in batch)
+    free = _free_media_bytes()
+    if free is not None and free - needed < MIN_FREE_BYTES:
+        report["error_code"] = "insufficient_disk"
+        report["error_detail"] = f"{needed} bytes needed, {free} bytes free"
+        return report
+
+    rows = (
+        await db.execute(
+            select(TelegramMessage, MediaObject)
+            .outerjoin(MediaObject, MediaObject.message_id == TelegramMessage.id)
+            .where(TelegramMessage.id.in_([UUID(e["message_id"]) for e in batch]))
+        )
+    ).all()
+    started: list[UUID] = []
+    for message, media_object in rows:
+        if media_object is None:
+            media_object = await get_or_create_media_object(db, user_id, message.id)
+        request_transcription(message, media_object)
+        if media_object.status == MediaObjectStatus.SOURCE_DELETED:
+            continue
+        if not media_preparation_needs_enqueue(message, media_object):
+            continue
+        message.media_processing_status = MediaProcessingStatus.PENDING
+        message.media_processing_error_code = None
+        message.media_processing_error = None
+        media_object.status = MediaObjectStatus.PENDING
+        media_object.error_code = None
+        media_object.error_detail = None
+        started.append(message.id)
+    await db.commit()
+    if started:
+        from app.tasks.media_tasks import enqueue_media_processing
+
+        enqueue_media_processing(started)
+
+    staged = {str(message_id) for message_id in started}
+    for entry in entries:
+        if entry["message_id"] in staged:
+            entry["download_state"] = "queued"
+            entry["media_cache_status"] = str(MediaObjectStatus.PENDING)
+            entry["next_action"] = (
+                "Fetching. Call get_files again with the same arguments in about "
+                "60 seconds."
+            )
+    report["enqueued"] = len(started)
+    return report
+
+
+def _files_next_action(result: dict[str, Any]) -> str:
+    """One sentence for the state of these files, one for the rest of the set.
+
+    Staging and paging are different axes: a page that still needs fetching also
+    needs paging, and dropping either sentence sends the caller away with half
+    the story.
+    """
+    prepare = result["prepare"]
+    counts = result["counts"]
+    error_code = prepare["error_code"]
+    parts: list[str] = []
+
+    if error_code == "media_pipeline_deferred":
+        parts.append("Durable media processing is deferred until storage is attached.")
+    elif error_code == "insufficient_disk":
+        parts.append(
+            f"Not enough free disk to fetch these files ({prepare['error_detail']}). "
+            "Narrow the filters or free space."
+        )
+    elif error_code == "too_many_in_flight":
+        parts.append(
+            f"{prepare['error_detail']}. Call get_files again with the same "
+            "arguments in about 60 seconds before starting more."
+        )
+    elif prepare["skipped_over_cap"]:
+        parts.append(
+            f"{prepare['enqueued']} files started ({MAX_PREPARE_PER_CALL} per call "
+            f"is the maximum, {prepare['skipped_over_cap']} still waiting). Call "
+            "get_files again with the same arguments to collect them and start "
+            "the rest."
+        )
+    elif counts["fetching"] + counts["queued"]:
+        in_flight = counts["fetching"] + counts["queued"]
+        wait = (
+            "5 minutes"
+            if prepare["largest_pending_bytes"] > LARGE_FILE_BYTES
+            else "60 seconds"
+        )
+        noun = "file is" if in_flight == 1 else "files are"
+        parts.append(
+            f"{in_flight} {noun} still being fetched. Call get_files again with "
+            f"the same arguments in about {wait}."
+        )
+    elif counts["not_prepared"]:
+        noun = "file is" if counts["not_prepared"] == 1 else "files are"
+        parts.append(
+            f"{counts['not_prepared']} {noun} not on disk yet. Call get_files "
+            "again with prepare=true to fetch them."
+        )
+    elif not result["files"]:
+        parts.append(
+            "No files matched. Widen the date range, drop media_types, or add a "
+            "query to reach files remembered only by the talk around them."
+        )
+    elif counts["ready"]:
+        parts.append(
+            "Download the links now; they expire in 60 minutes, and calling "
+            "get_files again mints fresh ones."
+        )
+
+    if result["has_more"]:
+        parts.append(
+            f'Call get_files again with cursor="{result["next_cursor"]}" for the '
+            "next page."
+        )
+    elif result["truncated"]:
+        parts.append(
+            f"{result['matched_total']} files matched and {result['total']} were "
+            "returned. Raise limit (max 100) or narrow the filters - relevance "
+            "mode has no cursor."
+        )
+    return " ".join(parts) or "Nothing further is needed for these files."
+
+
+def _uuid_list(arguments: dict[str, Any], name: str) -> list[UUID] | None:
+    values = arguments.get(name)
+    if not values:
+        return None
+    if not isinstance(values, list):
+        raise ToolInputError(f"{name} must be an array of UUID strings")
+    try:
+        return [UUID(str(value)) for value in values]
+    except (TypeError, ValueError) as exc:
+        raise ToolInputError(f"{name} must be an array of UUID strings") from exc
+
+
+def _chat_type_list(arguments: dict[str, Any], name: str) -> list[str] | None:
+    values = arguments.get(name)
+    if not values:
+        return None
+    if not isinstance(values, list):
+        raise ToolInputError(f"{name} must be an array of chat types")
+    allowed = [chat_type.value for chat_type in ChatType]
+    unknown = sorted({str(value) for value in values} - set(allowed))
+    if unknown:
+        raise ToolInputError(
+            f"{name} contains an unknown value: "
+            + ", ".join(unknown)
+            + ". Allowed: "
+            + ", ".join(allowed)
+        )
+    return [str(value) for value in values]
+
+
+def _echo_filter(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, list):
+        return [_echo_filter(item) for item in value]
+    if isinstance(value, UUID):
+        return str(value)
+    return value
+
+
+async def _get_files(
     db: AsyncSession, user_id: UUID, arguments: dict[str, Any]
 ) -> dict[str, Any]:
+    locators = arguments.get("files")
     query = str(arguments.get("query") or "").strip()
-    if not query:
-        raise ToolInputError("query is required")
-    return await find_files(
-        db,
-        user_id,
-        query=query,
-        media_types=arguments.get("media_types"),
-        chat_ids=arguments.get("chat_ids"),
-        chat_types=arguments.get("chat_types"),
-        date_from=arguments.get("date_from"),
-        date_to=arguments.get("date_to"),
-        context_window=arguments.get("context_window", DEFAULT_CONTEXT_WINDOW),
-        limit=arguments.get("limit", 20),
-    )
+    cursor = arguments.get("cursor")
+    if cursor is not None and not isinstance(cursor, str):
+        raise ToolInputError("cursor must be the next_cursor string from a prior page")
+    order = str(arguments.get("order") or "newest")
+    limit = min(100, _optional_bounded_int(arguments, "limit", maximum=100) or 20)
+
+    if locators is not None and (
+        query or cursor or any(key in arguments for key in _FILTER_KEYS)
+    ):
+        raise ToolInputError(
+            "files cannot be combined with query, cursor, order or any filter"
+        )
+    if query and cursor:
+        raise ToolInputError(
+            "query mode ranks by relevance and has no cursor; drop the cursor or "
+            "the query"
+        )
+    if order not in {"newest", "oldest"}:
+        raise ToolInputError('order must be "newest" or "oldest"')
+
+    try:
+        media_types = normalize_media_types(arguments.get("media_types"))
+        filters = {
+            "chat_ids": _uuid_list(arguments, "chat_ids"),
+            "chat_types": _chat_type_list(arguments, "chat_types"),
+            "date_from": _optional_datetime(arguments, "date_from"),
+            "date_to": _optional_datetime(arguments, "date_to", end_of_day=True),
+            "extensions": normalize_extensions(arguments.get("extensions")),
+            "file_name": _optional_text(arguments, "file_name"),
+            "sender": _optional_text(arguments, "sender"),
+            "from_me": _optional_bool(arguments, "from_me"),
+            "max_size_bytes": _optional_bounded_int(arguments, "max_size_bytes"),
+            "only_downloadable": bool(arguments.get("only_downloadable", False)),
+        }
+        context_window = (
+            _optional_bounded_int(
+                arguments, "context_window", minimum=0, maximum=MAX_CONTEXT_WINDOW
+            )
+            if arguments.get("context_window") is not None
+            else DEFAULT_CONTEXT_WINDOW
+        )
+        cursor_values = decode_file_cursor(cursor, order) if cursor else None
+    except (CursorError, ValueError) as exc:
+        raise ToolInputError(str(exc)) from exc
+
+    not_found: list[dict[str, Any]] = []
+    searched_messages = 0
+    matched_total = 0
+    has_more = False
+    next_cursor: str | None = None
+
+    if locators is not None:
+        mode = "locators"
+        rows, not_found = await list_files_by_locators(
+            db, user_id, _locator_pairs(locators)
+        )
+        entries = [build_file_entry(user_id, row) for row in rows]
+    elif query:
+        mode = "query"
+        entries, searched_messages, matched_total = await find_files(
+            db,
+            user_id,
+            query=query,
+            media_types=media_types,
+            context_window=context_window,
+            limit=limit,
+            **filters,
+        )
+    else:
+        mode = "browse"
+        rows, has_more = await list_files(
+            db,
+            user_id,
+            media_types=media_types,
+            order=order,
+            cursor_values=cursor_values,
+            limit=limit,
+            **filters,
+        )
+        entries = [build_file_entry(user_id, row) for row in rows]
+        if has_more and rows:
+            next_cursor = encode_file_cursor(rows[-1], order)
+
+    counts = {
+        "ready": 0,
+        "fetching": 0,
+        "queued": 0,
+        "not_prepared": 0,
+        "unavailable": 0,
+    }
+    prepare: dict[str, Any] = {
+        "requested": False,
+        "enqueued": 0,
+        "ready_now": 0,
+        "already_in_progress": 0,
+        "skipped_over_cap": 0,
+        "unavailable": 0,
+        "pending_bytes": 0,
+        "largest_pending_bytes": 0,
+        "error_code": None,
+        "error_detail": None,
+    }
+    if arguments.get("prepare"):
+        prepare = await _stage_files(db, user_id, entries)
+    for entry in entries:
+        counts[entry["download_state"]] += 1
+    if not arguments.get("prepare"):
+        prepare["ready_now"] = counts["ready"]
+        prepare["already_in_progress"] = counts["fetching"] + counts["queued"]
+        prepare["unavailable"] = counts["unavailable"]
+        idle_pending = [
+            entry["media_file_size"] or 0
+            for entry in entries
+            if entry["download_state"] != "ready"
+        ]
+        prepare["pending_bytes"] = sum(idle_pending)
+        prepare["largest_pending_bytes"] = max(idle_pending, default=0)
+
+    result = {
+        "files": entries,
+        "mode": mode,
+        "query": query or None,
+        "total": len(entries),
+        "matched_total": matched_total if mode == "query" else len(entries),
+        "counts": counts,
+        # Relevance order cannot be resumed from a keyset, so query mode says it
+        # truncated instead of offering a cursor it would only loop on.
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+        "truncated": mode == "query" and matched_total > len(entries),
+        "searched_messages": searched_messages,
+        "not_found": not_found,
+        "filters_applied": {
+            "media_types": media_types,
+            "order": order if mode == "browse" else None,
+            "limit": limit,
+            **{
+                key: _echo_filter(filters[key])
+                for key in (
+                    "chat_ids",
+                    "chat_types",
+                    "date_from",
+                    "date_to",
+                    "extensions",
+                    "file_name",
+                    "sender",
+                    "from_me",
+                    "max_size_bytes",
+                    "only_downloadable",
+                )
+            },
+        },
+        "prepare": prepare,
+    }
+    result["next_action"] = _files_next_action(result)
+    return result
 
 
 async def _get_message(
@@ -392,6 +971,11 @@ async def _get_message(
         "media_sha256": media_object.sha256 if media_object else None,
         "telegram_message_url": _telegram_url(message, chat),
         "media_download_url": _download_url(user_id, message, media_object),
+        "download_url_expires_at": (
+            _download_url_expiry()
+            if media_object and media_object.relative_path and media_object.sha256
+            else None
+        ),
     }
 
 
@@ -432,7 +1016,10 @@ async def _prepare_media(
     request_transcription(message, media_object)
 
     enqueued = False
-    if media_preparation_needs_enqueue(message, media_object):
+    # media_preparation_needs_enqueue says yes to a deleted original, so without
+    # this a caller can re-queue a permanently gone file on every poll forever.
+    gone = media_object.status == MediaObjectStatus.SOURCE_DELETED
+    if not gone and media_preparation_needs_enqueue(message, media_object):
         from app.tasks.media_tasks import enqueue_media_processing
 
         message.media_processing_status = MediaProcessingStatus.PENDING
@@ -458,11 +1045,25 @@ async def _prepare_media(
         "error_code": media_object.error_code,
         "error_detail": media_object.error_detail,
         "enqueued": enqueued,
+        "download_state": (
+            "ready"
+            if media_object.relative_path and media_object.sha256
+            else "unavailable"
+            if gone
+            else "queued"
+        ),
         "media_download_url": _download_url(user_id, message, media_object),
+        "download_url_expires_at": (
+            _download_url_expiry()
+            if media_object.relative_path and media_object.sha256
+            else None
+        ),
         "telegram_message_url": _telegram_url(message, chat),
         "next_action": (
             "Call download_media"
             if media_object.relative_path and media_object.sha256
+            else "The original was deleted from Telegram. No download is possible."
+            if gone
             else "Call prepare_media again after retry_after to refresh progress"
         ),
     }
@@ -478,7 +1079,10 @@ async def _download_media(
             "status": "cache_miss",
             "telegram_message_id": message.telegram_message_id,
             "telegram_message_url": _telegram_url(message, chat),
-            "next_action": "Call prepare_media, then retry download_media",
+            "next_action": (
+                "Call prepare_media, or get_files with prepare=true, then retry "
+                "download_media"
+            ),
         }
     return {
         "status": "ready",
@@ -488,6 +1092,7 @@ async def _download_media(
         "media_file_size": media_object.size_bytes or message.media_file_size,
         "media_sha256": media_object.sha256,
         "media_download_url": url,
+        "download_url_expires_at": _download_url_expiry(),
         "telegram_message_url": _telegram_url(message, chat),
         "next_action": "Download the resource_link; call download_media again to refresh the signed URL",
     }
@@ -708,7 +1313,7 @@ async def _get_data_status(
 ToolHandler = Callable[[AsyncSession, UUID, dict[str, Any]], Awaitable[dict[str, Any]]]
 _HANDLERS: dict[str, ToolHandler] = {
     "search_messages": _search_messages,
-    "find_files": _find_files,
+    "get_files": _get_files,
     "get_message": _get_message,
     "save_draft": _save_draft,
     "prepare_media": _prepare_media,

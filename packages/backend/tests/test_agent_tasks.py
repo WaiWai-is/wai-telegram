@@ -121,6 +121,14 @@ def test_agent_tool_configuration_rejects_unknown_tools():
         _normalize_agent_tools("search_messages,run_shell")
 
 
+def test_an_agent_stored_before_the_rename_still_configures():
+    """The tools column is free text revalidated at every run, so it must move on."""
+    assert (
+        _normalize_agent_tools("find_files,search_messages")
+        == "get_files,search_messages"
+    )
+
+
 def test_agent_tool_configuration_is_deduplicated_in_registry_order():
     assert (
         _normalize_agent_tools("download_media,search_messages,download_media")

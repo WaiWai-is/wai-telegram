@@ -5,31 +5,32 @@ searching message text alone never reaches them. What people do remember is the
 exchange: "the estimate Andrey sent in March". This locates that exchange with
 the existing hybrid search, then returns the files sitting next to it, so the
 caller gets links to download rather than a transcription bill.
+
+This is the expensive half of the file surface and it earns that cost only when
+the file is remembered through what was said. An ask shaped like attributes - a
+chat, a week, a person, a file type - belongs in file_browse_service, which
+answers it off the message index with no embedding at all.
 """
 
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import Row, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat import TelegramChat
-from app.models.media import MediaObject
 from app.models.message import TelegramMessage
 from app.schemas.search import SearchRequest
-from app.services.search_service import semantic_search
-from app.services.telegram_links import (
-    build_media_download_url,
-    build_telegram_message_url,
+from app.services.file_browse_service import (
+    DEFAULT_CONTEXT_WINDOW,
+    MAX_CONTEXT_WINDOW,
+    apply_file_filters,
+    build_file_entry,
+    context_snippet,
+    file_select,
 )
-
-FILE_MEDIA_TYPES = ("document", "photo", "video", "audio", "other")
-
-# Telegram ids are per-chat and monotonic, so a window over them is a cheap
-# stand-in for "messages sent around this one" without a second time-ordered scan.
-DEFAULT_CONTEXT_WINDOW = 6
-MAX_CONTEXT_WINDOW = 40
+from app.services.search_service import semantic_search
 
 
 @dataclass(frozen=True)
@@ -40,30 +41,27 @@ class _Hit:
     rank: int
 
 
-def _context_snippet(text: str | None, limit: int = 300) -> str | None:
-    if not text:
-        return None
-    collapsed = " ".join(text.split())
-    return collapsed if len(collapsed) <= limit else collapsed[: limit - 1] + "…"
-
-
 async def find_files(
     db: AsyncSession,
     user_id: UUID,
     *,
     query: str,
-    media_types: list[str] | None = None,
+    media_types: list[str],
     chat_ids: list[UUID] | None = None,
     chat_types: list[str] | None = None,
     date_from: Any = None,
     date_to: Any = None,
     context_window: int = DEFAULT_CONTEXT_WINDOW,
     limit: int = 20,
-) -> dict[str, Any]:
+    **filters: Any,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Return the files sitting next to the messages that matched the query.
+
+    Yields the entries for this page, how many messages were scanned to find
+    them, and how many files matched in total, so the caller can say plainly
+    that it truncated rather than offer a cursor relevance cannot honour.
+    """
     window = max(0, min(int(context_window), MAX_CONTEXT_WINDOW))
-    wanted = [t for t in (media_types or FILE_MEDIA_TYPES) if t in FILE_MEDIA_TYPES]
-    if not wanted:
-        wanted = list(FILE_MEDIA_TYPES)
 
     search = await semantic_search(
         db,
@@ -84,7 +82,7 @@ async def find_files(
         for rank, item in enumerate(search.results)
     ]
     if not hits:
-        return {"files": [], "query": query, "total": 0, "searched_messages": 0}
+        return [], 0, 0
 
     conditions = [
         and_(
@@ -96,20 +94,16 @@ async def find_files(
         )
         for hit in hits
     ]
-    rows = (
-        await db.execute(
-            select(TelegramMessage, TelegramChat, MediaObject)
-            .join(TelegramChat, TelegramChat.id == TelegramMessage.chat_id)
-            .outerjoin(MediaObject, MediaObject.message_id == TelegramMessage.id)
-            .where(
-                TelegramChat.user_id == user_id,
-                TelegramMessage.has_media.is_(True),
-                TelegramMessage.media_type.in_(wanted),
-                TelegramMessage.deleted_at.is_(None),
-                or_(*conditions),
-            )
-        )
-    ).all()
+    stmt = apply_file_filters(
+        file_select(user_id),
+        media_types=media_types,
+        chat_ids=chat_ids,
+        chat_types=chat_types,
+        date_from=date_from,
+        date_to=date_to,
+        **filters,
+    ).where(or_(*conditions))
+    rows = (await db.execute(stmt)).all()
 
     # A file that matched directly often has no caption of its own, and a photo
     # never has a filename either, so the result would carry nothing a person can
@@ -142,77 +136,46 @@ async def find_files(
         tid, text = min(candidates, key=lambda row: abs(row[0] - telegram_message_id))
         if abs(tid - telegram_message_id) > window:
             return None
-        return _context_snippet(text)
+        return context_snippet(text)
 
-    best: dict[UUID, dict[str, Any]] = {}
-    for message, chat, media_object in rows:
-        nearest = min(
-            (
-                hit
-                for hit in hits
-                if hit.chat_id == message.chat_id
-                and abs(hit.telegram_message_id - message.telegram_message_id) <= window
-            ),
-            key=lambda hit: (
-                abs(hit.telegram_message_id - message.telegram_message_id),
-                hit.rank,
-            ),
-            default=None,
-        )
+    best: dict[UUID, tuple[tuple[int, int], dict[str, Any]]] = {}
+    for row in rows:
+        nearest = _nearest_hit(hits, row, window)
         if nearest is None:
             continue
-        distance = abs(nearest.telegram_message_id - message.telegram_message_id)
-        entry = {
-            "message_id": str(message.id),
-            "chat_id": str(message.chat_id),
-            "chat_title": chat.title,
-            "telegram_message_id": message.telegram_message_id,
-            "media_type": message.media_type,
-            "file_name": (
-                (media_object.file_name if media_object else None)
-                or message.media_file_name
+        distance = abs(nearest.telegram_message_id - row.telegram_message_id)
+        entry = build_file_entry(
+            user_id,
+            row,
+            matched_because=(
+                context_snippet(nearest.text)
+                or context_snippet(row.text)
+                or nearest_context(row.chat_id, row.telegram_message_id)
             ),
-            "mime_type": message.media_mime_type,
-            "file_size": message.media_file_size,
-            "caption": _context_snippet(message.text),
-            "sender_name": message.sender_name,
-            "sent_at": message.sent_at.isoformat(),
-            "matched_because": (
-                _context_snippet(nearest.text)
-                or _context_snippet(message.text)
-                or nearest_context(message.chat_id, message.telegram_message_id)
-            ),
-            "matched_distance": distance,
-            "is_direct_match": distance == 0,
-            "telegram_url": build_telegram_message_url(
-                chat_type=chat.chat_type,
-                telegram_chat_id=chat.telegram_chat_id,
-                username=chat.username,
-                message_id=message.telegram_message_id,
-            ),
-            "download_url": (
-                build_media_download_url(
-                    base_path=(
-                        f"/api/v1/chats/{message.chat_id}/messages/"
-                        f"{message.telegram_message_id}/media"
-                    ),
-                    user_id=user_id,
-                    chat_id=message.chat_id,
-                    telegram_message_id=message.telegram_message_id,
-                )
-                if media_object and media_object.relative_path and media_object.sha256
-                else None
-            ),
-            "_rank": (distance, nearest.rank),
-        }
-        previous = best.get(message.id)
-        if previous is None or entry["_rank"] < previous["_rank"]:
-            best[message.id] = entry
+            matched_distance=distance,
+        )
+        rank = (distance, nearest.rank)
+        previous = best.get(row.message_id)
+        if previous is None or rank < previous[0]:
+            best[row.message_id] = (rank, entry)
 
-    ordered = sorted(best.values(), key=lambda entry: entry.pop("_rank"))
-    return {
-        "files": ordered[:limit],
-        "query": query,
-        "total": len(ordered),
-        "searched_messages": len(hits),
-    }
+    ordered = [
+        entry for _rank, entry in sorted(best.values(), key=lambda item: item[0])
+    ]
+    return ordered[:limit], len(hits), len(ordered)
+
+
+def _nearest_hit(hits: list[_Hit], row: Row, window: int) -> _Hit | None:
+    return min(
+        (
+            hit
+            for hit in hits
+            if hit.chat_id == row.chat_id
+            and abs(hit.telegram_message_id - row.telegram_message_id) <= window
+        ),
+        key=lambda hit: (
+            abs(hit.telegram_message_id - row.telegram_message_id),
+            hit.rank,
+        ),
+        default=None,
+    )

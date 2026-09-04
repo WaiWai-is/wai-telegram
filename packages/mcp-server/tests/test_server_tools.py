@@ -10,6 +10,7 @@ from telegram_wai_mcp import server
 def _registry_client():
     client = AsyncMock()
     names = (
+        "get_files",
         "search_messages",
         "get_message",
         "save_draft",
@@ -951,7 +952,7 @@ class TestFormatChatMessages:
         assert long_text in content[0].text
 
 
-async def test_find_files_is_routed_to_the_shared_registry():
+async def test_get_files_is_routed_to_the_shared_registry():
     """list_tools advertises it from the backend, so call_tool must dispatch it too."""
     from unittest.mock import AsyncMock, patch
 
@@ -962,7 +963,35 @@ async def test_find_files_is_routed_to_the_shared_registry():
     api.close = AsyncMock()
 
     with patch.object(server, "get_client", return_value=api):
-        result = await server.call_tool("find_files", {"query": "смета", "limit": 5})
+        result = await server.call_tool("get_files", {"query": "смета", "limit": 5})
 
-    api.execute_data_tool.assert_awaited_once_with("find_files", {"query": "смета", "limit": 5})
-    assert "files" in result[0].text
+    api.execute_data_tool.assert_awaited_once_with("get_files", {"query": "смета", "limit": 5})
+    api.close.assert_awaited_once()
+    assert "No files found" in result[0].text
+
+
+async def test_every_advertised_tool_has_a_dispatch_branch():
+    """A registry name with no branch answers "Unknown tool" to every caller."""
+    from unittest.mock import patch
+
+    from telegram_wai_mcp import server
+
+    api = _registry_client()
+    with patch.object(server, "get_client", return_value=api):
+        advertised = [tool.name for tool in await server.list_tools()]
+
+    class _EmptyBackend:
+        """Every backend call answers empty, so only the routing is under test."""
+
+        def __getattr__(self, _name):
+            async def call(*_args, **_kwargs):
+                return {}
+
+            return call
+
+    for name in advertised:
+        with patch.object(server, "get_client", return_value=_EmptyBackend()):
+            result = await server.call_tool(name, {})
+        content = result.content if hasattr(result, "content") else result
+        text = " ".join(item.text for item in content if hasattr(item, "text"))
+        assert "Unknown tool" not in text, name

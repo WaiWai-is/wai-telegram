@@ -700,6 +700,140 @@ def format_media_download(result: dict, base_url: str) -> list:
     )
 
 
+def _format_bytes(size: Any) -> str | None:
+    if not isinstance(size, int) or size <= 0:
+        return None
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024.0
+    return None
+
+
+def _format_duration(seconds: Any) -> str | None:
+    if not isinstance(seconds, int) or seconds <= 0:
+        return None
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _missing_lines(missing: list) -> list[str]:
+    """Name every locator that no longer resolves, rather than dropping it."""
+    return [
+        f"Not found: chat {entry.get('chat_id')} msg#{entry.get('telegram_message_id')}"
+        for entry in missing
+    ]
+
+
+def format_file_results(result: dict, base_url: str) -> list:
+    """Render a file listing so an agent can judge, download, or wait.
+
+    Every ready file also leaves a resource_link, so the binary can be fetched
+    without the file itself ever entering the conversation.
+    """
+    files = result.get("files") or []
+    next_action = result.get("next_action")
+    missing = result.get("not_found") or []
+    if not files:
+        query = result.get("query")
+        if query:
+            headline = f'No files found for query: "{query}".'
+        elif result.get("mode") == "locators":
+            # Locator mode applies no filters, so blaming filters would be a lie.
+            headline = "None of the requested messages carry a file any more."
+        else:
+            headline = "No files found for these filters."
+        lines = [headline]
+        # Every locator being stale is exactly when the caller most needs to be
+        # told which ones, and an empty page must not swallow that.
+        lines.extend(_missing_lines(missing))
+        if next_action:
+            lines.extend(["", f"Next action: {next_action}"])
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    counts = result.get("counts") or {}
+    summary = ", ".join(
+        f"{counts[state]} {label}"
+        for state, label in (
+            ("ready", "ready to download"),
+            ("fetching", "fetching"),
+            ("queued", "queued"),
+            ("not_prepared", "not prepared"),
+            ("unavailable", "unavailable"),
+        )
+        if counts.get(state)
+    )
+    total = result.get("total", len(files))
+    noun = "file" if total == 1 else "files"
+    lines = [f"Found {total} {noun}. {summary}." if summary else f"Found {total} {noun}."]
+    lines.append("")
+
+    resources: list[ResourceLink] = []
+    for entry in files:
+        sender = entry.get("sender_name") or ("You" if entry.get("is_outgoing") else "Unknown")
+        label = MEDIA_LABELS.get(entry.get("media_type"), "Media")
+        head = [f"[{label}] {entry.get('media_file_name') or '(no filename)'}"]
+        size = _format_bytes(entry.get("media_file_size"))
+        if size:
+            head.append(size)
+        if entry.get("media_mime_type"):
+            head.append(entry["media_mime_type"])
+        duration = _format_duration(entry.get("media_duration_seconds"))
+        if duration:
+            head.append(duration)
+
+        state = str(entry.get("download_state") or "unknown").replace("_", " ").upper()
+        details = [
+            f"Sent: {_format_date(entry.get('sent_at'))}",
+            state,
+            f"Chat ID: {entry.get('chat_id', '')}",
+            f"msg#{entry.get('telegram_message_id', '')}",
+        ]
+        download_url = _absolute_url(entry.get("media_download_url"), base_url)
+        if download_url:
+            details.append(f"Download: {download_url}")
+            details.append(f"Link expires: {entry.get('download_url_expires_at')}")
+            resource = _media_resource_link(entry, base_url)
+            if resource:
+                resources.append(resource)
+        if entry.get("telegram_message_url"):
+            details.append(f"Open: {entry['telegram_message_url']}")
+        if entry.get("download_state") == "unavailable" and entry.get("error_code"):
+            details.append(f"Error: {entry['error_code']}")
+
+        chat_title = entry.get("chat_title") or "Unknown"
+        block = [f"[{chat_title}] {sender}: {' | '.join(head)}", f"  - {' | '.join(details)}"]
+        # A summary is what tells an agent which of twelve PDFs is the invoice,
+        # so it gets its own line rather than being lost in the detail run.
+        if entry.get("content_summary"):
+            block.append(f"  - Summary: {entry['content_summary']}")
+        elif entry.get("caption"):
+            block.append(f"  - Caption: {entry['caption']}")
+        if entry.get("matched_because"):
+            block.append(f"  - Matched: {entry['matched_because']}")
+        # Only the states the page-level next action cannot speak to per row.
+        if entry.get("download_state") in {"not_prepared", "unavailable"}:
+            block.append(f"  - Next: {entry.get('next_action')}")
+        lines.append("\n".join(block))
+        lines.append("")
+
+    lines.extend(_missing_lines(missing))
+    if result.get("has_more") and result.get("next_cursor"):
+        lines.append(
+            f'--- More files available. Use cursor="{result["next_cursor"]}" '
+            "to load the next page ---"
+        )
+    elif result.get("truncated"):
+        lines.append(
+            f"--- {result.get('matched_total')} files matched and {total} were "
+            "returned. Raise limit (max 100) or narrow the filters - relevance "
+            "mode has no cursor. ---"
+        )
+    if next_action:
+        lines.extend(["", f"Next action: {next_action}"])
+    return [TextContent(type="text", text="\n".join(lines)), *resources]
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List available MCP tools."""
@@ -1106,7 +1240,11 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Download a file from a URL and send it to a Telegram chat as the connected user account. "
                 "Supports any file type (PDF, images, documents, etc.). "
-                "The file is downloaded server-side and sent via Telegram."
+                "The file is downloaded server-side and sent via Telegram. "
+                "To pass on a file from another chat, use the media_download_url from get_files or "
+                "download_media, and always set file_name to that file's media_file_name - a signed "
+                "media URL ends in /media, so the name is otherwise lost and the file arrives as "
+                '"media" with no extension.'
             ),
             inputSchema={
                 "type": "object",
@@ -1125,7 +1263,10 @@ async def list_tools() -> list[Tool]:
                     },
                     "file_name": {
                         "type": "string",
-                        "description": "Optional file name override (auto-detected from URL if omitted)",
+                        "description": (
+                            "File name to send it under. Required in practice for a signed media "
+                            "URL, whose path carries no name - pass media_file_name from get_files."
+                        ),
                     },
                 },
                 "required": ["chat_id", "file_url"],
@@ -1197,11 +1338,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent] |
             result = await api.execute_data_tool("get_data_status")
             return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
 
-        elif name == "find_files":
+        elif name == "get_files":
             # Arguments are validated by the backend against the schema this server
             # already advertises from the shared registry, so pass them through.
-            result = await api.execute_data_tool("find_files", dict(args))
-            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+            result = await api.execute_data_tool("get_files", dict(args))
+            return format_file_results(result, _client_base_url(api))
 
         elif name == "search_messages":
             query = _require_str(args, "query")
