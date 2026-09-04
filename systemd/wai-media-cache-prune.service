@@ -1,0 +1,15 @@
+[Unit]
+Description=Drop cached Telegram originals once their text is stored
+After=docker.service
+
+[Service]
+Type=oneshot
+User=wai
+Group=wai
+WorkingDirectory=/opt/wai-telegram/packages/backend
+EnvironmentFile=/opt/wai-telegram/.env.production
+ExecStart=/opt/wai-telegram/.venv/bin/python -m app.cli.media_cache_prune
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/wai-telegram-media
