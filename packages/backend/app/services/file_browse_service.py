@@ -51,9 +51,10 @@ DEFAULT_MEDIA_TYPES = FILE_MEDIA_TYPES[:-1]
 DEFAULT_CONTEXT_WINDOW = 6
 MAX_CONTEXT_WINDOW = 40
 
-# One fetch worker with no rate limit serves the whole install, so a page of
-# files is the largest batch an agent can start, and a hundred already moving is
-# where new work waits instead of queueing behind itself.
+# A page of files is the largest batch an agent can start. The in-flight ceiling
+# counts dispatch claims only - QUEUED and PROCESSING - because PENDING is the
+# metered backlog the dispatcher drains at media_dispatch_target_depth, and it
+# normally runs to hundreds of thousands of historical files.
 MAX_PREPARE_PER_CALL = 25
 MAX_LOCATORS = 25
 MAX_IN_FLIGHT_MESSAGES = 100

@@ -198,6 +198,32 @@ async def test_prepare_refuses_to_add_work_when_too_much_is_already_in_flight(
     assert result["prepare"]["error_code"] == "too_many_in_flight"
 
 
+async def test_a_deep_pending_backlog_does_not_block_new_work(db_session, test_user):
+    """PENDING is the metered backlog, not a dispatch claim.
+
+    Production carries ~900 PENDING rows as its steady state, so counting them
+    against the ceiling meant prepare=true could never start anything at all.
+    """
+    from app.services.file_browse_service import MAX_IN_FLIGHT_MESSAGES
+
+    chat = await _chat(db_session, test_user)
+    for index in range(MAX_IN_FLIGHT_MESSAGES * 2):
+        await _message(
+            db_session,
+            chat,
+            1100 + index,
+            media_processing_status=MediaProcessingStatus.PENDING,
+        )
+    await _message(db_session, chat, 9100)
+
+    with _roomy_disk(), _enqueue_spy() as enqueue:
+        result = await _prepare(db_session, test_user, file_name="f9100")
+
+    assert result["prepare"]["error_code"] is None
+    assert result["prepare"]["enqueued"] == 1
+    enqueue.assert_called_once()
+
+
 async def test_polling_the_same_arguments_enqueues_nothing_twice(db_session, test_user):
     """The polling contract is re-sending identical arguments; it must be cheap."""
     chat = await _chat(db_session, test_user)
