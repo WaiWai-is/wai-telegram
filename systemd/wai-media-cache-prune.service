@@ -11,5 +11,5 @@ EnvironmentFile=/opt/wai-telegram/.env.production
 ExecStart=/opt/wai-telegram/.venv/bin/python -m app.cli.media_cache_prune
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ReadWritePaths=/srv/wai-telegram-media
