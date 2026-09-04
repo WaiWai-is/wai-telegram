@@ -24,6 +24,9 @@ _AGENT_TOOL_NAMES = (
     "search_web",
     *(definition.name for definition in TOOL_DEFINITIONS),
 )
+# The tools column is free text, validated at every scheduled run, so an agent
+# stored before a registry rename must normalize forward instead of throwing.
+_TOOL_ALIASES = {"find_files": "get_files"}
 
 CREATION_PROMPT = """Analyze this user request and create a digital agent configuration.
 
@@ -60,7 +63,11 @@ def _render_creation_prompt(description: str) -> str:
 def _normalize_agent_tools(raw_tools: str) -> str:
     if not isinstance(raw_tools, str):
         raise ValueError("Scheduled-agent tools must be a comma-separated string")
-    selected = {name.strip() for name in raw_tools.split(",") if name.strip()}
+    selected = {
+        _TOOL_ALIASES.get(name.strip(), name.strip())
+        for name in raw_tools.split(",")
+        if name.strip()
+    }
     unsupported = selected.difference(_AGENT_TOOL_NAMES)
     if unsupported:
         raise ValueError(
