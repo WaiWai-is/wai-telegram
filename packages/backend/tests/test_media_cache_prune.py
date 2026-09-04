@@ -204,10 +204,12 @@ async def test_an_unsettled_file_keeps_its_bytes(
     assert (media_root / rel).exists()
 
 
-async def test_a_pruned_file_reads_as_not_prepared_and_can_be_fetched_again(
-    db_session, test_user, media_root
-):
-    """The whole point: pruning must reopen the file, not bury it."""
+async def test_a_pruned_file_stays_downloadable(db_session, test_user, media_root):
+    """The point of pruning: reclaim the disk without taking the file away.
+
+    The download endpoint streams from Telegram when nothing is staged, so
+    dropping the bytes costs the caller nothing but a slower first byte.
+    """
     from app.services.tool_registry import execute_data_tool
 
     message, _o, _rel = await _cached(
@@ -226,33 +228,7 @@ async def test_a_pruned_file_reads_as_not_prepared_and_can_be_fetched_again(
 
     after = await execute_data_tool(db_session, test_user.id, "get_files", {})
     entry = after["files"][0]
-    assert entry["download_state"] == "not_prepared"
-    assert entry["media_download_url"] is None
-    assert entry["next_action"] == (
-        "Call get_files again with prepare=true to fetch this file."
-    )
-
-    with (
-        patch(
-            "app.services.tool_registry.shutil.disk_usage",
-        ) as disk,
-        patch("app.tasks.media_tasks.enqueue_media_processing") as enqueue,
-    ):
-        disk.return_value.free = 500 * 1024**3
-        staged = await execute_data_tool(
-            db_session,
-            test_user.id,
-            "get_files",
-            {
-                "files": [
-                    {
-                        "chat_id": str(message.chat_id),
-                        "telegram_message_id": 500,
-                    }
-                ],
-                "prepare": True,
-            },
-        )
-
-    assert staged["prepare"]["enqueued"] == 1, "a pruned file must be refetchable"
-    enqueue.assert_called_once()
+    assert entry["download_state"] == "ready"
+    assert entry["media_download_url"], "the link must survive the file"
+    assert entry["next_action"].startswith("Download media_download_url before")
+    assert message.content_text == "extracted text stays"

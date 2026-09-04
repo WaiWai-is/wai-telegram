@@ -293,19 +293,21 @@ async def test_from_me_separates_what_i_sent(db_session, test_user):
     assert [f["media_file_name"] for f in result["files"]] == ["mine.pdf"]
 
 
-async def test_only_downloadable_returns_just_the_files_with_bytes_on_disk(
+async def test_a_staged_file_and_an_unstaged_one_are_both_downloadable(
     db_session, test_user
 ):
+    """Being on our disk stopped deciding anything once streaming existed."""
     chat = await _chat(db_session, test_user)
     staged = await _message(db_session, chat, 1000, media_file_name="staged.pdf")
     await _stage(db_session, test_user, staged)
     await _message(db_session, chat, 1001, media_file_name="not-staged.pdf")
 
-    result = await _files(db_session, test_user, only_downloadable=True)
+    result = await _files(db_session, test_user)
 
-    assert [f["media_file_name"] for f in result["files"]] == ["staged.pdf"]
-    assert result["files"][0]["media_download_url"]
-    assert result["files"][0]["download_url_expires_at"]
+    assert len(result["files"]) == 2
+    assert all(f["download_state"] == "ready" for f in result["files"])
+    assert all(f["media_download_url"] for f in result["files"])
+    assert all(f["download_url_expires_at"] for f in result["files"])
 
 
 async def test_max_size_bytes_keeps_photos_whose_size_telegram_never_told_us(
@@ -341,10 +343,10 @@ async def test_deleted_messages_never_appear_in_any_mode(db_session, test_user):
 # --- download state ----------------------------------------------------------
 
 
-async def test_a_file_whose_transcription_failed_is_still_ready_to_download(
+async def test_a_file_whose_transcription_failed_is_still_downloadable(
     db_session, test_user
 ):
-    """The whole point: bytes on disk are all a download needs."""
+    """Extraction failing says nothing about whether the bytes can be had."""
     chat = await _chat(db_session, test_user)
     message = await _message(db_session, chat, 1300, media_type="voice")
     await _stage(
@@ -360,7 +362,6 @@ async def test_a_file_whose_transcription_failed_is_still_ready_to_download(
     entry = result["files"][0]
     assert entry["download_state"] == "ready"
     assert entry["media_download_url"]
-    assert "get_message_content has nothing" in entry["next_action"]
 
 
 async def test_a_deleted_original_is_unavailable_and_says_why(db_session, test_user):
@@ -387,7 +388,8 @@ async def test_a_deleted_original_is_unavailable_and_says_why(db_session, test_u
     assert result["counts"]["unavailable"] == 1
 
 
-async def test_a_file_being_fetched_reports_progress_not_absence(db_session, test_user):
+async def test_a_file_mid_fetch_is_already_downloadable(db_session, test_user):
+    """Nothing waits on our cache any more; the endpoint streams the original."""
     chat = await _chat(db_session, test_user)
     message = await _message(db_session, chat, 1500, media_file_name="big.zip")
     await _stage(
@@ -404,9 +406,9 @@ async def test_a_file_being_fetched_reports_progress_not_absence(db_session, tes
     result = await _files(db_session, test_user)
 
     entry = result["files"][0]
-    assert entry["download_state"] == "fetching"
+    assert entry["download_state"] == "ready"
+    assert entry["media_download_url"]
     assert entry["media_cached_bytes"] == 4096
-    assert "60 seconds" in result["next_action"]
 
 
 async def test_file_metadata_prefers_the_staged_object_over_the_message_row(
@@ -525,7 +527,6 @@ async def test_query_mode_reports_truncation_instead_of_a_cursor_it_cannot_honou
     assert result["truncated"] is True
     assert result["matched_total"] > result["total"]
     assert "Raise limit" in result["next_action"]
-    assert "prepare=true" in result["next_action"]
 
 
 @pytest.mark.parametrize("window", [0, 40])
@@ -615,7 +616,7 @@ async def test_every_entry_carries_the_same_keys_in_every_mode(db_session, test_
     assert browse_entry["is_direct_match"] is None
 
 
-async def test_an_unstaged_private_file_still_carries_a_locator_to_fetch_it(
+async def test_an_unstaged_private_file_is_downloadable_and_locatable(
     db_session, test_user
 ):
     """A private chat has no public t.me link, so the locator is the only route."""
@@ -624,12 +625,10 @@ async def test_an_unstaged_private_file_still_carries_a_locator_to_fetch_it(
     result = await _query(db_session, test_user, chat)
 
     match = next(f for f in result["files"] if f["media_file_name"] == "smeta-2026.pdf")
-    assert match["media_download_url"] is None
+    assert match["media_download_url"], "nothing has to be staged to download it"
     assert match["telegram_message_url"] is None
     assert match["chat_id"] and match["telegram_message_id"] == 101
-    assert match["next_action"] == (
-        "Call get_files again with prepare=true to fetch this file."
-    )
+    assert match["next_action"].startswith("Download media_download_url before")
 
 
 async def test_filters_applied_echoes_what_actually_ran(db_session, test_user):
@@ -645,7 +644,10 @@ async def test_filters_applied_echoes_what_actually_ran(db_session, test_user):
     assert "voice" in result["filters_applied"]["media_types"]
 
 
-async def test_a_message_that_is_still_queued_reads_as_queued(db_session, test_user):
+async def test_queued_text_extraction_does_not_hold_up_the_download(
+    db_session, test_user
+):
+    """Extraction and download are separate concerns now."""
     chat = await _chat(db_session, test_user)
     await _message(
         db_session,
@@ -657,7 +659,8 @@ async def test_a_message_that_is_still_queued_reads_as_queued(db_session, test_u
 
     entry = (await _files(db_session, test_user))["files"][0]
 
-    assert entry["download_state"] == "queued"
+    assert entry["download_state"] == "ready"
+    assert entry["media_processing_status"] == "queued"
 
 
 # --- filter parsing ----------------------------------------------------------

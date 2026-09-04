@@ -30,7 +30,6 @@ from app.services.file_browse_service import (
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MEDIA_TYPES,
     FILE_MEDIA_TYPES,
-    LARGE_FILE_BYTES,
     MAX_CONTEXT_WINDOW,
     MAX_IN_FLIGHT_MESSAGES,
     MAX_LOCATORS,
@@ -83,23 +82,23 @@ TOOL_DEFINITIONS = (
         "get_files",
         "List and download the files shared in Telegram chats - documents, "
         "photos, videos, voice notes - with their metadata. Filter by chat_ids, "
-        "sender, date_from/date_to, media_types, extensions, file_name, from_me "
-        "and only_downloadable; results are newest first and cursor-paginated. No "
+        "sender, date_from/date_to, media_types, extensions, file_name and "
+        "from_me; results are newest first and cursor-paginated. No "
         'query is needed, so this is how you answer "what was shared in this chat '
         'last week" or "every PDF from that group in March". Add query only when '
         'the file is remembered through the talk around it ("the estimate Andrey '
         'sent in spring"): that reaches captionless photos through neighbouring '
         "messages, ranks by relevance instead of date, and returns no cursor. "
-        "Historical media sits in Telegram, not on disk, so a file with no "
-        "download link is not a missing file. download_state says ready "
-        "(media_download_url works now and dies at download_url_expires_at; any "
-        "later call mints a fresh one), fetching or queued (bytes are on the way), "
-        "not_prepared (nothing started yet) or unavailable (no bytes are coming - "
-        "that file's own next_action says whether the original is gone for good or "
-        "the volume is full). Pass prepare=true to start fetching the not_prepared "
-        "files on "
-        f"this page, up to {MAX_PREPARE_PER_CALL}, then call again with the same "
-        "arguments to poll. Pass files=[{chat_id, telegram_message_id}] to act on "
+        "Every media_download_url works right away - the file is served from "
+        "Telegram when it is not already on disk - and stops working at "
+        "download_url_expires_at, though any later call mints a fresh one. The "
+        "exception is download_state unavailable, which means Telegram itself no "
+        "longer has the original and nothing brings it back. Downloading needs no "
+        "preparation. Pass prepare=true only to have text pulled out of up to "
+        f"{MAX_PREPARE_PER_CALL} files on this page - a transcript for a recording, "
+        "extracted text for a document - which is what get_message_content reads; "
+        "call again in a minute to see it land. "
+        "Pass files=[{chat_id, telegram_message_id}] to act on "
         "an exact set another tool handed you; that ignores every filter, query, "
         "cursor and order. Use search_messages for conversation text and "
         "get_message_content for what is inside one file.",
@@ -144,7 +143,6 @@ TOOL_DEFINITIONS = (
                 "date_from": {"type": "string", "format": "date-time"},
                 "date_to": {"type": "string", "format": "date-time"},
                 "max_size_bytes": {"type": "integer", "minimum": 1},
-                "only_downloadable": {"type": "boolean", "default": False},
                 "context_window": {
                     "type": "integer",
                     "minimum": 0,
@@ -492,7 +490,6 @@ _FILTER_KEYS = (
     "date_from",
     "date_to",
     "max_size_bytes",
-    "only_downloadable",
     "order",
     "context_window",
 )
@@ -518,17 +515,7 @@ def _locator_pairs(values: Any) -> list[tuple[UUID, int]]:
     return pairs
 
 
-async def _stage_files(
-    db: AsyncSession,
-    user_id: UUID,
-    entries: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Start fetching everything on this page that nothing has fetched yet.
-
-    Only not_prepared files are candidates. media_preparation_needs_enqueue says
-    yes to permanently failed and deleted media, so a polling caller would push
-    the same doomed file on every single call without this gate.
-    """
+def _download_state_counts(entries: list[dict[str, Any]]) -> dict[str, int]:
     counts = {
         "ready": 0,
         "fetching": 0,
@@ -538,18 +525,38 @@ async def _stage_files(
     }
     for entry in entries:
         counts[entry["download_state"]] += 1
+    return counts
+
+
+async def _stage_files(
+    db: AsyncSession,
+    user_id: UUID,
+    entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Start extracting text for everything on this page that has none yet.
+
+    Downloading no longer waits on any of this - the endpoint streams straight
+    from Telegram - so preparing is about what get_message_content will find:
+    a transcript for a recording, extracted text for a document. A file whose
+    original Telegram deleted is skipped, because nothing can be read from it.
+    """
+    counts = _download_state_counts(entries)
     pending = [
         entry["media_file_size"] or 0
         for entry in entries
-        if entry["download_state"] != "ready"
+        if entry["media_processing_status"] != "ready"
     ]
     pending_bytes = sum(pending)
     largest_pending = max(pending, default=0)
     report: dict[str, Any] = {
         "requested": True,
         "enqueued": 0,
-        "ready_now": counts["ready"],
-        "already_in_progress": counts["fetching"] + counts["queued"],
+        "ready_now": sum(1 for e in entries if e["media_processing_status"] == "ready"),
+        "already_in_progress": sum(
+            1
+            for e in entries
+            if e["media_processing_status"] in {"pending", "queued", "processing"}
+        ),
         "skipped_over_cap": 0,
         "unavailable": counts["unavailable"],
         "pending_bytes": pending_bytes,
@@ -560,7 +567,10 @@ async def _stage_files(
     candidates = [
         entry
         for entry in entries
-        if entry["download_state"] == "not_prepared" and entry["media_type"] != "other"
+        if entry["download_state"] != "unavailable"
+        and entry["media_type"] != "other"
+        and entry["media_processing_status"]
+        not in {"ready", "pending", "queued", "processing"}
     ]
     report["skipped_over_cap"] = max(0, len(candidates) - MAX_PREPARE_PER_CALL)
     batch = candidates[:MAX_PREPARE_PER_CALL]
@@ -640,12 +650,10 @@ async def _stage_files(
     staged = {str(message_id) for message_id in started}
     for entry in entries:
         if entry["message_id"] in staged:
-            entry["download_state"] = "queued"
+            # The file was already downloadable; what changed is that its text
+            # is now on the way.
+            entry["media_processing_status"] = str(MediaProcessingStatus.PENDING)
             entry["media_cache_status"] = str(MediaObjectStatus.PENDING)
-            entry["next_action"] = (
-                "Fetching. Call get_files again with the same arguments in about "
-                "60 seconds."
-            )
     report["enqueued"] = len(started)
     return report
 
@@ -681,23 +689,12 @@ def _files_next_action(result: dict[str, Any]) -> str:
             "get_files again with the same arguments to collect them and start "
             "the rest."
         )
-    elif counts["fetching"] + counts["queued"]:
-        in_flight = counts["fetching"] + counts["queued"]
-        wait = (
-            "5 minutes"
-            if prepare["largest_pending_bytes"] > LARGE_FILE_BYTES
-            else "60 seconds"
-        )
-        noun = "file is" if in_flight == 1 else "files are"
+    elif prepare["enqueued"]:
+        noun = "file is" if prepare["enqueued"] == 1 else "files are"
         parts.append(
-            f"{in_flight} {noun} still being fetched. Call get_files again with "
-            f"the same arguments in about {wait}."
-        )
-    elif counts["not_prepared"]:
-        noun = "file is" if counts["not_prepared"] == 1 else "files are"
-        parts.append(
-            f"{counts['not_prepared']} {noun} not on disk yet. Call get_files "
-            "again with prepare=true to fetch them."
+            f"Every link below works now. {prepare['enqueued']} {noun} also having "
+            "text extracted; call get_files again in about 60 seconds if you need "
+            "get_message_content to have something to read."
         )
     elif not result["files"]:
         parts.append(
@@ -706,7 +703,7 @@ def _files_next_action(result: dict[str, Any]) -> str:
         )
     elif counts["ready"]:
         parts.append(
-            "Download the links now; they expire in 60 minutes, and calling "
+            "Every link below works now; they expire in 60 minutes, and calling "
             "get_files again mints fresh ones."
         )
 
@@ -801,7 +798,6 @@ async def _get_files(
             "sender": _optional_text(arguments, "sender"),
             "from_me": _optional_bool(arguments, "from_me"),
             "max_size_bytes": _optional_bounded_int(arguments, "max_size_bytes"),
-            "only_downloadable": bool(arguments.get("only_downloadable", False)),
         }
         context_window = (
             _optional_bounded_int(
@@ -917,7 +913,6 @@ async def _get_files(
                     "sender",
                     "from_me",
                     "max_size_bytes",
-                    "only_downloadable",
                 )
             },
         },

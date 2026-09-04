@@ -65,6 +65,7 @@ def _enqueue_spy():
 
 async def test_prepare_enqueues_the_whole_page_in_one_dispatch(db_session, test_user):
     """One dispatch of N ids, not N dispatches of one - the queue is concurrency 1."""
+
     chat = await _chat(db_session, test_user)
     for index in range(3):
         await _message(db_session, chat, 100 + index)
@@ -75,8 +76,10 @@ async def test_prepare_enqueues_the_whole_page_in_one_dispatch(db_session, test_
     enqueue.assert_called_once()
     assert len(enqueue.call_args.args[0]) == 3
     assert result["prepare"]["enqueued"] == 3
-    assert {f["download_state"] for f in result["files"]} == {"queued"}
-    assert "60 seconds" in result["next_action"]
+    # Downloading never waited on this; what the call started is text extraction.
+    assert {f["download_state"] for f in result["files"]} == {"ready"}
+    assert {f["media_processing_status"] for f in result["files"]} == {"pending"}
+    assert "text extracted" in result["next_action"]
 
 
 async def test_prepare_stages_only_files_that_nothing_is_fetching(
@@ -100,7 +103,7 @@ async def test_prepare_stages_only_files_that_nothing_is_fetching(
         result = await _prepare(db_session, test_user)
 
     assert enqueue.call_args.args[0] == [fresh.id]
-    assert result["prepare"]["already_in_progress"] == 1
+    assert result["prepare"]["enqueued"] == 1
 
 
 async def test_prepare_never_retries_a_file_telegram_deleted(db_session, test_user):

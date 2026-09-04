@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cursor import decode_cursor, encode_cursor, parse_cursor_datetime
 from app.models.chat import ChatType, TelegramChat
 from app.models.media import MediaObject, MediaObjectStatus
-from app.models.message import MediaProcessingStatus, TelegramMessage
+from app.models.message import TelegramMessage
 from app.services.media_access import MEDIA_DOWNLOAD_TOKEN_TTL
 from app.services.telegram_links import (
     build_media_download_url,
@@ -61,33 +61,6 @@ MAX_IN_FLIGHT_MESSAGES = 100
 MIN_FREE_BYTES = 2 * 1024**3
 LARGE_FILE_BYTES = 200 * 1024**2
 
-# Bytes on disk are the only thing a download needs, so these say "no bytes ever"
-# rather than "processing failed" - extraction failing leaves the file usable.
-_UNAVAILABLE_CACHE = frozenset(
-    {
-        MediaObjectStatus.SOURCE_DELETED,
-        MediaObjectStatus.DISK_FULL,
-        MediaObjectStatus.UNSUPPORTED,
-        MediaObjectStatus.FAILED,
-    }
-)
-_QUEUED_CACHE = frozenset(
-    {
-        MediaObjectStatus.PENDING,
-        MediaObjectStatus.RETRY_WAIT,
-        MediaObjectStatus.CACHED,
-        MediaObjectStatus.EXTRACTING,
-        MediaObjectStatus.INDEXING,
-        MediaObjectStatus.PROCESSING,
-    }
-)
-_QUEUED_MESSAGE = frozenset(
-    {
-        MediaProcessingStatus.PENDING,
-        MediaProcessingStatus.QUEUED,
-        MediaProcessingStatus.PROCESSING,
-    }
-)
 
 # TelegramMessage.embedding is a 1536-dim halfvec and content_text runs to tens of
 # thousands of characters; a hundred whole entities would drag megabytes across
@@ -175,30 +148,16 @@ def normalize_extensions(values: Any) -> list[str]:
 
 
 def derive_download_state(row: Row) -> str:
-    """Say whether the bytes are here, coming, or never arriving.
+    """Say whether these bytes can be had, which is nearly always yes.
 
-    Bytes on disk win over every status: a failed transcription or a recording
-    with no speech leaves relative_path and sha256 intact, and that file is as
-    downloadable as any other.
+    The download endpoint serves whatever is staged and streams the rest from
+    Telegram, so sitting on our disk stopped being the thing that decides. Only
+    a source Telegram itself no longer holds is out of reach; a failed
+    extraction, a full volume, or a file nobody ever staged all still download.
     """
-    if row.relative_path and row.sha256:
-        return "ready"
-    if row.cache_status is None:
-        return (
-            "queued"
-            if row.media_processing_status in _QUEUED_MESSAGE
-            else "not_prepared"
-        )
-    if row.cache_status in _UNAVAILABLE_CACHE:
+    if row.cache_status == MediaObjectStatus.SOURCE_DELETED:
         return "unavailable"
-    if row.cache_status == MediaObjectStatus.FETCHING:
-        return "fetching"
-    if (
-        row.cache_status in _QUEUED_CACHE
-        or row.media_processing_status in _QUEUED_MESSAGE
-    ):
-        return "queued"
-    return "not_prepared"
+    return "ready"
 
 
 def _format_size(size: int | None) -> str:
@@ -214,46 +173,21 @@ def _format_size(size: int | None) -> str:
 
 def _file_next_action(entry: dict[str, Any]) -> str:
     """Say the one thing this file needs next, in the caller's own vocabulary."""
-    state = entry["download_state"]
-    error_code = entry.get("error_code")
-    size = entry.get("media_file_size") or 0
-    if state == "ready":
-        if entry.get("media_cache_status") in {"failed", "no_speech"}:
-            return (
-                f"Download it. Text extraction failed ({error_code or 'unknown'}), "
-                "so get_message_content has nothing for this file."
-            )
-        return f"Download media_download_url before {entry['download_url_expires_at']}."
-    if state == "unavailable":
-        if error_code == "source_deleted":
-            return "The original was deleted from Telegram. No download is possible."
-        if error_code == "disk_full":
-            return (
-                "The media volume is full. No download is possible until space "
-                "is freed."
-            )
-        return f"Fetching failed permanently ({error_code or 'unknown'})."
-    if entry.get("retry_after"):
-        return (
-            f"Parked until {entry['retry_after']}. Call get_files again after "
-            "that time."
-        )
-    if state in {"fetching", "queued"}:
-        if size > LARGE_FILE_BYTES:
-            return (
-                f"Fetching a large file ({_format_size(size)}). Call get_files "
-                "again in about 5 minutes."
-            )
-        return (
-            "Fetching. Call get_files again with the same arguments in about "
-            "60 seconds."
-        )
+    if entry["download_state"] == "unavailable":
+        return "The original was deleted from Telegram. No download is possible."
     if entry["media_type"] == "other":
         return (
             "A poll, contact or location has no file to download. Call get_message "
             "for its payload."
         )
-    return "Call get_files again with prepare=true to fetch this file."
+    size = entry.get("media_file_size") or 0
+    if size > LARGE_FILE_BYTES:
+        return (
+            f"Download media_download_url before {entry['download_url_expires_at']}. "
+            f"It is large ({_format_size(size)}), so expect the transfer to take "
+            "a while."
+        )
+    return f"Download media_download_url before {entry['download_url_expires_at']}."
 
 
 def build_file_entry(
@@ -274,7 +208,7 @@ def build_file_entry(
             chat_id=row.chat_id,
             telegram_message_id=row.telegram_message_id,
         )
-        if download_state == "ready"
+        if download_state != "unavailable"
         else None
     )
     chat_type = row.chat_type
@@ -295,7 +229,7 @@ def build_file_entry(
         "media_mime_type": row.cached_mime_type or row.media_mime_type,
         "media_file_size": row.cached_size_bytes or row.media_file_size,
         "media_duration_seconds": row.media_duration_seconds,
-        "media_sha256": row.sha256 if download_state == "ready" else None,
+        "media_sha256": row.sha256,
         "caption": context_snippet(row.text),
         "content_summary": context_snippet(row.content_summary, limit=600),
         "download_state": download_state,
@@ -376,7 +310,6 @@ def apply_file_filters(
     sender: str | None = None,
     from_me: bool | None = None,
     max_size_bytes: int | None = None,
-    only_downloadable: bool = False,
 ):
     """Narrow a media-message select the same way in browse and in query mode."""
     stmt = stmt.where(TelegramMessage.media_type.in_(media_types))
@@ -410,10 +343,6 @@ def apply_file_filters(
         # as "too big" - that would silently drop most of the corpus.
         size = func.coalesce(MediaObject.size_bytes, TelegramMessage.media_file_size)
         stmt = stmt.where(or_(size.is_(None), size <= max_size_bytes))
-    if only_downloadable:
-        stmt = stmt.where(
-            MediaObject.relative_path.isnot(None), MediaObject.sha256.isnot(None)
-        )
     return stmt
 
 
