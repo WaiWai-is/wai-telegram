@@ -14,6 +14,17 @@ services:
     # default is too small for ANALYZE on telegram_messages, which fails with
     # "could not resize shared memory segment" and leaves autovacuum unable to run.
     shm_size: 512mb
+    # One user, and every service pools at most 30 connections, so the default
+    # 100 x 16MB of work_mem is headroom nobody uses - and it is exactly what
+    # tips this container over during a full pg_dump, which pulls an 8.8GB table
+    # through a page cache the cgroup counts against the same limit.
+    command: >
+      postgres
+      -c max_connections=50
+      -c work_mem=8MB
+      -c shared_buffers=256MB
+      -c effective_cache_size=1536MB
+      -c maintenance_work_mem=192MB
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U telegram -d telegram_ai"]
       interval: 10s
@@ -26,7 +37,10 @@ services:
           # 512M could not hold the working set: autovacuum never completed once and
           # the OOM killer reaped postgres (dmesg, 2026-08-16). The HNSW index alone
           # is 3.9GB, so this is a floor, not a target - raise it with the host.
-          memory: 1536M
+          # 1536M was raised to 2200M by hand on the box after backups kept dying
+          # mid-dump; 2560M codifies that with room, and the command above cuts
+          # the worst case that made it necessary.
+          memory: 2560M
         reservations:
           memory: 512M
 

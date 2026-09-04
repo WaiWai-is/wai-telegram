@@ -338,12 +338,13 @@ class TestMessageMediaEndpoints:
             assert "report.pdf" in response.headers["content-disposition"]
         assert head_response.content == b""
 
-    async def test_media_cache_miss_requires_prepare(
+    async def test_media_cache_miss_streams_from_telegram(
         self,
         auth_client,
         db_session,
         test_user,
     ):
+        """Nothing staged is no longer a dead end - the original is streamed."""
         chat = TelegramChat(
             user_id=test_user.id,
             telegram_chat_id=55004,
@@ -362,10 +363,70 @@ class TestMessageMediaEndpoints:
         db_session.add(message)
         await db_session.flush()
 
-        response = await auth_client.get(f"/api/v1/chats/{chat.id}/messages/504/media")
+        from app.services.media_stream_service import StreamableMedia
 
-        assert response.status_code == 409
-        assert "prepare_media" in response.json()["detail"]
+        async def chunks():
+            yield b"stream"
+            yield b"ed"
+
+        with patch(
+            "app.api.v1.chats.open_media_stream",
+            new_callable=AsyncMock,
+            return_value=(
+                StreamableMedia(
+                    file_name="clip.mp4", mime_type="video/mp4", size_bytes=8
+                ),
+                chunks(),
+            ),
+        ):
+            response = await auth_client.get(
+                f"/api/v1/chats/{chat.id}/messages/504/media"
+            )
+
+        assert response.status_code == 200
+        assert response.content == b"streamed"
+        assert response.headers["content-type"].startswith("video/mp4")
+        assert "clip.mp4" in response.headers["content-disposition"]
+        assert response.headers["accept-ranges"] == "bytes"
+
+    async def test_media_stream_reports_a_source_telegram_deleted(
+        self,
+        auth_client,
+        db_session,
+        test_user,
+    ):
+        chat = TelegramChat(
+            user_id=test_user.id,
+            telegram_chat_id=55009,
+            chat_type=ChatType.PRIVATE,
+            title="Gone",
+        )
+        db_session.add(chat)
+        await db_session.flush()
+        db_session.add(
+            TelegramMessage(
+                chat_id=chat.id,
+                telegram_message_id=509,
+                has_media=True,
+                media_type="photo",
+                sent_at=datetime.now(UTC),
+            )
+        )
+        await db_session.flush()
+
+        from app.services.media_stream_service import MediaStreamUnavailable
+
+        with patch(
+            "app.api.v1.chats.open_media_stream",
+            new_callable=AsyncMock,
+            side_effect=MediaStreamUnavailable("Telegram source media was deleted"),
+        ):
+            response = await auth_client.get(
+                f"/api/v1/chats/{chat.id}/messages/509/media"
+            )
+
+        assert response.status_code == 404
+        assert "deleted" in response.json()["detail"]
 
     async def test_prepare_is_idempotent_while_dispatch_is_pending(
         self,

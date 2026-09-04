@@ -4,7 +4,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +38,11 @@ from app.services.media_cache_service import (
     request_transcription,
 )
 from app.services.media_access import decode_media_download_token
+from app.services.media_stream_service import (
+    MediaStreamUnavailable,
+    open_media_stream,
+)
+from app.services.telegram_client import NoActiveTelegramSessionError
 from app.services.sync_service import sync_chats
 from app.services.telegram_links import (
     build_media_download_url,
@@ -629,6 +634,67 @@ async def prepare_message_media(
     )
 
 
+def _content_disposition(file_name: str) -> str:
+    ascii_name = file_name.encode("ascii", "ignore").decode() or "telegram-media"
+    return (
+        f'attachment; filename="{ascii_name.replace(chr(34), "")}"; '
+        f"filename*=UTF-8''{quote(file_name)}"
+    )
+
+
+def _requested_offset(request: Request) -> int:
+    """Read a resume point out of a Range header, ignoring anything exotic."""
+    header = request.headers.get("range") or ""
+    if not header.startswith("bytes="):
+        return 0
+    start = header.removeprefix("bytes=").split("-", 1)[0].strip()
+    return int(start) if start.isdigit() else 0
+
+
+async def _stream_media_response(
+    request: Request,
+    db: AsyncSession,
+    owner_id: UUID,
+    chat_id: UUID,
+    telegram_message_id: int,
+) -> Response:
+    """Pipe the original from Telegram, so nothing has to be staged first."""
+    offset = _requested_offset(request)
+    try:
+        media, chunks = await open_media_stream(
+            db, owner_id, chat_id, telegram_message_id, offset=offset
+        )
+    except MediaStreamUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except NoActiveTelegramSessionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Reconnect Telegram to download originals",
+        ) from exc
+
+    headers = {
+        "Content-Disposition": _content_disposition(media.file_name),
+        "Cache-Control": "private, no-store",
+        "Accept-Ranges": "bytes",
+    }
+    code = status.HTTP_200_OK
+    if media.size_bytes is not None:
+        remaining = max(media.size_bytes - offset, 0)
+        headers["Content-Length"] = str(remaining)
+        if offset:
+            headers["Content-Range"] = (
+                f"bytes {offset}-{media.size_bytes - 1}/{media.size_bytes}"
+            )
+            code = status.HTTP_206_PARTIAL_CONTENT
+    if request.method == "HEAD":
+        return Response(status_code=code, headers=headers, media_type=media.mime_type)
+    return StreamingResponse(
+        chunks, status_code=code, headers=headers, media_type=media.mime_type
+    )
+
+
 @router.get("/{chat_id}/messages/{telegram_message_id}/media")
 @router.head("/{chat_id}/messages/{telegram_message_id}/media")
 async def download_message_media(
@@ -685,15 +751,12 @@ async def download_message_media(
             chat_id,
             telegram_message_id,
         )
-    except MediaCacheError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
+    except MediaCacheError:
+        # The row claimed a file the volume no longer has. Telegram still does.
+        cached = None
     if cached is None or cached.relative_path is None or cached.sha256 is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Media is not cached; call prepare_media first",
+        return await _stream_media_response(
+            request, db, owner_id, chat_id, telegram_message_id
         )
 
     file_name = media_download_filename(cached.file_name, cached.mime_type)
