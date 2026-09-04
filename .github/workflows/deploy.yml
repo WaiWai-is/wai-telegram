@@ -240,6 +240,10 @@ jobs:
           id wai-bot-api >/dev/null 2>&1 || useradd --system --no-create-home \
             --home-dir /nonexistent --shell /usr/sbin/nologin --gid wai-media wai-bot-api
           usermod -a -G wai-media wai
+          # nginx serves cached originals through an internal
+          # X-Accel-Redirect, so its workers need to traverse the 0770
+          # media root. Without this every download answers 403.
+          usermod -a -G wai-media www-data
           cpu_count=$(nproc)
           memory_kib=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
           install -d -o root -g wai-media -m 0770 /srv/wai-telegram-media
@@ -476,9 +480,11 @@ jobs:
                   wai-restic-restore-drill.timer
                 ;;
             esac
+            systemctl enable --now wai-media-cache-prune.timer
             systemctl restart $core_services $media_services
           else
             systemctl disable --now $media_services \
+              wai-media-cache-prune.timer \
               wai-media-volume-monitor.timer wai-restic-backup.timer \
               wai-restic-check.timer wai-restic-restore-drill.timer \
               >/dev/null 2>&1 || true
