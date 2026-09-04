@@ -22,8 +22,12 @@ def test_prune_releases_keeps_active_rollback_and_newest_release(
     os.utime(newest, (300, 300))
     current_link = tmp_path / "current"
     current_link.symlink_to(active)
-    unrelated = release_root / "failed-build"
+    unrelated = release_root / "shared-cache"
     unrelated.mkdir()
+    # A deploy that dies before cutover leaves one of these behind, and nothing
+    # else removes them - two were enough to fail the next deploy's disk check.
+    abandoned = release_root / "failed-abc123-20260904T101438Z"
+    abandoned.mkdir()
 
     env = os.environ.copy()
     env.update(
@@ -43,7 +47,8 @@ def test_prune_releases_keeps_active_rollback_and_newest_release(
     assert active.is_dir()
     assert newest.is_dir()
     assert not stale.exists()
-    assert unrelated.is_dir()
+    assert not abandoned.exists(), "an abandoned deploy must not hold the volume"
+    assert unrelated.is_dir(), "anything not a release or a failed deploy is left alone"
 
 
 def test_production_deploy_prunes_releases_after_activation() -> None:

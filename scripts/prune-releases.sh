@@ -35,6 +35,18 @@ case "$(basename "$current_release")" in
 esac
 
 shopt -s nullglob
+
+# A deploy that dies before cutover renames its directory to failed-* and leaves
+# it there. Nothing else removes them, and two of them are enough to push the
+# volume under the free-space floor the next deploy's preflight enforces.
+for failed in "$release_root"/failed-*; do
+    [ -d "$failed" ] || continue
+    [ ! -L "$failed" ] || continue
+    [ "$(dirname "$failed")" = "$release_root" ] || continue
+    rm -rf -- "$failed"
+    printf 'removed failed release: %s\n' "$failed"
+done
+
 candidates=("$release_root"/release-*)
 rollback_kept=0
 while IFS= read -r release; do
