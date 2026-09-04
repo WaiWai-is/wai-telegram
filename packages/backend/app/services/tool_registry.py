@@ -574,9 +574,10 @@ async def _stage_files(
         )
         return report
 
-    # One fetch worker serves the whole install, with no rate limit and no depth
-    # guard of its own. An agent walking cursors with prepare=true would hand it
-    # the corpus, so new work waits instead of queueing behind itself.
+    # Only dispatch claims count. PENDING is the standing backlog the dispatcher
+    # meters down to media_dispatch_target_depth on its own, and it runs to
+    # hundreds of thousands of historical files - counting it would mean this
+    # ceiling is always exceeded and prepare never starts anything.
     in_flight = (
         await db.execute(
             select(func.count())
@@ -586,7 +587,6 @@ async def _stage_files(
                 TelegramChat.user_id == user_id,
                 TelegramMessage.media_processing_status.in_(
                     [
-                        MediaProcessingStatus.PENDING,
                         MediaProcessingStatus.QUEUED,
                         MediaProcessingStatus.PROCESSING,
                     ]
