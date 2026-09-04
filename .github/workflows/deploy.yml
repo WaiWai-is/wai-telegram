@@ -444,6 +444,22 @@ jobs:
             rm -f -- /opt/wai-telegram
           fi
           ln -s "$release_dir" /opt/wai-telegram
+          # Container limits and Postgres flags live in docker-compose.prod.yml,
+          # but nothing ever applied them: the file said 1536M while the box ran
+          # 2200M, set by hand after a backup died. Reconcile here, with the
+          # services already stopped. Compose is a no-op when nothing changed.
+          (
+            set -a
+            source /opt/wai-telegram/.env.production
+            set +a
+            docker compose -f /opt/wai-telegram/docker-compose.prod.yml up -d \
+              postgres redis
+          )
+          for _ in $(seq 1 30); do
+            docker exec wai-telegram-db pg_isready -U telegram >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec wai-telegram-db pg_isready -U telegram >/dev/null
           migration_started=1
           runuser -u wai -- bash -c \
             'cd /opt/wai-telegram/packages/backend && set -a && source /opt/wai-telegram/.env.production && set +a && /opt/wai-telegram/.venv/bin/alembic upgrade head'
