@@ -124,9 +124,11 @@ async def test_tools_api_lists_all_shared_data_tools(auth_client):
     tools = response.json()["tools"]
     names = {tool["name"] for tool in tools}
     assert names == {
+        "clear_draft",
         "search_messages",
         "get_files",
         "get_message",
+        "list_drafts",
         "save_draft",
         "prepare_media",
         "download_media",
@@ -172,6 +174,31 @@ async def test_save_draft_tool_preserves_text_and_uses_owner_chat_id(
 
     assert result == expected
     save.assert_awaited_once_with(db_session, test_user.id, chat_id, text)
+
+
+async def test_clear_draft_uses_draft_only_handler(db_session, test_user):
+    chat_id = uuid4()
+    expected = {
+        "chat_id": str(chat_id),
+        "cleared": True,
+        "saved": True,
+        "sent": False,
+    }
+
+    with patch(
+        "app.services.tool_registry.clear_telegram_draft",
+        new_callable=AsyncMock,
+        return_value=expected,
+    ) as clear:
+        result = await execute_data_tool(
+            db_session,
+            test_user.id,
+            "clear_draft",
+            {"chat_id": str(chat_id)},
+        )
+
+    assert result == expected
+    clear.assert_awaited_once_with(db_session, test_user.id, chat_id)
 
 
 async def test_shared_registry_rejects_a_deactivated_user(db_session, test_user):
@@ -284,7 +311,9 @@ async def test_read_only_api_key_can_start_media_processing(
     assert discovery.status_code == 200
     names = {tool["name"] for tool in discovery.json()["tools"]}
     assert "prepare_media" in names
+    assert "list_drafts" in names
     assert "save_draft" not in names
+    assert "clear_draft" not in names
     assert mutation.status_code != 403
 
 
@@ -431,7 +460,10 @@ async def test_draft_scope_allows_drafting_but_not_sending(
 
     discovery = await client.get("/api/v1/tools", headers=headers)
     assert discovery.status_code == 200
-    assert "save_draft" in {tool["name"] for tool in discovery.json()["tools"]}
+    names = {tool["name"] for tool in discovery.json()["tools"]}
+    assert "list_drafts" in names
+    assert "save_draft" in names
+    assert "clear_draft" in names
 
     drafted = await client.post(
         "/api/v1/tools/save_draft", headers=headers, json={"arguments": {}}

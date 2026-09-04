@@ -25,6 +25,8 @@ from app.services.media_cache_service import (
     request_transcription,
 )
 from app.services.media_access import MEDIA_DOWNLOAD_TOKEN_TTL
+from app.services.messaging_service import clear_draft as clear_telegram_draft
+from app.services.messaging_service import list_drafts as list_telegram_drafts
 from app.services.messaging_service import save_draft as save_telegram_draft
 from app.services.file_browse_service import (
     DEFAULT_CONTEXT_WINDOW,
@@ -207,6 +209,11 @@ TOOL_DEFINITIONS = (
         },
     ),
     ToolDefinition(
+        "list_drafts",
+        "List current Telegram drafts with live text, chat identity and date. Read-only; does not mark messages read.",
+        {"type": "object", "properties": {}},
+    ),
+    ToolDefinition(
         "save_draft",
         "Save or replace a server-synced Telegram text draft in a chat. This never sends a message and replaces any existing draft in that chat.",
         {
@@ -216,6 +223,17 @@ TOOL_DEFINITIONS = (
                 "text": {"type": "string", "minLength": 1},
             },
             "required": ["chat_id", "text"],
+        },
+    ),
+    ToolDefinition(
+        "clear_draft",
+        "Clear one Telegram draft by chat ID, verify it is empty, and never send a message.",
+        {
+            "type": "object",
+            "properties": {
+                "chat_id": {"type": "string", "format": "uuid"},
+            },
+            "required": ["chat_id"],
         },
     ),
     ToolDefinition(
@@ -287,7 +305,7 @@ _DEFINITION_BY_NAME = {definition.name: definition for definition in TOOL_DEFINI
 # Reading is free. A draft appears in Telegram on the other side, so it needs its
 # own permission — narrower than 'write', which also buys sending. Fetching and
 # processing media only fills our own cache, like sync, and stays read-level.
-TOOL_SCOPES = {"save_draft": "draft"}
+TOOL_SCOPES = {"save_draft": "draft", "clear_draft": "draft"}
 
 
 def required_scope(name: str) -> str | None:
@@ -985,6 +1003,22 @@ async def _save_draft(
         raise ToolInputError(str(exc)) from exc
 
 
+async def _list_drafts(
+    db: AsyncSession, user_id: UUID, _arguments: dict[str, Any]
+) -> dict[str, Any]:
+    return await list_telegram_drafts(db, user_id)
+
+
+async def _clear_draft(
+    db: AsyncSession, user_id: UUID, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    chat_id = _required_uuid(arguments, "chat_id")
+    try:
+        return await clear_telegram_draft(db, user_id, chat_id)
+    except ValueError as exc:
+        raise ToolInputError(str(exc)) from exc
+
+
 async def _prepare_media(
     db: AsyncSession, user_id: UUID, arguments: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1310,7 +1344,9 @@ _HANDLERS: dict[str, ToolHandler] = {
     "search_messages": _search_messages,
     "get_files": _get_files,
     "get_message": _get_message,
+    "list_drafts": _list_drafts,
     "save_draft": _save_draft,
+    "clear_draft": _clear_draft,
     "prepare_media": _prepare_media,
     "download_media": _download_media,
     "get_message_content": _get_message_content,

@@ -13,7 +13,9 @@ def _registry_client():
         "get_files",
         "search_messages",
         "get_message",
+        "list_drafts",
         "save_draft",
+        "clear_draft",
         "prepare_media",
         "download_media",
         "get_message_content",
@@ -57,7 +59,9 @@ class TestToolList:
             "get_data_status",
             "search_messages",
             "get_message",
+            "list_drafts",
             "save_draft",
+            "clear_draft",
             "prepare_media",
             "download_media",
             "search_chats",
@@ -209,6 +213,48 @@ class TestCallTool:
         assert "Refreshed 1 chat" in result[0].text
         assert "No messages were marked read" in result[0].text
         mock_api.refresh_chats.assert_awaited_once_with()
+        mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_clear_draft_uses_shared_registry_and_reports_no_send(self):
+        mock_api = AsyncMock()
+        mock_api.execute_data_tool.return_value = {
+            "chat_id": "chat-123",
+            "cleared": True,
+            "saved": True,
+            "sent": False,
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool("clear_draft", {"chat_id": "chat-123"})
+
+        assert "Draft cleared successfully" in result[0].text
+        assert "No Telegram message was sent" in result[0].text
+        mock_api.execute_data_tool.assert_awaited_once_with("clear_draft", {"chat_id": "chat-123"})
+        mock_api.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_list_drafts_returns_live_backend_state(self):
+        mock_api = AsyncMock()
+        mock_api.execute_data_tool.return_value = {
+            "drafts": [
+                {
+                    "chat_id": "chat-123",
+                    "text": "Current draft",
+                    "date": "2026-09-04T16:00:00+00:00",
+                }
+            ],
+            "count": 1,
+            "unmatched_count": 0,
+        }
+
+        with patch("telegram_wai_mcp.server.get_client", return_value=mock_api):
+            result = await server.call_tool("list_drafts", {})
+
+        payload = result[0].text
+        assert "Current draft" in payload
+        assert '"count": 1' in payload
+        mock_api.execute_data_tool.assert_awaited_once_with("list_drafts", {})
         mock_api.close.assert_awaited_once()
 
     @pytest.mark.asyncio
